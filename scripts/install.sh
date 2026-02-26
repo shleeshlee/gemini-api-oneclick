@@ -330,6 +330,20 @@ if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
   echo -e "  ${BOLD}Panel Password:${NC} ${COOKIE_MANAGER_PASSWORD}"
 fi
 
+# Detect Docker bridge gateway for NewAPI channel config
+DOCKER_GW=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo "172.17.0.1")
+
+echo ""
+echo -e "  ${BOLD}${CYAN}NewAPI 渠道配置${NC}"
+echo -e "  如果你的 NewAPI 也跑在 Docker 里，添加渠道时填以下地址："
+echo ""
+for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
+  port=$((8000 + i))
+  echo -e "    Account #${i}: ${BOLD}http://${DOCKER_GW}:${port}/v1/chat/completions${NC}"
+done
+echo ""
+echo -e "  (网关地址 ${DOCKER_GW} 已自动检测，如果 NewAPI 直接跑在宿主机则用 127.0.0.1)"
+
 echo ""
 echo -e "  ${YELLOW}Next step:${NC} Open Cookie Manager and fill in your Gemini cookies!"
 echo ""
