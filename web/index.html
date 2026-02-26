@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie Manager</title>
+<style>
+  :root {
+    --pink: #FF6B9D;
+    --pink-light: #FFB5D0;
+    --pink-bg: #FFF0F5;
+    --pink-card: #FFF8FA;
+    --pink-border: #FFD6E7;
+    --pink-hover: #FF4081;
+    --green: #4CAF50;
+    --red: #F44336;
+    --orange: #FF9800;
+    --gray: #999;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--pink-bg);
+    min-height: 100vh;
+  }
+
+  /* ── Login Screen ── */
+  #login-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  .login-box {
+    background: white;
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 8px 32px rgba(255, 107, 157, 0.15);
+    text-align: center;
+    max-width: 380px;
+    width: 100%;
+    border: 2px solid var(--pink-border);
+  }
+
+  .login-box h1 {
+    font-size: 24px;
+    color: var(--pink);
+    margin-bottom: 8px;
+  }
+
+  .login-box .subtitle {
+    color: var(--gray);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+
+  .login-box input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid var(--pink-border);
+    border-radius: 12px;
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .login-box input:focus {
+    border-color: var(--pink);
+  }
+
+  .login-box button {
+    width: 100%;
+    padding: 12px;
+    background: var(--pink);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-top: 16px;
+    transition: background 0.2s;
+  }
+
+  .login-box button:hover { background: var(--pink-hover); }
+
+  .login-error {
+    color: var(--red);
+    font-size: 14px;
+    margin-top: 12px;
+    display: none;
+  }
+
+  /* ── Main App ── */
+  #app {
+    display: none;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  .header {
+    text-align: center;
+    padding: 20px 0 16px;
+  }
+
+  .header h1 {
+    font-size: 22px;
+    color: var(--pink);
+  }
+
+  .header .info {
+    color: var(--gray);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .toolbar .stats {
+    font-size: 14px;
+    color: #666;
+  }
+
+  .toolbar .actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn {
+    padding: 8px 16px;
+    border: 2px solid var(--pink-border);
+    border-radius: 10px;
+    background: white;
+    color: var(--pink);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn:hover {
+    background: var(--pink);
+    color: white;
+  }
+
+  .btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 8px;
+  }
+
+  /* ── Account Cards ── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+
+  .card {
+    background: var(--pink-card);
+    border: 2px solid var(--pink-border);
+    border-radius: 16px;
+    padding: 16px;
+    transition: box-shadow 0.2s;
+  }
+
+  .card:hover {
+    box-shadow: 0 4px 16px rgba(255, 107, 157, 0.12);
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .card-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: #333;
+  }
+
+  .card-title .note {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--gray);
+    margin-left: 4px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .status-dot.running { background: var(--green); }
+  .status-dot.exited { background: var(--red); }
+  .status-dot.unknown { background: var(--gray); }
+
+  .card-cookie {
+    font-family: monospace;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 10px;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  .card-cookie .label {
+    color: var(--pink);
+    font-weight: 600;
+    font-family: -apple-system, sans-serif;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Edit Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.active {
+    display: flex;
+  }
+
+  .modal {
+    background: white;
+    border-radius: 20px;
+    padding: 28px;
+    max-width: 480px;
+    width: 90%;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.15);
+  }
+
+  .modal h2 {
+    color: var(--pink);
+    font-size: 18px;
+    margin-bottom: 16px;
+  }
+
+  .modal label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+    margin-bottom: 4px;
+    margin-top: 12px;
+  }
+
+  .modal textarea {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid var(--pink-border);
+    border-radius: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    resize: vertical;
+    min-height: 60px;
+    outline: none;
+  }
+
+  .modal textarea:focus {
+    border-color: var(--pink);
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+
+  .modal-actions .btn-save {
+    background: var(--pink);
+    color: white;
+    border-color: var(--pink);
+  }
+
+  .modal-actions .btn-deploy {
+    background: var(--green);
+    color: white;
+    border-color: var(--green);
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: white;
+    padding: 10px 24px;
+    border-radius: 10px;
+    font-size: 14px;
+    z-index: 200;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+
+  .toast.show { opacity: 1; }
+
+  /* ── Note input ── */
+  .note-input {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px dashed var(--pink-border);
+    border-radius: 6px;
+    font-size: 11px;
+    color: #666;
+    background: transparent;
+    outline: none;
+    margin-bottom: 6px;
+  }
+
+  .note-input::placeholder { color: #ccc; }
+  .note-input:focus { border-color: var(--pink); }
+
+  /* ── Export ── */
+  .export-area {
+    display: none;
+    margin-top: 16px;
+    padding: 16px;
+    background: white;
+    border: 2px solid var(--pink-border);
+    border-radius: 16px;
+  }
+
+  .export-area textarea {
+    width: 100%;
+    min-height: 120px;
+    font-family: monospace;
+    font-size: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>Cookie Manager</h1>
+    <p class="subtitle">Gemini API OneClick</p>
+    <input type="password" id="login-password" placeholder="Enter password" autocomplete="off">
+    <button onclick="doLogin()">Login</button>
+    <p class="login-error" id="login-error">Wrong password</p>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app">
+  <div class="header">
+    <h1>Cookie Manager</h1>
+    <div class="info">Gemini API OneClick</div>
+  </div>
+
+  <div class="toolbar">
+    <div class="stats" id="stats"></div>
+    <div class="actions">
+      <button class="btn" onclick="loadAccounts()">Refresh</button>
+      <button class="btn" onclick="toggleExport()">Export</button>
+    </div>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="export-area" id="export-area">
+    <textarea id="export-text" readonly></textarea>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <h2 id="modal-title">Edit Cookie</h2>
+    <label>SECURE_1PSID</label>
+    <textarea id="edit-psid" rows="3" placeholder="Paste SECURE_1PSID value"></textarea>
+    <label>SECURE_1PSIDTS</label>
+    <textarea id="edit-psidts" rows="2" placeholder="Paste SECURE_1PSIDTS value"></textarea>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-save" onclick="saveCookie()">Save Only</button>
+      <button class="btn btn-deploy" onclick="deployCookie()">Save + Restart</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  let accounts = [];
+  let editingId = null;
+
+  // ── Notes (localStorage) ──
+  function getNote(id) {
+    return localStorage.getItem('cm_note_' + id) || '';
+  }
+  function setNote(id, val) {
+    if (val) localStorage.setItem('cm_note_' + id, val);
+    else localStorage.removeItem('cm_note_' + id);
+  }
+
+  // ── Toast ──
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2500);
+  }
+
+  // ── API ──
+  async function api(method, path, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(path, opts);
+    return res.json();
+  }
+
+  // ── Login ──
+  async function doLogin() {
+    const pw = document.getElementById('login-password').value;
+    const data = await api('POST', '/api/login', { password: pw });
+    if (data.success) {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      loadAccounts();
+    } else {
+      document.getElementById('login-error').style.display = 'block';
+    }
+  }
+
+  document.getElementById('login-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doLogin();
+  });
+
+  // ── Load Accounts ──
+  async function loadAccounts() {
+    const data = await api('GET', '/api/accounts');
+    accounts = data.accounts || [];
+    renderCards();
+  }
+
+  function renderCards() {
+    const container = document.getElementById('cards');
+    const running = accounts.filter(a => a.status === 'running').length;
+    document.getElementById('stats').textContent =
+      `${accounts.length} accounts | ${running} running`;
+
+    container.innerHTML = accounts.map(a => {
+      const note = getNote(a.id);
+      const dotClass = a.status === 'running' ? 'running' : a.status === 'exited' ? 'exited' : 'unknown';
+      return `
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">
+              #${a.id}
+              <span class="note">${note ? '(' + note + ')' : ''}</span>
+            </span>
+            <span class="status-dot ${dotClass}" title="${a.status}"></span>
+          </div>
+          <input class="note-input" placeholder="Add note..."
+            value="${note}"
+            onchange="setNote(${a.id}, this.value); loadAccounts()">
+          <div class="card-cookie">
+            <span class="label">SID:</span> ${a.cookie_preview || '<empty>'}<br>
+            <span class="label">TS:</span> ${a.cookie_ts_preview || '<empty>'}
+          </div>
+          <div class="card-actions">
+            <button class="btn btn-sm" onclick="openEdit(${a.id})">Edit</button>
+            <button class="btn btn-sm" onclick="restartOne('${a.container}')">Restart</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ── Edit Modal ──
+  function openEdit(id) {
+    editingId = id;
+    document.getElementById('modal-title').textContent = 'Edit Cookie - Account #' + id;
+    document.getElementById('edit-psid').value = '';
+    document.getElementById('edit-psidts').value = '';
+    document.getElementById('edit-modal').classList.add('active');
+  }
+
+  function closeModal() {
+    document.getElementById('edit-modal').classList.remove('active');
+    editingId = null;
+  }
+
+  async function saveCookie() {
+    const psid = document.getElementById('edit-psid').value.trim();
+    const psidts = document.getElementById('edit-psidts').value.trim();
+    if (!psid || !psidts) { toast('Please fill both fields'); return; }
+    const data = await api('POST', '/api/save-cookie', { id: editingId, psid, psidts });
+    if (data.success) {
+      toast('Cookie saved');
+      closeModal();
+      loadAccounts();
+    } else {
+      toast('Error: ' + (data.error || 'unknown'));
+    }
+  }
+
+  async function deployCookie() {
+    const psid = document.getElementById('edit-psid').value.trim();
+    const psidts = document.getElementById('edit-psidts').value.trim();
+    if (!psid || !psidts) { toast('Please fill both fields'); return; }
+    const data = await api('POST', '/api/deploy', { id: editingId, psid, psidts });
+    toast(data.message || data.error || 'Done');
+    closeModal();
+    setTimeout(loadAccounts, 2000);
+  }
+
+  // ── Restart ──
+  async function restartOne(container) {
+    toast('Restarting ' + container + '...');
+    const data = await api('POST', '/api/restart', { container });
+    toast(data.message || data.error);
+    setTimeout(loadAccounts, 2000);
+  }
+
+  // ── Export ──
+  function toggleExport() {
+    const area = document.getElementById('export-area');
+    if (area.style.display === 'block') {
+      area.style.display = 'none';
+      return;
+    }
+    const lines = accounts.map(a => {
+      const note = getNote(a.id);
+      return `#${a.id}${note ? ' (' + note + ')' : ''} | ${a.status} | SID: ${a.cookie_preview}`;
+    });
+    document.getElementById('export-text').value = lines.join('\n');
+    area.style.display = 'block';
+  }
+</script>
+</body>
+</html>

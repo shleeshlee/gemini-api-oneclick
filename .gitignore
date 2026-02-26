@@ -1,0 +1,19 @@
+# secrets
+.env
+envs/*.env
+!envs/*.env.example
+
+# runtime
+cookie-cache/
+state/
+*.log
+*.bak
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local overrides
+docker-compose.override.yml
+docker-compose.accounts.yml
