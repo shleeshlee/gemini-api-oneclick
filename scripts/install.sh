@@ -56,6 +56,40 @@ random_key() {
   head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32
 }
 
+port_in_use() {
+  # Check if a port is occupied (works on Linux and macOS)
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnH "sport = :$1" 2>/dev/null | grep -q .
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
+  else
+    # Fallback: try connecting
+    (echo >/dev/tcp/127.0.0.1/"$1") 2>/dev/null
+  fi
+}
+
+find_free_port_range() {
+  # Find a starting port where $1 consecutive ports are all free
+  local need=$1
+  local try=${2:-8001}
+  local max=65000
+  while (( try + need - 1 <= max )); do
+    local all_free=true
+    for (( p=try; p<try+need; p++ )); do
+      if port_in_use "$p"; then
+        all_free=false
+        try=$((p + 1))
+        break
+      fi
+    done
+    if $all_free; then
+      echo "$try"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ══════════════════════════════════════════════════════════════
 # Dependency check
 # ══════════════════════════════════════════════════════════════
@@ -126,6 +160,17 @@ read -rp "  Count [1-50, default 5]: " ACCOUNT_COUNT
 ACCOUNT_COUNT="${ACCOUNT_COUNT:-5}"
 if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT > 50 )); then
   error "Invalid count (must be 1-50)"
+fi
+echo ""
+
+# Port detection: find free range for ACCOUNT_COUNT containers
+DEFAULT_START=8001
+START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$DEFAULT_START") || error "Cannot find $ACCOUNT_COUNT consecutive free ports starting from $DEFAULT_START"
+
+if (( START_PORT != DEFAULT_START )); then
+  warn "Port $DEFAULT_START already in use, auto-shifted to ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
+else
+  info "Ports ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) are available"
 fi
 echo ""
 
@@ -225,7 +270,7 @@ cat > .env <<EOF
 # Basic
 TZ=UTC
 IMAGE_NAME=gemini-api-oneclick:local
-START_PORT=8001
+START_PORT=${START_PORT}
 CONTAINER_PREFIX=gemini_api_account_
 API_KEY=${USER_API_KEY}
 
@@ -320,9 +365,9 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  Installation Complete!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
-echo -e "  ${BOLD}API Endpoint:${NC}  http://YOUR_IP:8001/v1/chat/completions"
+echo -e "  ${BOLD}API Endpoint:${NC}  http://YOUR_IP:${START_PORT}/v1/chat/completions"
 echo -e "  ${BOLD}API Key:${NC}       ${USER_API_KEY}"
-echo -e "  ${BOLD}Containers:${NC}    ${ACCOUNT_COUNT} (ports 8001-$((8000 + ACCOUNT_COUNT)))"
+echo -e "  ${BOLD}Containers:${NC}    ${ACCOUNT_COUNT} (ports ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)))"
 
 if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
   echo ""
@@ -338,7 +383,7 @@ echo -e "  ${BOLD}${CYAN}NewAPI 渠道配置${NC}"
 echo -e "  如果你的 NewAPI 也跑在 Docker 里，添加渠道时填以下地址："
 echo ""
 for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
-  port=$((8000 + i))
+  port=$((START_PORT + i - 1))
   echo -e "    Account #${i}: ${BOLD}http://${DOCKER_GW}:${port}/v1/chat/completions${NC}"
 done
 echo ""

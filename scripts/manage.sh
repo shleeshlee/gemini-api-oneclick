@@ -13,6 +13,16 @@ fi
 CONTAINER_PREFIX="${CONTAINER_PREFIX:-gemini_api_account_}"
 START_PORT="${START_PORT:-8001}"
 
+port_in_use() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnH "sport = :$1" 2>/dev/null | grep -q .
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
+  else
+    (echo >/dev/tcp/127.0.0.1/"$1") 2>/dev/null
+  fi
+}
+
 # ── Colors ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -69,6 +79,23 @@ do_add() {
 
   local start=$((max + 1))
   local end=$((max + add_count))
+
+  # Check for port conflicts
+  local has_conflict=false
+  for (( i=start; i<=end; i++ )); do
+    local port=$(( START_PORT + i - 1 ))
+    if port_in_use "$port"; then
+      warn "Port $port (for account #$i) is already in use!"
+      has_conflict=true
+    fi
+  done
+  if $has_conflict; then
+    read -rp "Ports conflict detected. Continue anyway? [y/N]: " force
+    if [[ ! "$force" =~ ^[Yy]$ ]]; then
+      info "Cancelled. Change START_PORT in .env or free up the ports first."
+      return
+    fi
+  fi
 
   info "Creating account${start}.env ~ account${end}.env ..."
   mkdir -p envs cookie-cache
