@@ -74,17 +74,19 @@ Port 9880  ──> Cookie Manager (宿主机, systemd)
 
 ## 常用命令
 
+先 `cd` 到项目目录，然后用 `make <命令>` 即可，相当于快捷方式：
+
 | 命令 | 说明 |
 |------|------|
 | `make install` | 运行交互式安装 |
-| `make generate` | 重新生成 docker-compose |
+| `make manage` | 容器管理菜单（新增/状态/卸载） |
 | `make up` | 启动所有容器 |
 | `make down` | 停止所有容器 |
 | `make restart` | 重启所有容器 |
 | `make status` | 查看容器状态 |
 | `make logs` | 实时查看日志 |
 | `make health` | 运行健康检查 |
-| `make manage` | 容器管理菜单 |
+| `make generate` | 重新生成 docker-compose |
 | `make guard-run` | 手动执行一次熔断检查 |
 | `make guard-install` | 安装熔断定时任务 |
 | `make guard-remove` | 移除熔断定时任务 |
