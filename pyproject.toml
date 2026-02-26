@@ -1,0 +1,11 @@
+[project]
+name = "gemini-api-oneclick"
+version = "0.1.0"
+description = "One-click deployable multi-account Gemini API gateway"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.0.0",
+  "gemini-webapi>=0.5.0",
+]
