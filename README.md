@@ -131,4 +131,4 @@ Port 9880  ──> Cookie Manager (宿主机, systemd)
 
 **🎀 Gemini API OneClick** by WanWan | [GitHub](https://github.com/shleeshlee/gemini-api-oneclick)
 
-如果觉得好用，请给个 Star 支持一下喵~
+如果觉得好用，请给个 Star 支持一下！
