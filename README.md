@@ -91,6 +91,27 @@ Port 9880  ──> Cookie Manager (宿主机, systemd)
 | `make guard-install` | 安装熔断定时任务 |
 | `make guard-remove` | 移除熔断定时任务 |
 
+## 接入 NewAPI
+
+安装完成后，install.sh 会自动检测 Docker 网关地址并打印每个账号的渠道 URL。在 NewAPI 面板添加渠道时直接复制即可。
+
+**为什么不是 127.0.0.1？**
+
+如果你的 NewAPI 也跑在 Docker 容器里，它和 Gemini 容器是隔离的。`127.0.0.1` 指向的是 NewAPI 容器自己，不是宿主机。需要用 Docker 网桥网关地址（通常是 `172.17.0.1`）才能从一个容器访问到宿主机暴露的端口。
+
+| NewAPI 运行方式 | 渠道地址填 |
+|----------------|-----------|
+| Docker 容器（最常见） | `http://172.17.0.1:8001/v1/chat/completions` |
+| 直接跑在宿主机 | `http://127.0.0.1:8001/v1/chat/completions` |
+
+手动查你的网关地址：
+
+```bash
+docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+> 端口规则：account1 → 8001，account2 → 8002，以此类推。
+
 ## 渠道熔断守卫（可选）
 
 接入 NewAPI 面板，自动管理渠道状态：
