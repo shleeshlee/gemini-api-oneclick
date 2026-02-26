@@ -75,7 +75,7 @@ def _list_accounts() -> list[dict]:
             "psid_preview": (psid_val[:20] + "...") if len(psid_val) > 20 else psid_val,
             "status": status,
         })
-    accounts.sort(key=lambda x: x["id"])
+    accounts.sort(key=lambda x: x["num"])
     return accounts
 
 
