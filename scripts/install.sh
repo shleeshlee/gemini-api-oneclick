@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT_DIR"
-
-# ── Colors ──
+# ── Colors (need early for bootstrap messages) ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -12,6 +9,46 @@ CYAN='\033[0;36m'
 PINK='\033[38;5;205m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+# ══════════════════════════════════════════════════════════════
+# Bootstrap: auto-clone if running via curl pipe
+# ══════════════════════════════════════════════════════════════
+REPO_URL="https://github.com/shleeshlee/gemini-api-oneclick.git"
+
+_in_repo() {
+  [[ -f "app/main.py" ]] && [[ -f "scripts/install.sh" ]]
+}
+
+if _in_repo; then
+  # Already in the repo root
+  ROOT_DIR="$(pwd)"
+elif [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ -f "$(dirname "${BASH_SOURCE[0]}")/../app/main.py" ]]; then
+  # Running from scripts/ inside the repo
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+else
+  # Running from curl pipe or outside the repo — need to clone
+  command -v git >/dev/null 2>&1 || { echo -e "${RED}[x] git is required. Install git first.${NC}"; exit 1; }
+
+  DEFAULT_DIR="$HOME/gemini-api-oneclick"
+  echo ""
+  echo -e "${PINK}Gemini API OneClick — One-Line Installer${NC}"
+  echo ""
+  read -rp "Install to [$DEFAULT_DIR]: " INSTALL_DIR
+  INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
+
+  if [[ -d "$INSTALL_DIR/.git" ]]; then
+    echo -e "${GREEN}[*]${NC} Existing repo found, updating ..."
+    cd "$INSTALL_DIR"
+    git pull --ff-only || echo -e "${YELLOW}[!]${NC} git pull failed, continuing with current version"
+  else
+    echo -e "${GREEN}[*]${NC} Cloning repo ..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+  fi
+  ROOT_DIR="$(pwd)"
+fi
+
+cd "$ROOT_DIR"
 
 # ══════════════════════════════════════════════════════════════
 # ASCII Banner
