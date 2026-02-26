@@ -13,6 +13,16 @@
 
 ## 快速开始
 
+**一行命令安装（懒人推荐）：**
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/shleeshlee/gemini-api-oneclick/main/scripts/install.sh)
+```
+
+脚本会自动 clone 仓库、进入目录、启动安装向导。
+
+**或者手动 clone：**
+
 ```bash
 git clone https://github.com/shleeshlee/gemini-api-oneclick.git
 cd gemini-api-oneclick
