@@ -4,563 +4,504 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cookie Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --pink: #FF6B9D;
-    --pink-light: #FFB5D0;
-    --pink-bg: #FFF0F5;
-    --pink-card: #FFF8FA;
-    --pink-border: #FFD6E7;
-    --pink-hover: #FF4081;
-    --green: #4CAF50;
-    --red: #F44336;
-    --orange: #FF9800;
-    --gray: #999;
-  }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #FFF6EE;
+  --bg-warm: #FFF0E3;
+  --card: #FFFFFF;
+  --card-hover: #FFF9F5;
+  --primary: #FF8B7E;
+  --primary-light: #FFB5AD;
+  --primary-dark: #E06B5E;
+  --accent: #FFD166;
+  --accent-light: #FFE4A0;
+  --success: #6EC89B;
+  --success-light: #D4F0E1;
+  --danger: #FF7B7B;
+  --danger-light: #FFD4D4;
+  --text: #3D3535;
+  --text-muted: #9E8E8E;
+  --text-light: #C4B0B0;
+  --border: #F0E4DC;
+  --shadow-sm: 0 2px 8px rgba(120, 80, 60, 0.06);
+  --shadow-md: 0 4px 20px rgba(120, 80, 60, 0.08);
+  --shadow-lg: 0 8px 40px rgba(120, 80, 60, 0.12);
+  --radius: 16px;
+  --radius-sm: 10px;
+}
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--pink-bg);
-    min-height: 100vh;
-  }
+html { font-size: 15px; }
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
 
-  /* ── Login Screen ── */
-  #login-screen {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 20px;
-  }
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at 15% 25%, rgba(255,139,126,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 85% 75%, rgba(255,209,102,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(110,200,155,0.04) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
 
-  .login-box {
-    background: white;
-    border-radius: 20px;
-    padding: 40px;
-    box-shadow: 0 8px 32px rgba(255, 107, 157, 0.15);
-    text-align: center;
-    max-width: 380px;
-    width: 100%;
-    border: 2px solid var(--pink-border);
-  }
+/* --- LOGIN --- */
+.login-screen {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg); z-index: 1000;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.login-screen.hidden { opacity: 0; transform: scale(1.02); pointer-events: none; }
 
-  .login-box h1 {
-    font-size: 24px;
-    color: var(--pink);
-    margin-bottom: 8px;
-  }
+.login-box {
+  text-align: center; padding: 3rem 2.5rem;
+  background: var(--card); border-radius: 24px;
+  box-shadow: var(--shadow-lg); width: min(400px, 90vw);
+  position: relative; overflow: hidden;
+}
+.login-box::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: linear-gradient(90deg, var(--primary), var(--accent), var(--success));
+}
+.login-icon { font-size: 3.5rem; margin-bottom: 0.8rem; display: block; animation: float 3s ease-in-out infinite; }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
 
-  .login-box .subtitle {
-    color: var(--gray);
-    font-size: 14px;
-    margin-bottom: 24px;
-  }
+.login-box h1 { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.6rem; color: var(--text); margin-bottom: 0.3rem; }
+.login-box p { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.8rem; }
 
-  .login-box input {
-    width: 100%;
-    padding: 12px 16px;
-    border: 2px solid var(--pink-border);
-    border-radius: 12px;
-    font-size: 16px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
+.login-input {
+  width: 100%; padding: 0.9rem 1.2rem; border: 2px solid var(--border);
+  border-radius: var(--radius-sm); font-family: 'Outfit', sans-serif; font-size: 1rem;
+  outline: none; transition: border-color 0.2s, box-shadow 0.2s; background: var(--bg);
+}
+.login-input:focus { border-color: var(--primary-light); box-shadow: 0 0 0 4px rgba(255,139,126,0.1); }
+.login-input::placeholder { color: var(--text-light); }
 
-  .login-box input:focus {
-    border-color: var(--pink);
-  }
+.login-btn {
+  width: 100%; margin-top: 1rem; padding: 0.9rem;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: white; border: none; border-radius: var(--radius-sm);
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 1rem;
+  cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;
+}
+.login-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(255,139,126,0.3); }
+.login-btn:active { transform: translateY(0); }
+.login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.8rem; min-height: 1.2rem; }
 
-  .login-box button {
-    width: 100%;
-    padding: 12px;
-    background: var(--pink);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-size: 16px;
-    cursor: pointer;
-    margin-top: 16px;
-    transition: background 0.2s;
-  }
+/* --- APP --- */
+.app { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 1.5rem; display: none; }
+.app.visible { display: block; animation: fadeUp 0.6s ease; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 
-  .login-box button:hover { background: var(--pink-hover); }
+/* --- TOPBAR --- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1.5rem; padding: 1rem 1.5rem;
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+}
+.topbar-left { display: flex; align-items: center; gap: 0.8rem; }
+.topbar-logo { font-size: 1.8rem; }
+.topbar-title { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.3rem; }
+.topbar-sub { font-size: 0.8rem; color: var(--text-muted); }
+.topbar-right { display: flex; align-items: center; gap: 0.6rem; }
 
-  .login-error {
-    color: var(--red);
-    font-size: 14px;
-    margin-top: 12px;
-    display: none;
-  }
+.stat-pill {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 500;
+}
+.stat-pill.ok { background: var(--success-light); color: #2D7A52; }
+.stat-pill.warn { background: var(--danger-light); color: #B94A4A; }
 
-  /* ── Main App ── */
-  #app {
-    display: none;
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 20px;
-  }
+.btn-icon {
+  width: 38px; height: 38px; border-radius: 10px; border: 2px solid var(--border);
+  background: var(--card); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; font-size: 1.1rem; transition: all 0.15s;
+}
+.btn-icon:hover { border-color: var(--primary-light); background: var(--bg-warm); }
+.btn-icon.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-  .header {
-    text-align: center;
-    padding: 20px 0 16px;
-  }
+/* --- GRID --- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
 
-  .header h1 {
-    font-size: 22px;
-    color: var(--pink);
-  }
+/* --- CARD --- */
+.card {
+  background: var(--card); border-radius: var(--radius); padding: 1.2rem;
+  box-shadow: var(--shadow-sm); border: 2px solid transparent;
+  cursor: pointer; transition: all 0.2s ease; position: relative; overflow: hidden;
+}
+.card::after {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--border); transition: background 0.2s;
+}
+.card.has-cookie::after { background: linear-gradient(90deg, var(--success), var(--accent)); }
+.card.no-cookie::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
+.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--border); }
 
-  .header .info {
-    color: var(--gray);
-    font-size: 13px;
-    margin-top: 4px;
-  }
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+.card-num { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.1rem; color: var(--text); }
+.card-status { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.card-status.ok { background: var(--success); box-shadow: 0 0 8px rgba(110,200,155,0.4); }
+.card-status.bad { background: var(--danger); box-shadow: 0 0 8px rgba(255,123,123,0.4); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-  .toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+.card-name { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .toolbar .stats {
-    font-size: 14px;
-    color: #666;
-  }
+.card-preview {
+  font-size: 0.75rem; color: var(--text-light); font-family: 'SF Mono', 'Fira Code', monospace;
+  background: var(--bg); padding: 0.35rem 0.6rem; border-radius: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-preview.empty { color: var(--danger); background: var(--danger-light); font-family: 'Outfit', sans-serif; }
 
-  .toolbar .actions {
-    display: flex;
-    gap: 8px;
-  }
+/* --- MODAL --- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(60, 40, 30, 0.3); backdrop-filter: blur(4px);
+  z-index: 500; display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s;
+}
+.modal-overlay.active { opacity: 1; pointer-events: auto; }
 
-  .btn {
-    padding: 8px 16px;
-    border: 2px solid var(--pink-border);
-    border-radius: 10px;
-    background: white;
-    color: var(--pink);
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
+.modal {
+  background: var(--card); border-radius: 20px; padding: 2rem;
+  width: min(460px, 92vw); box-shadow: var(--shadow-lg);
+  transform: translateY(20px) scale(0.97); transition: transform 0.3s ease;
+  max-height: 90vh; overflow-y: auto;
+}
+.modal-overlay.active .modal { transform: translateY(0) scale(1); }
 
-  .btn:hover {
-    background: var(--pink);
-    color: white;
-  }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+.modal-title { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.3rem; }
+.modal-close {
+  width: 34px; height: 34px; border-radius: 10px; border: none; background: var(--bg);
+  cursor: pointer; font-size: 1.1rem; display: flex; align-items: center;
+  justify-content: center; transition: background 0.15s;
+}
+.modal-close:hover { background: var(--danger-light); }
 
-  .btn-sm {
-    padding: 4px 10px;
-    font-size: 12px;
-    border-radius: 8px;
-  }
+.form-group { margin-bottom: 1.2rem; }
+.form-label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--text-muted); margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.5px; }
+.form-input {
+  width: 100%; padding: 0.8rem 1rem; border: 2px solid var(--border);
+  border-radius: var(--radius-sm); font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.85rem; outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+  background: var(--bg); color: var(--text);
+}
+.form-input:focus { border-color: var(--primary-light); box-shadow: 0 0 0 4px rgba(255,139,126,0.08); }
+.form-input::placeholder { color: var(--text-light); }
+.form-input-name { font-family: 'Outfit', sans-serif; font-size: 0.95rem; }
 
-  /* ── Account Cards ── */
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 14px;
-  }
+.modal-actions { display: flex; gap: 0.8rem; margin-top: 1.5rem; }
+.btn { flex: 1; padding: 0.85rem; border-radius: var(--radius-sm); border: none; font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.95rem; cursor: pointer; transition: all 0.15s; }
+.btn-primary { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(255,139,126,0.3); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-ghost { background: var(--bg); color: var(--text-muted); border: 2px solid var(--border); }
+.btn-ghost:hover { background: var(--bg-warm); }
 
-  .card {
-    background: var(--pink-card);
-    border: 2px solid var(--pink-border);
-    border-radius: 16px;
-    padding: 16px;
-    transition: box-shadow 0.2s;
-  }
+.modal-msg { margin-top: 0.8rem; font-size: 0.85rem; min-height: 1.2rem; text-align: center; }
+.modal-msg.ok { color: var(--success); }
+.modal-msg.err { color: var(--danger); }
 
-  .card:hover {
-    box-shadow: 0 4px 16px rgba(255, 107, 157, 0.12);
-  }
+/* --- TOAST --- */
+.toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-end; }
+.toast { padding: 0.7rem 1.2rem; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 500; box-shadow: var(--shadow-md); animation: slideIn 0.3s ease; max-width: 320px; }
+.toast.ok { background: var(--success-light); color: #2D7A52; }
+.toast.err { background: var(--danger-light); color: #B94A4A; }
+.toast.info { background: #E8F0FE; color: #3566A5; }
+@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-  }
+@media (max-width: 640px) {
+  .topbar { flex-direction: column; gap: 0.8rem; text-align: center; }
+  .topbar-right { justify-content: center; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.8rem; }
+  .card { padding: 1rem; }
+  .modal { padding: 1.5rem; }
+}
 
-  .card-title {
-    font-weight: 600;
-    font-size: 15px;
-    color: #333;
-  }
-
-  .card-title .note {
-    font-weight: 400;
-    font-size: 12px;
-    color: var(--gray);
-    margin-left: 4px;
-  }
-
-  .status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  .status-dot.running { background: var(--green); }
-  .status-dot.exited { background: var(--red); }
-  .status-dot.unknown { background: var(--gray); }
-
-  .card-cookie {
-    font-family: monospace;
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 10px;
-    word-break: break-all;
-    line-height: 1.5;
-  }
-
-  .card-cookie .label {
-    color: var(--pink);
-    font-weight: 600;
-    font-family: -apple-system, sans-serif;
-  }
-
-  .card-actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  /* ── Edit Modal ── */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 100;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .modal-overlay.active {
-    display: flex;
-  }
-
-  .modal {
-    background: white;
-    border-radius: 20px;
-    padding: 28px;
-    max-width: 480px;
-    width: 90%;
-    box-shadow: 0 16px 48px rgba(0,0,0,0.15);
-  }
-
-  .modal h2 {
-    color: var(--pink);
-    font-size: 18px;
-    margin-bottom: 16px;
-  }
-
-  .modal label {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-    color: #555;
-    margin-bottom: 4px;
-    margin-top: 12px;
-  }
-
-  .modal textarea {
-    width: 100%;
-    padding: 10px;
-    border: 2px solid var(--pink-border);
-    border-radius: 10px;
-    font-family: monospace;
-    font-size: 13px;
-    resize: vertical;
-    min-height: 60px;
-    outline: none;
-  }
-
-  .modal textarea:focus {
-    border-color: var(--pink);
-  }
-
-  .modal-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 20px;
-    justify-content: flex-end;
-  }
-
-  .modal-actions .btn-save {
-    background: var(--pink);
-    color: white;
-    border-color: var(--pink);
-  }
-
-  .modal-actions .btn-deploy {
-    background: var(--green);
-    color: white;
-    border-color: var(--green);
-  }
-
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #333;
-    color: white;
-    padding: 10px 24px;
-    border-radius: 10px;
-    font-size: 14px;
-    z-index: 200;
-    opacity: 0;
-    transition: opacity 0.3s;
-    pointer-events: none;
-  }
-
-  .toast.show { opacity: 1; }
-
-  /* ── Note input ── */
-  .note-input {
-    width: 100%;
-    padding: 4px 8px;
-    border: 1px dashed var(--pink-border);
-    border-radius: 6px;
-    font-size: 11px;
-    color: #666;
-    background: transparent;
-    outline: none;
-    margin-bottom: 6px;
-  }
-
-  .note-input::placeholder { color: #ccc; }
-  .note-input:focus { border-color: var(--pink); }
-
-  /* ── Export ── */
-  .export-area {
-    display: none;
-    margin-top: 16px;
-    padding: 16px;
-    background: white;
-    border: 2px solid var(--pink-border);
-    border-radius: 16px;
-  }
-
-  .export-area textarea {
-    width: 100%;
-    min-height: 120px;
-    font-family: monospace;
-    font-size: 12px;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 10px;
-  }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-light); }
 </style>
 </head>
 <body>
 
-<!-- Login Screen -->
-<div id="login-screen">
+<!-- LOGIN -->
+<div class="login-screen" id="loginScreen">
   <div class="login-box">
+    <span class="login-icon">&#x1F36A;</span>
     <h1>Cookie Manager</h1>
-    <p class="subtitle">Gemini API OneClick</p>
-    <input type="password" id="login-password" placeholder="Enter password" autocomplete="off">
-    <button onclick="doLogin()">Login</button>
-    <p class="login-error" id="login-error">Wrong password</p>
+    <p>Gemini API OneClick</p>
+    <input type="password" class="login-input" id="loginPwd" placeholder="Enter password" autocomplete="off">
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">Sign In</button>
+    <div class="login-error" id="loginErr"></div>
   </div>
 </div>
 
-<!-- Main App -->
-<div id="app">
-  <div class="header">
-    <h1>Cookie Manager</h1>
-    <div class="info">Gemini API OneClick</div>
-  </div>
-
-  <div class="toolbar">
-    <div class="stats" id="stats"></div>
-    <div class="actions">
-      <button class="btn" onclick="loadAccounts()">Refresh</button>
-      <button class="btn" onclick="toggleExport()">Export</button>
+<!-- APP -->
+<div class="app" id="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-logo">&#x1F36A;</span>
+      <div>
+        <div class="topbar-title">Cookie Manager</div>
+        <div class="topbar-sub" id="topbarSub">Gemini API OneClick</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="stat-pill ok" id="statOk">0 active</span>
+      <span class="stat-pill warn" id="statBad">0 empty</span>
+      <button class="btn-icon" id="refreshBtn" onclick="loadAccounts()" title="Refresh">&#x21BB;</button>
+      <button class="btn-icon" onclick="doLogout()" title="Logout">&#x23FB;</button>
     </div>
   </div>
-
-  <div class="cards" id="cards"></div>
-
-  <div class="export-area" id="export-area">
-    <textarea id="export-text" readonly></textarea>
-  </div>
+  <div class="grid" id="grid"></div>
 </div>
 
-<!-- Edit Modal -->
-<div class="modal-overlay" id="edit-modal">
+<!-- MODAL -->
+<div class="modal-overlay" id="modalOverlay" onclick="event.target===this&&closeModal()">
   <div class="modal">
-    <h2 id="modal-title">Edit Cookie</h2>
-    <label>SECURE_1PSID</label>
-    <textarea id="edit-psid" rows="3" placeholder="Paste SECURE_1PSID value"></textarea>
-    <label>SECURE_1PSIDTS</label>
-    <textarea id="edit-psidts" rows="2" placeholder="Paste SECURE_1PSIDTS value"></textarea>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-save" onclick="saveCookie()">Save Only</button>
-      <button class="btn btn-deploy" onclick="deployCookie()">Save + Restart</button>
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">#1</div>
+      <button class="modal-close" onclick="closeModal()">&#x2715;</button>
     </div>
+    <div class="form-group">
+      <label class="form-label">Account Name</label>
+      <input type="text" class="form-input form-input-name" id="mName" placeholder="Optional alias">
+    </div>
+    <div class="form-group">
+      <label class="form-label">SECURE_1PSID</label>
+      <input type="text" class="form-input" id="mPsid" placeholder="Paste cookie value" spellcheck="false">
+    </div>
+    <div class="form-group">
+      <label class="form-label">SECURE_1PSIDTS</label>
+      <input type="text" class="form-input" id="mPsidts" placeholder="Paste cookie value" spellcheck="false">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="deployBtn" onclick="doDeploy()">Deploy</button>
+    </div>
+    <div class="modal-msg" id="modalMsg"></div>
   </div>
 </div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
+<!-- TOASTS -->
+<div class="toast-container" id="toasts"></div>
 
 <script>
-  let accounts = [];
-  let editingId = null;
+const API = '/api';
+let password = '';
+let accounts = [];
+let currentNum = null;
+let names = {};
 
-  // ── Notes (localStorage) ──
-  function getNote(id) {
-    return localStorage.getItem('cm_note_' + id) || '';
-  }
-  function setNote(id, val) {
-    if (val) localStorage.setItem('cm_note_' + id, val);
-    else localStorage.removeItem('cm_note_' + id);
-  }
+function loadNames() {
+  try { names = JSON.parse(localStorage.getItem('cm-names') || '{}'); } catch { names = {}; }
+}
+function saveName(num, name) {
+  if (name) names[num] = name; else delete names[num];
+  localStorage.setItem('cm-names', JSON.stringify(names));
+}
 
-  // ── Toast ──
-  function toast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 2500);
-  }
+function doLogin() {
+  const pwd = document.getElementById('loginPwd').value;
+  const errEl = document.getElementById('loginErr');
+  if (!pwd) { errEl.textContent = 'Please enter password'; return; }
+  errEl.textContent = '';
 
-  // ── API ──
-  async function api(method, path, body) {
-    const opts = { method, headers: { 'Content-Type': 'application/json' } };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(path, opts);
-    return res.json();
-  }
-
-  // ── Login ──
-  async function doLogin() {
-    const pw = document.getElementById('login-password').value;
-    const data = await api('POST', '/api/login', { password: pw });
-    if (data.success) {
-      document.getElementById('login-screen').style.display = 'none';
-      document.getElementById('app').style.display = 'block';
-      loadAccounts();
-    } else {
-      document.getElementById('login-error').style.display = 'block';
+  fetch(API + '/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd })
+  })
+  .then(async r => ({ ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }))
+  .then(({ ok, status, data }) => {
+    if (!ok) {
+      if (status === 401) throw new Error('Password incorrect');
+      throw new Error(data.error || 'Login failed');
     }
-  }
+    password = pwd;
+    return fetch(API + '/accounts');
+  })
+  .then(r => {
+    if (!r.ok) throw new Error('Failed to load accounts');
+    return r.json();
+  })
+  .then(data => {
+    accounts = (data.accounts || []).sort((a, b) => Number(a.num) - Number(b.num));
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.add('visible');
+    loadNames();
+    renderGrid();
+  })
+  .catch(e => {
+    errEl.textContent = e.message || 'Connection failed';
+  });
+}
 
-  document.getElementById('login-password').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') doLogin();
+function doLogout() {
+  password = '';
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('app').classList.remove('visible');
+  document.getElementById('loginPwd').value = '';
+  document.getElementById('loginErr').textContent = '';
+}
+
+document.getElementById('loginPwd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+function loadAccounts() {
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+  fetch(API + '/accounts').then(r => r.json()).then(data => {
+    accounts = (data.accounts || []).sort((a, b) => Number(a.num) - Number(b.num));
+    renderGrid();
+    toast('Refreshed', 'info');
+  }).catch(e => {
+    toast('Refresh failed', 'err');
+  }).finally(() => {
+    btn.classList.remove('spinning');
+  });
+}
+
+function renderGrid() {
+  const grid = document.getElementById('grid');
+  let okCount = 0, badCount = 0;
+
+  const cards = accounts.map(a => {
+    const num = a.num;
+    const hasCookie = a.has_cookie;
+    const name = names[num] || '';
+    const preview = a.psid_preview || '';
+
+    if (hasCookie) okCount++; else badCount++;
+
+    return `
+      <div class="card ${hasCookie ? 'has-cookie' : 'no-cookie'}" onclick="openModal(${num})">
+        <div class="card-header">
+          <span class="card-num">#${num}</span>
+          <span class="card-status ${hasCookie ? 'ok' : 'bad'}"></span>
+        </div>
+        <div class="card-name">${name || 'Container ' + num}</div>
+        <div class="card-preview ${preview ? '' : 'empty'}">
+          ${preview || 'No cookie'}
+        </div>
+      </div>
+    `;
   });
 
-  // ── Load Accounts ──
-  async function loadAccounts() {
-    const data = await api('GET', '/api/accounts');
-    accounts = data.accounts || [];
-    renderCards();
+  grid.innerHTML = cards.join('');
+  document.getElementById('statOk').textContent = okCount + ' active';
+  document.getElementById('statBad').textContent = badCount + ' empty';
+  document.getElementById('topbarSub').textContent = accounts.length + ' Containers';
+}
+
+function openModal(num) {
+  currentNum = num;
+  document.getElementById('modalTitle').textContent = '#' + num + ' — gemini_api_account_' + num;
+  document.getElementById('mName').value = names[num] || '';
+  document.getElementById('mPsid').value = '';
+  document.getElementById('mPsidts').value = '';
+  document.getElementById('modalMsg').textContent = '';
+  document.getElementById('deployBtn').disabled = false;
+  document.getElementById('deployBtn').textContent = 'Deploy';
+  document.getElementById('modalOverlay').classList.add('active');
+  setTimeout(() => document.getElementById('mPsid').focus(), 200);
+}
+
+function closeModal() {
+  if (currentNum !== null) {
+    const nameVal = document.getElementById('mName').value.trim();
+    saveName(currentNum, nameVal);
+    renderGrid();
+  }
+  document.getElementById('modalOverlay').classList.remove('active');
+  currentNum = null;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+
+function doDeploy() {
+  const psid = document.getElementById('mPsid').value.trim();
+  const psidts = document.getElementById('mPsidts').value.trim();
+  const msg = document.getElementById('modalMsg');
+  const btn = document.getElementById('deployBtn');
+
+  if (!psid || !psidts) {
+    msg.className = 'modal-msg err';
+    msg.textContent = 'Both cookie fields are required';
+    return;
   }
 
-  function renderCards() {
-    const container = document.getElementById('cards');
-    const running = accounts.filter(a => a.status === 'running').length;
-    document.getElementById('stats').textContent =
-      `${accounts.length} accounts | ${running} running`;
+  const nameVal = document.getElementById('mName').value.trim();
+  saveName(currentNum, nameVal);
 
-    container.innerHTML = accounts.map(a => {
-      const note = getNote(a.id);
-      const dotClass = a.status === 'running' ? 'running' : a.status === 'exited' ? 'exited' : 'unknown';
-      return `
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">
-              #${a.id}
-              <span class="note">${note ? '(' + note + ')' : ''}</span>
-            </span>
-            <span class="status-dot ${dotClass}" title="${a.status}"></span>
-          </div>
-          <input class="note-input" placeholder="Add note..."
-            value="${note}"
-            onchange="setNote(${a.id}, this.value); loadAccounts()">
-          <div class="card-cookie">
-            <span class="label">SID:</span> ${a.cookie_preview || '<empty>'}<br>
-            <span class="label">TS:</span> ${a.cookie_ts_preview || '<empty>'}
-          </div>
-          <div class="card-actions">
-            <button class="btn btn-sm" onclick="openEdit(${a.id})">Edit</button>
-            <button class="btn btn-sm" onclick="restartOne('${a.container}')">Restart</button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
+  btn.disabled = true;
+  btn.textContent = 'Deploying...';
+  msg.className = 'modal-msg';
+  msg.textContent = '';
 
-  // ── Edit Modal ──
-  function openEdit(id) {
-    editingId = id;
-    document.getElementById('modal-title').textContent = 'Edit Cookie - Account #' + id;
-    document.getElementById('edit-psid').value = '';
-    document.getElementById('edit-psidts').value = '';
-    document.getElementById('edit-modal').classList.add('active');
-  }
-
-  function closeModal() {
-    document.getElementById('edit-modal').classList.remove('active');
-    editingId = null;
-  }
-
-  async function saveCookie() {
-    const psid = document.getElementById('edit-psid').value.trim();
-    const psidts = document.getElementById('edit-psidts').value.trim();
-    if (!psid || !psidts) { toast('Please fill both fields'); return; }
-    const data = await api('POST', '/api/save-cookie', { id: editingId, psid, psidts });
-    if (data.success) {
-      toast('Cookie saved');
-      closeModal();
-      loadAccounts();
+  fetch(API + '/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      password: password,
+      account: currentNum,
+      psid: psid,
+      psidts: psidts
+    })
+  })
+  .then(r => r.json().then(data => ({ ok: r.ok, data })))
+  .then(({ ok, data }) => {
+    if (ok && data.success) {
+      msg.className = 'modal-msg ok';
+      msg.textContent = 'Deployed successfully!';
+      toast('#' + currentNum + ' deployed', 'ok');
+      setTimeout(() => { loadAccounts(); closeModal(); }, 1200);
     } else {
-      toast('Error: ' + (data.error || 'unknown'));
+      throw new Error(data.error || 'Deploy failed');
     }
-  }
+  })
+  .catch(e => {
+    msg.className = 'modal-msg err';
+    msg.textContent = e.message;
+    btn.disabled = false;
+    btn.textContent = 'Deploy';
+    toast('#' + currentNum + ' failed: ' + e.message, 'err');
+  });
+}
 
-  async function deployCookie() {
-    const psid = document.getElementById('edit-psid').value.trim();
-    const psidts = document.getElementById('edit-psidts').value.trim();
-    if (!psid || !psidts) { toast('Please fill both fields'); return; }
-    const data = await api('POST', '/api/deploy', { id: editingId, psid, psidts });
-    toast(data.message || data.error || 'Done');
-    closeModal();
-    setTimeout(loadAccounts, 2000);
-  }
+function toast(text, type) {
+  const container = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type || 'info');
+  el.textContent = text;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(20px)';
+    el.style.transition = 'all 0.3s';
+    setTimeout(() => el.remove(), 300);
+  }, 2500);
+}
 
-  // ── Restart ──
-  async function restartOne(container) {
-    toast('Restarting ' + container + '...');
-    const data = await api('POST', '/api/restart', { container });
-    toast(data.message || data.error);
-    setTimeout(loadAccounts, 2000);
-  }
-
-  // ── Export ──
-  function toggleExport() {
-    const area = document.getElementById('export-area');
-    if (area.style.display === 'block') {
-      area.style.display = 'none';
-      return;
-    }
-    const lines = accounts.map(a => {
-      const note = getNote(a.id);
-      return `#${a.id}${note ? ' (' + note + ')' : ''} | ${a.status} | SID: ${a.cookie_preview}`;
-    });
-    document.getElementById('export-text').value = lines.join('\n');
-    area.style.display = 'block';
-  }
+loadNames();
 </script>
 </body>
 </html>

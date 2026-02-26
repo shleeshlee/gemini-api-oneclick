@@ -68,13 +68,12 @@ def _list_accounts() -> list[dict]:
         except Exception:
             pass
 
+        psid_val = env.get("SECURE_1PSID", "").strip()
         accounts.append({
-            "id": account_id,
-            "container": container,
+            "num": account_id,
+            "has_cookie": bool(psid_val),
+            "psid_preview": (psid_val[:20] + "...") if len(psid_val) > 20 else psid_val,
             "status": status,
-            "has_cookie": bool(env.get("SECURE_1PSID", "").strip()),
-            "cookie_preview": _mask(env.get("SECURE_1PSID", "")),
-            "cookie_ts_preview": _mask(env.get("SECURE_1PSIDTS", "")),
         })
     accounts.sort(key=lambda x: x["id"])
     return accounts
@@ -116,15 +115,19 @@ def _save_cookie(account_id: int, psid: str, psidts: str) -> bool:
     return True
 
 
-def _restart_container(container: str) -> tuple[bool, str]:
-    """Restart a single docker container."""
+def _restart_container(account_id: int) -> tuple[bool, str]:
+    """Recreate a single container via docker compose (picks up new env)."""
+    compose_file = ROOT_DIR / "docker-compose.accounts.yml"
+    service_name = f"gemini-api-{account_id}"
     try:
         result = subprocess.run(
-            ["docker", "restart", container],
+            ["docker", "compose", "-f", str(compose_file),
+             "up", "-d", "--force-recreate", service_name],
             capture_output=True, text=True, timeout=30,
+            cwd=str(ROOT_DIR),
         )
         if result.returncode == 0:
-            return True, f"Container {container} restarted"
+            return True, f"Container account {account_id} recreated"
         return False, result.stderr.strip()
     except subprocess.TimeoutExpired:
         return False, "Restart timed out"
@@ -195,41 +198,45 @@ class CookieManagerHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Wrong password"}, 401)
             return
 
-        if path == "/api/save-cookie":
-            account_id = body.get("id")
-            psid = body.get("psid", "").strip()
-            psidts = body.get("psidts", "").strip()
-            if not account_id or not psid or not psidts:
-                self._send_json({"error": "Missing id, psid, or psidts"}, 400)
-                return
-            if _save_cookie(int(account_id), psid, psidts):
-                self._send_json({"success": True})
-            else:
-                self._send_json({"error": f"account{account_id}.env not found"}, 404)
-            return
-
-        if path == "/api/restart":
-            container = body.get("container", "")
-            if not container or not container.startswith(CONTAINER_PREFIX):
-                self._send_json({"error": "Invalid container name"}, 400)
-                return
-            ok, msg = _restart_container(container)
-            self._send_json({"success": ok, "message": msg}, 200 if ok else 500)
-            return
-
         if path == "/api/deploy":
-            account_id = body.get("id")
+            # Require password on every deploy (matches VPS behavior)
+            if AUTH_PASSWORD and body.get("password") != AUTH_PASSWORD:
+                self._send_json({"error": "unauthorized"}, 401)
+                return
+            account_id = body.get("account")
             psid = body.get("psid", "").strip()
             psidts = body.get("psidts", "").strip()
             if not account_id or not psid or not psidts:
-                self._send_json({"error": "Missing id, psid, or psidts"}, 400)
+                self._send_json({"error": "missing account/psid/psidts"}, 400)
                 return
-            if not _save_cookie(int(account_id), psid, psidts):
-                self._send_json({"error": f"account{account_id}.env not found"}, 404)
+            aid = int(account_id)
+            if not _save_cookie(aid, psid, psidts):
+                self._send_json({"error": f"account{aid}.env not found"}, 404)
+                return
+            ok, msg = _restart_container(aid)
+            self._send_json({
+                "success": ok,
+                "message": f"account {aid}: env updated + container restarted" if ok else msg,
+                "env_written": True,
+            }, 200 if ok else 500)
+            return
+
+        if path == "/api/status":
+            account_id = body.get("account")
+            if not account_id:
+                self._send_json({"error": "missing account"}, 400)
                 return
             container = f"{CONTAINER_PREFIX}{account_id}"
-            ok, msg = _restart_container(container)
-            self._send_json({"success": ok, "message": f"Cookie saved. {msg}"}, 200 if ok else 500)
+            try:
+                result = subprocess.run(
+                    ["docker", "inspect", container, "--format",
+                     "{{.State.Status}} {{.State.Health.Status}}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                status = result.stdout.strip() if result.returncode == 0 else "not found"
+            except Exception:
+                status = "unknown"
+            self._send_json({"container": container, "status": status})
             return
 
         self._send_json({"error": "Not found"}, 404)
