@@ -6,20 +6,12 @@ This project is pre-1.0. Security fixes are applied to the latest `main` branch.
 
 ## Reporting a Vulnerability
 
-Please do **not** open a public issue for sensitive security reports.
-
-Report by email to your own security contact mailbox for this project and include:
+Please open a [GitHub Issue](https://github.com/shleeshlee/gemini-api-oneclick/issues) and include:
 
 1. A clear description of the issue
 2. Steps to reproduce
 3. Impact assessment
 4. Suggested mitigation if available
-
-Response targets:
-
-1. Initial acknowledgement: within 72 hours
-2. Triage result: within 7 days
-3. Fix plan or temporary mitigation: as soon as feasible
 
 ## Secrets Handling Rules
 
