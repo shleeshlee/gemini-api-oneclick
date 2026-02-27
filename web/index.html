@@ -231,6 +231,76 @@ body::before {
   .modal { padding: 1.5rem; }
 }
 
+/* --- GUARD SETTINGS MODAL --- */
+.guard-section { margin-bottom: 1.2rem; }
+.guard-section-title {
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.9rem;
+  color: var(--text); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;
+}
+
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.7rem 1rem; background: var(--bg); border-radius: var(--radius-sm); margin-bottom: 0.8rem;
+}
+.toggle-label { font-size: 0.9rem; font-weight: 500; }
+.toggle-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
+
+.toggle-switch {
+  position: relative; width: 48px; height: 26px; cursor: pointer;
+}
+.toggle-switch input { display: none; }
+.toggle-track {
+  position: absolute; inset: 0; background: var(--border); border-radius: 13px;
+  transition: background 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--success); }
+.toggle-knob {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  background: white; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked ~ .toggle-knob { transform: translateX(22px); }
+
+.tag-input-area {
+  display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem 0.8rem;
+  background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius-sm);
+  min-height: 44px; align-items: center; cursor: text; transition: border-color 0.2s;
+}
+.tag-input-area:focus-within { border-color: var(--primary-light); }
+
+.tag {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.25rem 0.6rem; background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 0.8rem; font-family: 'SF Mono', 'Fira Code', monospace;
+  white-space: nowrap;
+}
+.tag.code { background: #EDE9FE; border-color: #C4B5FD; color: #5B21B6; }
+.tag.keyword { background: #FEF3C7; border-color: #FCD34D; color: #92400E; }
+.tag-remove {
+  cursor: pointer; font-size: 0.7rem; color: var(--text-light); line-height: 1;
+  padding: 0 0.1rem; border-radius: 3px;
+}
+.tag-remove:hover { color: var(--danger); background: var(--danger-light); }
+
+.tag-new-input {
+  border: none; outline: none; background: transparent;
+  font-family: 'Outfit', sans-serif; font-size: 0.85rem; color: var(--text);
+  min-width: 80px; flex: 1;
+}
+.tag-new-input::placeholder { color: var(--text-light); }
+
+.guard-hint {
+  font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.4;
+}
+
+.threshold-input {
+  width: 60px; padding: 0.4rem 0.6rem; border: 2px solid var(--border);
+  border-radius: 8px; font-family: 'Outfit', sans-serif; font-size: 0.9rem;
+  text-align: center; outline: none; background: var(--bg);
+  transition: border-color 0.2s;
+}
+.threshold-input:focus { border-color: var(--primary-light); }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -265,6 +335,7 @@ body::before {
       <span class="stat-pill ok" id="statOk">0 active</span>
       <span class="stat-pill warn" id="statBad">0 empty</span>
       <button class="btn-icon" id="refreshBtn" onclick="loadAccounts()" title="Refresh">&#x21BB;</button>
+      <button class="btn-icon" onclick="openGuardSettings()" title="Guard Settings">&#x2699;</button>
       <button class="btn-icon" onclick="doLogout()" title="Logout">&#x23FB;</button>
     </div>
   </div>
@@ -295,6 +366,60 @@ body::before {
       <button class="btn btn-primary" id="deployBtn" onclick="doDeploy()">Deploy</button>
     </div>
     <div class="modal-msg" id="modalMsg"></div>
+  </div>
+</div>
+
+<!-- GUARD SETTINGS MODAL -->
+<div class="modal-overlay" id="guardOverlay" onclick="event.target===this&&closeGuardSettings()">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">&#x1F6E1; Channel Guard</div>
+      <button class="modal-close" onclick="closeGuardSettings()">&#x2715;</button>
+    </div>
+
+    <div class="guard-section">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Auto-Disable</div>
+          <div class="toggle-desc">Hit threshold auto-disables channel in NewAPI</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="guardAutoDisable">
+          <span class="toggle-track"></span>
+          <span class="toggle-knob"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Error Threshold</div>
+          <div class="toggle-desc">How many matching errors before disabling</div>
+        </div>
+        <input type="number" class="threshold-input" id="guardThreshold" min="1" max="99" value="3">
+      </div>
+    </div>
+
+    <div class="guard-section">
+      <div class="guard-section-title">Disable on Status Codes</div>
+      <div class="tag-input-area" id="codesArea" onclick="this.querySelector('input').focus()">
+        <input type="text" class="tag-new-input" id="codesInput" placeholder="Type code (e.g. 503) + Enter">
+      </div>
+      <div class="guard-hint">Only these HTTP status codes trigger disable counting. Leave empty to ignore status codes.</div>
+    </div>
+
+    <div class="guard-section">
+      <div class="guard-section-title">Disable on Keywords</div>
+      <div class="tag-input-area" id="keywordsArea" onclick="this.querySelector('input').focus()">
+        <input type="text" class="tag-new-input" id="keywordsInput" placeholder="Type keyword + Enter">
+      </div>
+      <div class="guard-hint">Errors containing these keywords trigger disable counting. Case-insensitive.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeGuardSettings()">Cancel</button>
+      <button class="btn btn-primary" id="guardSaveBtn" onclick="saveGuardSettings()">Save</button>
+    </div>
+    <div class="modal-msg" id="guardMsg"></div>
   </div>
 </div>
 
@@ -434,7 +559,10 @@ function closeModal() {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') {
+    if (document.getElementById('guardOverlay').classList.contains('active')) closeGuardSettings();
+    else closeModal();
+  }
 });
 
 function doDeploy() {
@@ -502,6 +630,137 @@ function toast(text, type) {
 }
 
 loadNames();
+
+// ── Guard Settings ──────────────────────────────────────────
+let guardCodes = [];
+let guardKeywords = [];
+
+function renderTags(containerId, items, type) {
+  const area = document.getElementById(containerId);
+  area.querySelectorAll('.tag').forEach(t => t.remove());
+  const input = area.querySelector('input');
+  items.forEach((val, i) => {
+    const tag = document.createElement('span');
+    tag.className = 'tag ' + type;
+    tag.innerHTML = val + ' <span class="tag-remove" onclick="removeTag(\'' + containerId + '\',' + i + ')">&times;</span>';
+    area.insertBefore(tag, input);
+  });
+}
+
+function removeTag(containerId, index) {
+  if (containerId === 'codesArea') {
+    guardCodes.splice(index, 1);
+    renderTags('codesArea', guardCodes, 'code');
+  } else {
+    guardKeywords.splice(index, 1);
+    renderTags('keywordsArea', guardKeywords, 'keyword');
+  }
+}
+
+document.getElementById('codesInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = this.value.trim();
+    if (val && /^\d{3}$/.test(val) && !guardCodes.includes(val)) {
+      guardCodes.push(val);
+      renderTags('codesArea', guardCodes, 'code');
+    }
+    this.value = '';
+  } else if (e.key === 'Backspace' && !this.value && guardCodes.length) {
+    guardCodes.pop();
+    renderTags('codesArea', guardCodes, 'code');
+  }
+});
+
+document.getElementById('keywordsInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = this.value.trim();
+    if (val && !guardKeywords.includes(val)) {
+      guardKeywords.push(val);
+      renderTags('keywordsArea', guardKeywords, 'keyword');
+    }
+    this.value = '';
+  } else if (e.key === 'Backspace' && !this.value && guardKeywords.length) {
+    guardKeywords.pop();
+    renderTags('keywordsArea', guardKeywords, 'keyword');
+  }
+});
+
+function openGuardSettings() {
+  document.getElementById('guardMsg').textContent = '';
+  document.getElementById('guardSaveBtn').disabled = true;
+  document.getElementById('guardSaveBtn').textContent = 'Loading...';
+  document.getElementById('guardOverlay').classList.add('active');
+
+  fetch(API + '/guard-settings')
+    .then(r => r.json())
+    .then(data => {
+      const s = data.settings || {};
+      document.getElementById('guardAutoDisable').checked = (s.GUARD_AUTO_DISABLE || 'true').toLowerCase() === 'true';
+      document.getElementById('guardThreshold').value = s.GUARD_ERROR_THRESHOLD || '3';
+
+      guardCodes = (s.GUARD_DISABLE_CODES || '').split(',').map(c => c.trim()).filter(c => c && /^\d+$/.test(c));
+      guardKeywords = (s.GUARD_DISABLE_KEYWORDS || '').split(',').map(k => k.trim()).filter(Boolean);
+
+      renderTags('codesArea', guardCodes, 'code');
+      renderTags('keywordsArea', guardKeywords, 'keyword');
+
+      document.getElementById('guardSaveBtn').disabled = false;
+      document.getElementById('guardSaveBtn').textContent = 'Save';
+    })
+    .catch(e => {
+      document.getElementById('guardMsg').className = 'modal-msg err';
+      document.getElementById('guardMsg').textContent = 'Failed to load settings';
+      document.getElementById('guardSaveBtn').disabled = false;
+      document.getElementById('guardSaveBtn').textContent = 'Save';
+    });
+}
+
+function closeGuardSettings() {
+  document.getElementById('guardOverlay').classList.remove('active');
+}
+
+function saveGuardSettings() {
+  const btn = document.getElementById('guardSaveBtn');
+  const msg = document.getElementById('guardMsg');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  msg.textContent = '';
+
+  const settings = {
+    GUARD_AUTO_DISABLE: document.getElementById('guardAutoDisable').checked ? 'true' : 'false',
+    GUARD_ERROR_THRESHOLD: document.getElementById('guardThreshold').value || '3',
+    GUARD_DISABLE_CODES: guardCodes.join(','),
+    GUARD_DISABLE_KEYWORDS: guardKeywords.join(','),
+  };
+
+  fetch(API + '/guard-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: password, settings: settings })
+  })
+  .then(r => r.json().then(data => ({ ok: r.ok, data })))
+  .then(({ ok, data }) => {
+    if (ok) {
+      msg.className = 'modal-msg ok';
+      msg.textContent = 'Saved! Takes effect on next guard cycle (~1min).';
+      toast('Guard settings saved', 'ok');
+      setTimeout(() => closeGuardSettings(), 1500);
+    } else {
+      throw new Error(data.error || 'Save failed');
+    }
+  })
+  .catch(e => {
+    msg.className = 'modal-msg err';
+    msg.textContent = e.message;
+  })
+  .finally(() => {
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  });
+}
+
 </script>
 </body>
 </html>

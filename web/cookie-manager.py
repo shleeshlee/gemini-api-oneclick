@@ -38,6 +38,15 @@ API_KEY = os.environ.get("API_KEY", _dotenv.get("API_KEY", ""))
 AUTH_PASSWORD = os.environ.get("COOKIE_MANAGER_PASSWORD", _dotenv.get("COOKIE_MANAGER_PASSWORD", ""))
 LISTEN_PORT = int(os.environ.get("COOKIE_MANAGER_PORT", _dotenv.get("COOKIE_MANAGER_PORT", "9880")))
 INDEX_HTML = SCRIPT_DIR / "index.html"
+DOTENV_PATH = ROOT_DIR / ".env"
+
+# Guard settings keys we allow reading/writing from frontend
+_GUARD_KEYS = {
+    "GUARD_AUTO_DISABLE",
+    "GUARD_DISABLE_KEYWORDS",
+    "GUARD_DISABLE_CODES",
+    "GUARD_ERROR_THRESHOLD",
+}
 
 
 # ── HTTP Handler (mirrors VPS cookie-deployer) ────────────────────────
@@ -48,6 +57,8 @@ class DeployHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif self.path == "/api/accounts":
             self._handle_list_accounts()
+        elif self.path == "/api/guard-settings":
+            self._handle_get_guard_settings()
         elif self.path == "/api/health":
             self._respond(200, {"status": "ok"})
         else:
@@ -60,6 +71,8 @@ class DeployHandler(BaseHTTPRequestHandler):
             self._handle_deploy()
         elif self.path == "/api/status":
             self._handle_status()
+        elif self.path == "/api/guard-settings":
+            self._handle_set_guard_settings()
         else:
             self._respond(404, {"error": "not found"})
 
@@ -211,6 +224,60 @@ class DeployHandler(BaseHTTPRequestHandler):
                 psid_preview = ""
             accounts.append({"num": num, "has_cookie": has_cookie, "psid_preview": psid_preview})
         self._respond(200, {"accounts": accounts})
+
+    def _handle_get_guard_settings(self):
+        current = _read_env(DOTENV_PATH)
+        settings = {}
+        for key in _GUARD_KEYS:
+            settings[key] = current.get(key, "")
+        # Provide defaults for display if not set
+        if not settings.get("GUARD_AUTO_DISABLE"):
+            settings["GUARD_AUTO_DISABLE"] = "true"
+        if not settings.get("GUARD_DISABLE_KEYWORDS"):
+            settings["GUARD_DISABLE_KEYWORDS"] = "credentials not configured,failed to initialize"
+        if not settings.get("GUARD_ERROR_THRESHOLD"):
+            settings["GUARD_ERROR_THRESHOLD"] = "3"
+        self._respond(200, {"settings": settings})
+
+    def _handle_set_guard_settings(self):
+        try:
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        except Exception:
+            self._respond(400, {"error": "invalid json"})
+            return
+
+        if AUTH_PASSWORD:
+            password = body.get("password", "")
+            if password != AUTH_PASSWORD:
+                self._respond(401, {"error": "unauthorized"})
+                return
+
+        new_settings = body.get("settings", {})
+        if not new_settings:
+            self._respond(400, {"error": "no settings provided"})
+            return
+
+        # Read existing .env, update only guard keys
+        lines = []
+        seen_keys = set()
+        if DOTENV_PATH.exists():
+            for line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    key = stripped.split("=", 1)[0].strip()
+                    if key in _GUARD_KEYS and key in new_settings:
+                        lines.append(f"{key}={new_settings[key]}")
+                        seen_keys.add(key)
+                        continue
+                lines.append(line)
+
+        # Append any new guard keys not already in .env
+        for key in _GUARD_KEYS:
+            if key in new_settings and key not in seen_keys:
+                lines.append(f"{key}={new_settings[key]}")
+
+        DOTENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._respond(200, {"ok": True, "message": "Guard settings saved"})
 
     def _respond(self, code, data):
         self.send_response(code)
