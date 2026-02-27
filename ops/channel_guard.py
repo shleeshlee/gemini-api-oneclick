@@ -29,6 +29,19 @@ DB_PASS = env("NEWAPI_DB_PASS", "")
 CONTAINER_PREFIX = env("CONTAINER_PREFIX", "gemini_api_account_")
 MAX_SEEN_IDS = 5000
 
+# Auto-disable switch: set to false to log only (no actual disable)
+AUTO_DISABLE = env("GUARD_AUTO_DISABLE", "true").lower() in ("true", "1", "yes")
+
+# Keyword whitelist: only errors matching these keywords trigger disable.
+# Comma-separated, case-insensitive. Empty = disable nothing (log only).
+_raw_keywords = env("GUARD_DISABLE_KEYWORDS", "credentials not configured,failed to initialize")
+DISABLE_KEYWORDS = [k.strip().lower() for k in _raw_keywords.split(",") if k.strip()]
+
+# Status code whitelist: only these status codes trigger disable.
+# Comma-separated. Empty = don't match by status code (keyword-only mode).
+_raw_codes = env("GUARD_DISABLE_CODES", "")
+DISABLE_CODES = set(int(c.strip()) for c in _raw_codes.split(",") if c.strip().isdigit())
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -140,10 +153,19 @@ def container_started_at(container: str):
 
 
 def should_count(status_code: int, msg: str) -> bool:
-    m = msg.lower()
-    if status_code >= 500:
+    """Decide whether this error should count toward channel disable.
+
+    Matches if status code is in GUARD_DISABLE_CODES OR
+    error message contains any GUARD_DISABLE_KEYWORDS.
+    If both lists are empty, nothing is counted (log-only mode).
+    """
+    if DISABLE_CODES and status_code in DISABLE_CODES:
         return True
-    return "credentials not configured" in m or "failed to initialize gemini client" in m
+    if DISABLE_KEYWORDS:
+        m = msg.lower()
+        if any(kw in m for kw in DISABLE_KEYWORDS):
+            return True
+    return False
 
 
 def disable_channel(cid: int, count: int, reason: str):
@@ -230,12 +252,15 @@ def main() -> int:
 
         if cnt >= ERROR_THRESHOLD:
             if k not in state.setdefault("disabled_by_guard", {}) and int(channels[cid].get("status", 0)) == 1:
-                disable_channel(cid, cnt, f"status={status_code} {msg}")
-                state["disabled_by_guard"][k] = {
-                    "disabled_at": now_iso(),
-                    "container": channels[cid].get("container"),
-                    "reason": f"status={status_code} {msg[:200]}",
-                }
+                if AUTO_DISABLE:
+                    disable_channel(cid, cnt, f"status={status_code} {msg}")
+                    state["disabled_by_guard"][k] = {
+                        "disabled_at": now_iso(),
+                        "container": channels[cid].get("container"),
+                        "reason": f"status={status_code} {msg[:200]}",
+                    }
+                else:
+                    append_log(f"would disable channel #{cid} (count={cnt}) but GUARD_AUTO_DISABLE=false: status={status_code} {msg[:120]}")
 
     if len(seen_ids) > MAX_SEEN_IDS:
         seen_ids = seen_ids[-MAX_SEEN_IDS:]

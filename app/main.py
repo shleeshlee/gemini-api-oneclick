@@ -426,6 +426,9 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                 if attempt < max_retries - 1:
                     continue
 
+            if any(keyword in error_msg for keyword in ['429', 'rate limit', 'resource exhausted', 'quota']):
+                raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
+
             raise HTTPException(status_code=500, detail=f"Error generating completion: {str(e)}")
 
     raise HTTPException(status_code=500, detail="Max retries exceeded")
