@@ -41,7 +41,7 @@ bash scripts/install.sh
 
 - 🚀 **交互式安装** — AccBox 风格向导，问几个问题就装好
 - 🍪 **Cookie 管理面板** — Web UI 管理每个账号的 Cookie，填完一键重启单个容器
-- 🛡️ **渠道熔断守卫** — 容器报错超 3 次自动禁用渠道，重启后自动恢复（NewAPI 面板可见）
+- 🛡️ **渠道熔断守卫** — 白名单模式：指定错误码/关键词才触发禁用，避免 429 等临时错误误杀渠道。Cookie 管理面板内置设置界面
 - ➕ **弹性扩容** — 随时通过 `manage.sh` 新增容器
 - 🔄 **一键更新** — 已安装的环境重新跑 `install.sh` 即可更新
 
@@ -132,8 +132,18 @@ docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'
 
 工作机制：
 - 每分钟扫描 NewAPI 容器日志
-- 同一渠道累计 3+ 次错误后自动禁用（面板显示禁用）
+- **白名单模式** — 只有匹配指定关键词或状态码的错误才计数，429/临时 500 等不会误触发
+- 累计达到阈值后自动禁用渠道（面板显示禁用）
 - 对应容器重启后自动恢复（面板显示恢复）
+
+配置项（`.env` 或 Cookie 管理面板齿轮按钮）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `GUARD_AUTO_DISABLE` | `true` | 总开关，`false` = 只记日志不禁用 |
+| `GUARD_ERROR_THRESHOLD` | `3` | 累计多少次匹配错误后禁用 |
+| `GUARD_DISABLE_CODES` | （空） | 触发禁用的 HTTP 状态码白名单，逗号分隔（如 `503`） |
+| `GUARD_DISABLE_KEYWORDS` | `credentials not configured,failed to initialize` | 触发禁用的关键词白名单，逗号分隔 |
 
 ## 安全提醒
 
