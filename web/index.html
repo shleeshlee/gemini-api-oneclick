@@ -199,6 +199,8 @@ body::before {
 .card-btn:hover { background: var(--bg-warm); border-color: var(--primary-light); }
 .card-btn.enable { border-color: var(--success); color: #2D7A52; }
 .card-btn.disable { border-color: var(--danger); color: #B94A4A; }
+.card-btn.test { border-color: #2D9CDB; color: #2D9CDB; }
+.card-btn.testing { opacity: 0.5; pointer-events: none; }
 
 /* --- MODAL --- */
 .modal-overlay {
@@ -461,6 +463,7 @@ body::before {
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
       <button class="btn-topbar" onclick="openGroupManager()"><span class="icon">&#x1F3F7;</span> 分组管理</button>
       <button class="btn-topbar" id="refreshBtn" onclick="doRefresh()"><span class="icon">&#x21BB;</span> 刷新</button>
+      <button class="btn-topbar" onclick="refreshModels()"><span class="icon">&#x1F504;</span> 刷新模型</button>
       <button class="btn-topbar" onclick="openGuardSettings()"><span class="icon">&#x2699;</span> 设置</button>
       <button class="btn-topbar" onclick="doLogout()"><span class="icon">&#x2192;</span> 退出</button>
     </div>
@@ -509,6 +512,16 @@ body::before {
       <button class="btn btn-primary" id="deployBtn" onclick="doDeploy()">部署</button>
     </div>
     <div class="modal-msg" id="modalMsg"></div>
+    <!-- Container Logs -->
+    <div style="margin-top:1rem">
+      <div class="log-toggle" onclick="toggleContainerLog()">
+        <div class="log-header" style="font-size:0.85rem">容器日志</div>
+        <span class="log-arrow" id="cLogArrow">&#x25BC;</span>
+      </div>
+      <div class="log-body" id="cLogBody" style="max-height:0">
+        <div class="log-list" id="cLogList" style="font-size:0.72rem"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -790,10 +803,11 @@ function renderGrid() {
 
     let actionBtn = '';
     if (gw) {
+      const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
       if (gw.enabled) {
-        actionBtn = `<button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
+        actionBtn = testBtn + `<button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
-        actionBtn = `<button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
+        actionBtn = testBtn + `<button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
       }
     }
 
@@ -849,6 +863,67 @@ async function toggleContainer(num, enable) {
   }
 }
 
+// ── Container Test ─────────────────────────────────────────
+async function testContainer(num) {
+  const btn = document.getElementById('testBtn' + num);
+  if (btn) { btn.classList.add('testing'); btn.textContent = '测试中...'; }
+  try {
+    const resp = await fetch(`/gateway/test/${num}`, { method: 'POST', headers: authHeaders() });
+    const data = await resp.json();
+    if (data.ok) {
+      toast(`#${num} 正常 ✓ "${data.reply}"`, 'ok');
+    } else {
+      toast(`#${num} 异常: ${data.error}`, 'err');
+    }
+  } catch(e) {
+    toast(`#${num} 测试失败: ${e.message}`, 'err');
+  } finally {
+    if (btn) { btn.classList.remove('testing'); btn.textContent = '测试'; }
+  }
+}
+
+// ── Container Logs (in deploy modal) ──────────────────────
+function toggleContainerLog() {
+  const body = document.getElementById('cLogBody');
+  const arrow = document.getElementById('cLogArrow');
+  const isOpen = body.classList.toggle('open');
+  arrow.classList.toggle('open');
+  if (isOpen && currentNum !== null) loadContainerLog(currentNum);
+}
+
+async function loadContainerLog(num) {
+  const list = document.getElementById('cLogList');
+  list.innerHTML = '<div class="log-entry info">加载中...</div>';
+  try {
+    const resp = await fetch(`/gateway/container-log/${num}?tail=40`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (data.ok && data.lines.length > 0) {
+      list.innerHTML = data.lines.map(l => `<div class="log-entry info">${esc(l)}</div>`).join('');
+      list.parentElement.scrollTop = list.parentElement.scrollHeight;
+    } else {
+      list.innerHTML = '<div class="log-entry info">暂无日志</div>';
+    }
+  } catch(e) {
+    list.innerHTML = `<div class="log-entry error">加载失败: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Model Refresh ─────────────────────────────────────────
+async function refreshModels() {
+  try {
+    const resp = await fetch('/gateway/refresh-models', { method: 'POST', headers: authHeaders() });
+    const data = await resp.json();
+    if (resp.ok) {
+      const names = (data.models || []).map(m => m.id).join(', ');
+      toast(`模型已刷新: ${names}`, 'ok');
+    } else {
+      toast(data.detail || '刷新失败', 'err');
+    }
+  } catch(e) {
+    toast('刷新失败: ' + e.message, 'err');
+  }
+}
+
 // ── Logs ───────────────────────────────────────────────────
 function renderLogs(logEntries) {
   const html = logEntries.map(l => {
@@ -880,6 +955,10 @@ function openModal(num) {
   document.getElementById('modalMsg').textContent = '';
   document.getElementById('deployBtn').disabled = false;
   document.getElementById('deployBtn').textContent = '部署';
+  // Reset container log
+  document.getElementById('cLogBody').classList.remove('open');
+  document.getElementById('cLogArrow').classList.remove('open');
+  document.getElementById('cLogList').innerHTML = '';
   document.getElementById('modalOverlay').classList.add('active');
   setTimeout(() => document.getElementById('mPsid').focus(), 200);
 }
