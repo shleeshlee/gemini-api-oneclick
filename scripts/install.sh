@@ -71,11 +71,11 @@ BANNER
 echo -e "${NC}"
 
 echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
-echo -e "${PINK}║${NC}  ${BOLD}Gemini API OneClick${NC} — Multi-Account Gateway   ${PINK}║${NC}"
-echo -e "${PINK}║${NC}  Author: WanWan                                ${PINK}║${NC}"
+echo -e "${PINK}║${NC}  ${BOLD}Gemini API OneClick${NC} — 多账号智能网关            ${PINK}║${NC}"
+echo -e "${PINK}║${NC}  作者: WanWan                                  ${PINK}║${NC}"
 echo -e "${PINK}║${NC}  GitHub: shleeshlee/gemini-api-oneclick         ${PINK}║${NC}"
-echo -e "${PINK}║${NC}  ${GREEN}Free & Open Source${NC} | MIT License              ${PINK}║${NC}"
-echo -e "${PINK}║${NC}  ${RED}Paid = Scammed!${NC}                               ${PINK}║${NC}"
+echo -e "${PINK}║${NC}  ${GREEN}免费开源${NC} | MIT 协议                            ${PINK}║${NC}"
+echo -e "${PINK}║${NC}  ${RED}收费 = 被骗!${NC}                                  ${PINK}║${NC}"
 echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -130,49 +130,55 @@ find_free_port_range() {
 # ══════════════════════════════════════════════════════════════
 # Dependency check
 # ══════════════════════════════════════════════════════════════
-info "Checking dependencies ..."
+info "检查依赖 ..."
 need_cmd docker
 need_cmd python3
 
 if ! docker compose version >/dev/null 2>&1; then
-  error "docker compose not found (need Docker Compose v2)"
+  error "未找到 docker compose（需要 Docker Compose v2）"
 fi
-info "All dependencies OK"
+info "依赖检查通过"
 echo ""
 
 # ══════════════════════════════════════════════════════════════
 # Detect existing installation (update mode)
 # ══════════════════════════════════════════════════════════════
 if [[ -f .env ]]; then
-  echo -e "${YELLOW}Existing installation detected!${NC}"
+  echo -e "${YELLOW}检测到已有安装！${NC}"
   echo ""
-  echo "  [1] Update (git pull + rebuild, keep envs/)"
-  echo "  [2] Fresh install (reconfigure everything)"
-  echo "  [q] Cancel"
+  echo "  [1] 更新（拉取最新代码 + 重建，保留账号配置）"
+  echo "  [2] 全新安装（重新配置所有选项）"
+  echo "  [q] 取消"
   echo ""
   read -rp "Choose [1/2/q]: " update_choice
 
   case "$update_choice" in
     1)
-      info "Updating ..."
-      git pull --ff-only 2>/dev/null || warn "git pull failed (not a git repo or conflicts)"
+      info "正在更新 ..."
+      git pull --ff-only 2>/dev/null || warn "git pull 失败（非 git 仓库或有冲突）"
 
       # shellcheck disable=SC1091
       source .env
 
-      info "Regenerating compose ..."
+      info "重新生成 compose ..."
       python3 scripts/generate_compose.py
 
-      info "Rebuilding and restarting ..."
+      info "重建并重启容器 ..."
       docker compose -f docker-compose.accounts.yml up -d --build
 
+      # 重启 Gateway
+      if command -v systemctl >/dev/null 2>&1 && systemctl is-active gemini-gateway >/dev/null 2>&1; then
+        sudo systemctl restart gemini-gateway
+        info "Gateway 已重启"
+      fi
+
       echo ""
-      info "Update complete!"
+      info "更新完成！"
       ./scripts/healthcheck.sh || true
       exit 0
       ;;
     2)
-      info "Starting fresh install ..."
+      info "开始全新安装 ..."
       ;;
     q|Q)
       info "Cancelled"
@@ -187,16 +193,16 @@ fi
 # ══════════════════════════════════════════════════════════════
 # Interactive wizard (fresh install)
 # ══════════════════════════════════════════════════════════════
-echo -e "${BOLD}Interactive Setup${NC}"
+echo -e "${BOLD}交互式安装向导${NC}"
 echo "════════════════════════════════════════"
 echo ""
 
 # [1/5] Container count
-step "1/5" "How many containers (accounts)?"
-read -rp "  Count [1-50, default 5]: " ACCOUNT_COUNT
+step "1/5" "需要多少个容器（账号）？"
+read -rp "  数量 [1-50, 默认 5]: " ACCOUNT_COUNT
 ACCOUNT_COUNT="${ACCOUNT_COUNT:-5}"
 if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT > 50 )); then
-  error "Invalid count (must be 1-50)"
+  error "数量无效（需要 1-50）"
 fi
 echo ""
 
@@ -205,24 +211,24 @@ DEFAULT_START=8001
 START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$DEFAULT_START") || error "Cannot find $ACCOUNT_COUNT consecutive free ports starting from $DEFAULT_START"
 
 if (( START_PORT != DEFAULT_START )); then
-  warn "Port $DEFAULT_START already in use, auto-shifted to ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
+  warn "端口 $DEFAULT_START 已被占用，自动偏移到 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
 else
-  info "Ports ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) are available"
+  info "端口 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) 可用"
 fi
 echo ""
 
 # [2/5] API key
-step "2/5" "API key for authentication (press Enter to auto-generate)"
-read -rp "  API_KEY [auto]: " USER_API_KEY
+step "2/5" "API 密钥（回车自动生成）"
+read -rp "  API_KEY [自动]: " USER_API_KEY
 if [[ -z "$USER_API_KEY" ]]; then
   USER_API_KEY=$(random_key)
-  info "Generated API key: $USER_API_KEY"
+  info "已生成 API 密钥: $USER_API_KEY"
 fi
 echo ""
 
 # [3/5] Proxy
-step "3/5" "Outbound proxy? (for accessing Gemini)"
-read -rp "  Use proxy? [y/N]: " USE_PROXY
+step "3/5" "出站代理（用于访问 Gemini）"
+read -rp "  使用代理？[y/N]: " USE_PROXY
 HTTP_PROXY=""
 HTTPS_PROXY=""
 if [[ "$USE_PROXY" =~ ^[Yy]$ ]]; then
@@ -232,32 +238,32 @@ fi
 echo ""
 
 # [4/5] Cookie manager
-step "4/5" "Install Cookie Manager web panel?"
-read -rp "  Enable? [Y/n]: " USE_COOKIE_MGR
+step "4/5" "安装 Cookie 管理面板？"
+read -rp "  启用？[Y/n]: " USE_COOKIE_MGR
 USE_COOKIE_MGR="${USE_COOKIE_MGR:-Y}"
 COOKIE_MANAGER_PORT="9880"
 COOKIE_MANAGER_PASSWORD=""
 if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  read -rp "  Panel port [9880]: " COOKIE_MANAGER_PORT
+  read -rp "  面板端口 [9880]: " COOKIE_MANAGER_PORT
   COOKIE_MANAGER_PORT="${COOKIE_MANAGER_PORT:-9880}"
-  read -rp "  Panel password [auto]: " COOKIE_MANAGER_PASSWORD
+  read -rp "  面板密码 [自动]: " COOKIE_MANAGER_PASSWORD
   if [[ -z "$COOKIE_MANAGER_PASSWORD" ]]; then
     COOKIE_MANAGER_PASSWORD=$(random_key | head -c 16)
-    info "Generated panel password: $COOKIE_MANAGER_PASSWORD"
+    info "已生成面板密码: $COOKIE_MANAGER_PASSWORD"
   fi
 fi
 echo ""
 
 # [5/5] Channel guard
-step "5/5" "Enable channel_guard? (requires NewAPI integration)"
-read -rp "  Enable? [y/N]: " USE_GUARD
+step "5/5" "启用渠道守卫？（需要 NewAPI 集成）"
+read -rp "  启用？[y/N]: " USE_GUARD
 ENABLE_CHANNEL_GUARD="false"
 NEWAPI_DB_PASS="change_me"
 if [[ "$USE_GUARD" =~ ^[Yy]$ ]]; then
   ENABLE_CHANNEL_GUARD="true"
-  read -rp "  NewAPI MySQL password: " NEWAPI_DB_PASS
+  read -rp "  NewAPI MySQL 密码: " NEWAPI_DB_PASS
   if [[ -z "$NEWAPI_DB_PASS" || "$NEWAPI_DB_PASS" == "change_me" ]]; then
-    warn "Invalid DB password, channel_guard will be skipped"
+    warn "密码无效，渠道守卫将跳过"
     ENABLE_CHANNEL_GUARD="false"
   fi
 fi
@@ -266,39 +272,42 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 # Execute installation
 # ══════════════════════════════════════════════════════════════
-TOTAL_STEPS=5
+TOTAL_STEPS=6  # base: env + .env + compose + build + gateway + health
 if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  TOTAL_STEPS=6
+  TOTAL_STEPS=$((TOTAL_STEPS + 1))
 fi
 if [[ "$ENABLE_CHANNEL_GUARD" == "true" ]]; then
   TOTAL_STEPS=$((TOTAL_STEPS + 1))
 fi
 
+# Gateway port = START_PORT + ACCOUNT_COUNT (first free port after containers)
+GATEWAY_PORT=$((START_PORT + ACCOUNT_COUNT))
+
 CURRENT_STEP=0
 
 # Step: Create env files
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "Creating account env files ..."
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "创建账号配置文件 ..."
 mkdir -p envs cookie-cache state
 
 for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
   env_file="envs/account${i}.env"
   if [[ -f "$env_file" ]]; then
-    echo "  $env_file already exists, keeping"
+    echo "  $env_file 已存在，保留"
   else
     cat > "$env_file" <<EOF
 API_KEY=
 SECURE_1PSID=
 SECURE_1PSIDTS=
 EOF
-    echo "  Created $env_file"
+    echo "  已创建 $env_file"
   fi
   mkdir -p "cookie-cache/account${i}"
 done
 
 # Step: Write .env
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "Writing .env ..."
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "写入 .env 配置 ..."
 
 cat > .env <<EOF
 # Gemini API OneClick - Configuration
@@ -316,6 +325,9 @@ HTTP_PROXY=${HTTP_PROXY}
 HTTPS_PROXY=${HTTPS_PROXY}
 NO_PROXY=localhost,127.0.0.1
 
+# Gateway (智能轮询总入口)
+GATEWAY_PORT=${GATEWAY_PORT}
+
 # Cookie Manager
 COOKIE_MANAGER_PORT=${COOKIE_MANAGER_PORT}
 COOKIE_MANAGER_PASSWORD=${COOKIE_MANAGER_PASSWORD}
@@ -331,24 +343,63 @@ NEWAPI_DB_USER=root
 NEWAPI_DB_PASS=${NEWAPI_DB_PASS}
 EOF
 
-info ".env written"
+info ".env 已写入"
 
 # Step: Generate compose
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "Generating docker-compose ..."
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "生成 docker-compose ..."
 python3 scripts/generate_compose.py
 
 # Step: Build and start
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "Building and starting containers ..."
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "构建并启动容器 ..."
 docker compose -f docker-compose.accounts.yml up -d --build
+
+# Step: Gateway (智能轮询网关)
+CURRENT_STEP=$((CURRENT_STEP + 1))
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署智能轮询网关 (端口 ${GATEWAY_PORT}) ..."
+
+# 安装 gateway 依赖
+pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败，请手动安装: pip3 install fastapi uvicorn httpx"
+
+if command -v systemctl >/dev/null 2>&1; then
+  PYTHON_BIN=$(command -v python3)
+  SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
+
+  sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=Gemini API Gateway — 智能轮询网关
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${PYTHON_BIN} ${ROOT_DIR}/gateway.py
+Restart=on-failure
+RestartSec=5
+Environment=GATEWAY_PORT=${GATEWAY_PORT}
+Environment=BASE_PORT=${START_PORT}
+EnvironmentFile=${ROOT_DIR}/.env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable gemini-gateway
+  sudo systemctl start gemini-gateway
+  info "Gateway 已安装为系统服务"
+else
+  warn "未找到 systemctl，后台启动 Gateway ..."
+  GATEWAY_PORT=${GATEWAY_PORT} BASE_PORT=${START_PORT} nohup python3 gateway.py > /tmp/gemini-gateway.log 2>&1 &
+  info "Gateway 已启动 (PID: $!)"
+fi
 
 # Step: Cookie manager (optional)
 if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
   CURRENT_STEP=$((CURRENT_STEP + 1))
-  step "${CURRENT_STEP}/${TOTAL_STEPS}" "Setting up Cookie Manager ..."
+  step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署 Cookie 管理面板 ..."
 
-  # Install as systemd service if systemctl is available
   if command -v systemctl >/dev/null 2>&1; then
     PYTHON_BIN=$(command -v python3)
     SERVICE_FILE="/etc/systemd/system/cookie-manager.service"
@@ -373,24 +424,24 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable cookie-manager
     sudo systemctl start cookie-manager
-    info "Cookie Manager installed as systemd service"
+    info "Cookie 管理面板已安装为系统服务"
   else
-    warn "systemctl not found, starting Cookie Manager in background ..."
+    warn "未找到 systemctl，后台启动 Cookie 管理面板 ..."
     nohup python3 web/cookie-manager.py > /tmp/cookie-manager.log 2>&1 &
-    info "Cookie Manager started (PID: $!)"
+    info "Cookie 管理面板已启动 (PID: $!)"
   fi
 fi
 
 # Step: Channel guard cron (optional)
 if [[ "$ENABLE_CHANNEL_GUARD" == "true" ]]; then
   CURRENT_STEP=$((CURRENT_STEP + 1))
-  step "${CURRENT_STEP}/${TOTAL_STEPS}" "Installing channel_guard cron ..."
+  step "${CURRENT_STEP}/${TOTAL_STEPS}" "安装渠道守卫定时任务 ..."
   ./ops/install_cron.sh
 fi
 
 # Step: Health check
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "Running health check ..."
+step "${CURRENT_STEP}/${TOTAL_STEPS}" "健康检查 ..."
 sleep 3
 ./scripts/healthcheck.sh || true
 
@@ -399,39 +450,46 @@ sleep 3
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo -e "${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Installation Complete!${NC}"
+echo -e "${GREEN}  安装完成！${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
-echo -e "  ${BOLD}API Endpoint:${NC}  http://YOUR_IP:${START_PORT}/v1/chat/completions"
-echo -e "  ${BOLD}API Key:${NC}       ${USER_API_KEY}"
-echo -e "  ${BOLD}Containers:${NC}    ${ACCOUNT_COUNT} (ports ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)))"
+echo -e "  ${BOLD}${CYAN}▸ 统一 API 入口（推荐使用）${NC}"
+echo -e "  ${BOLD}地址:${NC}       http://YOUR_IP:${GATEWAY_PORT}"
+echo -e "  ${BOLD}聊天:${NC}       http://YOUR_IP:${GATEWAY_PORT}/v1/chat/completions"
+echo -e "  ${BOLD}生图:${NC}       http://YOUR_IP:${GATEWAY_PORT}/v1/images/generations"
+echo -e "  ${BOLD}模型列表:${NC}   http://YOUR_IP:${GATEWAY_PORT}/v1/models"
+echo -e "  ${BOLD}状态面板:${NC}   http://YOUR_IP:${GATEWAY_PORT}"
+echo -e "  ${BOLD}API 密钥:${NC}   ${USER_API_KEY}"
+echo ""
+echo -e "  智能轮询 ${ACCOUNT_COUNT} 个容器，自动跳过故障节点"
+echo -e "  支持 OpenAI 兼容格式，可直接接入酒馆/Kelivo/NewAPI 等"
 
 if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
   echo ""
-  echo -e "  ${BOLD}Cookie Panel:${NC}  http://YOUR_IP:${COOKIE_MANAGER_PORT}"
-  echo -e "  ${BOLD}Panel Password:${NC} ${COOKIE_MANAGER_PASSWORD}"
+  echo -e "  ${BOLD}${CYAN}▸ Cookie 管理面板${NC}"
+  echo -e "  ${BOLD}地址:${NC}       http://YOUR_IP:${COOKIE_MANAGER_PORT}"
+  echo -e "  ${BOLD}密码:${NC}       ${COOKIE_MANAGER_PASSWORD}"
 fi
 
 # Detect Docker bridge gateway for NewAPI channel config
 DOCKER_GW=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo "172.17.0.1")
 
 echo ""
-echo -e "  ${BOLD}${CYAN}NewAPI 渠道配置${NC}"
-echo -e "  如果你的 NewAPI 也跑在 Docker 里，添加渠道时填以下地址："
-echo ""
+echo -e "  ${BOLD}${CYAN}▸ NewAPI 渠道配置（可选）${NC}"
+echo -e "  如果你的 NewAPI 也跑在 Docker 里，可以把 Gateway 整体接入："
+echo -e "    ${BOLD}http://${DOCKER_GW}:${GATEWAY_PORT}${NC}"
+echo -e "  或者单独接入每个容器："
 for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
   port=$((START_PORT + i - 1))
-  echo -e "    Account #${i}: ${BOLD}http://${DOCKER_GW}:${port}/v1/chat/completions${NC}"
+  echo -e "    容器 #${i}: ${BOLD}http://${DOCKER_GW}:${port}${NC}"
 done
-echo ""
-echo -e "  (网关地址 ${DOCKER_GW} 已自动检测，如果 NewAPI 直接跑在宿主机则用 127.0.0.1)"
 
 echo ""
-echo -e "  ${YELLOW}Next step:${NC} Open Cookie Manager and fill in your Gemini cookies!"
+echo -e "  ${YELLOW}下一步:${NC} 打开 Cookie 管理面板，填入你的 Gemini Cookie！"
 echo ""
 echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
 echo -e "${PINK}║${NC}  ${BOLD}Gemini API OneClick${NC} by WanWan                 ${PINK}║${NC}"
-echo -e "${PINK}║${NC}  If this helped you, please give us a Star!    ${PINK}║${NC}"
+echo -e "${PINK}║${NC}  觉得好用的话，给个 Star 吧！                 ${PINK}║${NC}"
 echo -e "${PINK}║${NC}  github.com/shleeshlee/gemini-api-oneclick     ${PINK}║${NC}"
 echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
 echo ""
