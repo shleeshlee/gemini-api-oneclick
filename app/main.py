@@ -6,6 +6,7 @@
 # 4. Image support - base64 decode + upload
 # 5. Thinking output - <think> tags from response.thoughts
 # 6. Markdown correction - strip Google search link wrappers
+# 7. Image generation - download generated images, return as base64 in content
 
 import asyncio
 import json
@@ -26,8 +27,10 @@ import time
 import uuid
 import logging
 
+from httpx import AsyncClient, Cookies
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
+from gemini_webapi.types.image import GeneratedImage, WebImage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -315,6 +318,38 @@ def prepare_conversation(messages: List[Message]) -> tuple:
     return conversation, temp_files
 
 
+async def download_image_as_base64(image, cookies=None) -> str | None:
+    """Download an image and return as base64 data URL.
+
+    For GeneratedImage: appends =s2048 for full size, uses its cookies.
+    For WebImage: downloads directly.
+    """
+    try:
+        url = image.url
+        req_cookies = cookies
+
+        if isinstance(image, GeneratedImage):
+            url = url + "=s2048"  # full size instead of 512x512 preview
+            req_cookies = image.cookies
+
+        async with AsyncClient(
+            http2=True, follow_redirects=True, cookies=req_cookies, timeout=30.0
+        ) as http_client:
+            resp = await http_client.get(url)
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "image/png")
+                if ";" in content_type:
+                    content_type = content_type.split(";")[0].strip()
+                b64 = base64.b64encode(resp.content).decode("utf-8")
+                return f"data:{content_type};base64,{b64}"
+            else:
+                logger.warning(f"Failed to download image: {resp.status_code} {url[:80]}")
+                return None
+    except Exception as e:
+        logger.error(f"Error downloading image: {e}")
+        return None
+
+
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, api_key: str = Depends(verify_api_key)):
     """Handle chat completion requests with retry and streaming support."""
@@ -352,6 +387,20 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                 reply_text += str(response)
             reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
             reply_text = correct_markdown(reply_text)
+
+            # Handle generated/web images in response
+            images = getattr(response, "images", [])
+            if images:
+                logger.info(f"Response contains {len(images)} image(s), downloading...")
+                for idx, img in enumerate(images):
+                    data_url = await download_image_as_base64(img)
+                    if data_url:
+                        alt = getattr(img, "alt", "") or f"image_{idx}"
+                        reply_text += f"\n\n![{alt}]({data_url})"
+                        logger.info(f"Image {idx} embedded as base64 ({len(data_url)} chars)")
+                    else:
+                        logger.warning(f"Image {idx} download failed, falling back to URL")
+                        reply_text += f"\n\n![image_{idx}]({img.url})"
 
             logger.info(f"Response: {reply_text[:200]}...")
 
