@@ -92,6 +92,7 @@ class Container:
             "num": self.num,
             "port": self.port,
             "name": account_names.get(self.num, ""),
+            "group": container_groups.get(self.num, ""),
             "healthy": self.healthy,
             "enabled": self.enabled,
             "available": self.available,
@@ -110,6 +111,13 @@ account_names: dict[int, str] = {}  # num -> display name, persisted to state/ac
 
 ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
 GATEWAY_STATE_FILE = ROOT_DIR / "state" / "gateway-state.json"
+GROUPS_FILE = ROOT_DIR / "state" / "groups.json"
+
+container_groups: dict[int, str] = {}  # num -> group name (e.g. "pro", "was")
+group_round_robin: dict[str, int] = {}  # group -> round robin index
+_models_cache: list[dict] = []
+_models_cache_time: float = 0
+MODELS_CACHE_TTL = 300  # seconds
 
 
 def load_account_names():
@@ -125,6 +133,28 @@ def load_account_names():
 def save_account_names():
     ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     ACCOUNTS_FILE.write_text(json.dumps(account_names, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_groups():
+    global container_groups
+    try:
+        if GROUPS_FILE.exists():
+            data = json.loads(GROUPS_FILE.read_text(encoding="utf-8"))
+            container_groups = {int(k): v for k, v in data.items() if v}
+    except Exception:
+        container_groups = {}
+
+
+def save_groups():
+    GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GROUPS_FILE.write_text(
+        json.dumps({str(k): v for k, v in container_groups.items()}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def get_all_group_names() -> set[str]:
+    return {v for v in container_groups.values() if v}
 
 
 def load_gateway_state():
@@ -175,21 +205,22 @@ def discover_containers():
     add_log("info", None, f"Discovered {len(containers)} containers")
 
 
-def get_next_available() -> Container | None:
-    """Round-robin to next available container."""
-    global round_robin_index
-    nums = sorted(containers.keys())
+def get_next_available(group: str | None = None) -> Container | None:
+    """Round-robin to next available container, optionally filtered by group."""
+    if group:
+        nums = sorted(n for n, g in container_groups.items()
+                       if g == group and n in containers and containers[n].available)
+    else:
+        nums = sorted(n for n in containers if containers[n].available)
+
     if not nums:
         return None
 
-    tried = 0
-    while tried < len(nums):
-        round_robin_index = (round_robin_index + 1) % len(nums)
-        c = containers[nums[round_robin_index]]
-        if c.available:
-            return c
-        tried += 1
-    return None
+    key = group or "__default__"
+    idx = group_round_robin.get(key, -1)
+    idx = (idx + 1) % len(nums)
+    group_round_robin[key] = idx
+    return containers[nums[idx]]
 
 
 # ── Health Check ────────────────────────────────────────────────────────
@@ -240,6 +271,7 @@ app = FastAPI(title="Gemini API Gateway")
 @app.on_event("startup")
 async def startup():
     load_account_names()
+    load_groups()
     discover_containers()
     asyncio.create_task(health_loop())
 
@@ -255,28 +287,108 @@ def is_auth_error(text: str) -> bool:
     return any(kw in lower for kw in AUTH_ERRORS)
 
 
+def parse_group_from_model(model: str) -> tuple[str | None, str]:
+    """Check if model starts with a known group prefix.
+
+    Returns (group_name, real_model). If no group matches, returns (None, original_model).
+    E.g. "pro-gemini-2.0-flash" → ("pro", "gemini-2.0-flash")
+    """
+    groups = get_all_group_names()
+    for g in sorted(groups, key=len, reverse=True):  # longest prefix first
+        prefix = g + "-"
+        if model.startswith(prefix) and len(model) > len(prefix):
+            return g, model[len(prefix):]
+    return None, model
+
+
+async def fetch_base_models() -> list[dict]:
+    """Fetch model list from a healthy container, with caching."""
+    global _models_cache, _models_cache_time
+    now = time.time()
+    if _models_cache and (now - _models_cache_time) < MODELS_CACHE_TTL:
+        return _models_cache
+
+    # Try to get models from any available container
+    for c in containers.values():
+        if not c.available:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{c.url}/v1/models")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    _models_cache = data.get("data", [])
+                    _models_cache_time = now
+                    return _models_cache
+        except Exception:
+            continue
+    return _models_cache  # return stale cache if all fail
+
+
+@app.get("/v1/models")
+async def list_models():
+    """Return model list with group prefixes."""
+    base_models = await fetch_base_models()
+    groups = get_all_group_names()
+
+    if not groups:
+        # No groups configured — return base models as-is
+        return {"object": "list", "data": base_models}
+
+    result = []
+    # Prefixed models for each group
+    for g in sorted(groups):
+        for m in base_models:
+            result.append({
+                "id": f"{g}-{m['id']}",
+                "object": "model",
+                "created": m.get("created", 0),
+                "owned_by": m.get("owned_by", "google"),
+            })
+    # Also include unprefixed models (for ungrouped containers / backward compat)
+    result.extend(base_models)
+    return {"object": "list", "data": result}
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
 async def proxy(request: Request, path: str):
-    """Proxy requests to healthy containers with auto-failover."""
+    """Proxy requests to healthy containers with auto-failover and group routing."""
     body = await request.body()
     headers = dict(request.headers)
     headers.pop("host", None)
-    is_stream = False
 
+    # Parse model and detect group prefix
+    target_group = None
+    body_json = None
     if body:
         try:
             body_json = json.loads(body)
-            is_stream = body_json.get("stream", False)
+            model = body_json.get("model", "")
+            if model:
+                target_group, real_model = parse_group_from_model(model)
+                if target_group:
+                    # Rewrite model to real name before forwarding
+                    body_json["model"] = real_model
+                    body = json.dumps(body_json).encode("utf-8")
+                    add_log("info", None, f"Route [{target_group}] {model} → {real_model}")
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
 
-    retries = min(MAX_RETRIES, sum(1 for c in containers.values() if c.available))
+    # Count available containers in target pool
+    if target_group:
+        pool_available = sum(1 for n, g in container_groups.items()
+                             if g == target_group and n in containers and containers[n].available)
+    else:
+        pool_available = sum(1 for c in containers.values() if c.available)
+
+    retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
-        raise HTTPException(status_code=503, detail="No healthy containers available")
+        detail = f"No healthy containers in group [{target_group}]" if target_group else "No healthy containers available"
+        raise HTTPException(status_code=503, detail=detail)
 
     last_error = ""
     for attempt in range(retries):
-        c = get_next_available()
+        c = get_next_available(target_group)
         if not c:
             break
 
@@ -284,8 +396,6 @@ async def proxy(request: Request, path: str):
         c.total_requests += 1
 
         try:
-            # Always use streaming proxy to avoid client timeout
-            # (Gemini can take 5+ seconds before first byte)
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
@@ -346,6 +456,7 @@ async def gateway_status():
         "containers": [containers[n].to_dict() for n in sorted(containers.keys())],
         "available": sum(1 for c in containers.values() if c.available),
         "total": len(containers),
+        "groups": sorted(get_all_group_names()),
     }
 
 
@@ -403,6 +514,55 @@ async def refresh_health():
         await asyncio.gather(*tasks, return_exceptions=True)
     available = sum(1 for c in containers.values() if c.available)
     return {"ok": True, "available": available, "total": len(containers)}
+
+
+@app.post("/gateway/group/{num}", dependencies=[Depends(verify_auth)])
+async def set_container_group(num: int, request: Request):
+    """Set group tag for a container. Empty string removes the group."""
+    if num not in containers:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    body = await request.json()
+    group = body.get("group", "").strip().lower()
+    if group:
+        container_groups[num] = group
+    else:
+        container_groups.pop(num, None)
+    save_groups()
+    add_log("info", num, f"Group set to [{group}]" if group else "Group removed")
+    return {"ok": True}
+
+
+@app.post("/gateway/batch-group", dependencies=[Depends(verify_auth)])
+async def batch_set_groups(request: Request):
+    """Batch set groups. Body: {"groups": {"1": "pro", "2": "pro", "13": "was", ...}}"""
+    body = await request.json()
+    updates = body.get("groups", {})
+    for num_str, group in updates.items():
+        num = int(num_str)
+        if num not in containers:
+            continue
+        group = group.strip().lower()
+        if group:
+            container_groups[num] = group
+        else:
+            container_groups.pop(num, None)
+    save_groups()
+    add_log("info", None, f"Batch group update: {len(updates)} containers")
+    return {"ok": True}
+
+
+@app.get("/gateway/groups", dependencies=[Depends(verify_auth)])
+async def get_groups():
+    """Return all groups with their container lists."""
+    groups: dict[str, list[int]] = {}
+    ungrouped = []
+    for num in sorted(containers.keys()):
+        g = container_groups.get(num, "")
+        if g:
+            groups.setdefault(g, []).append(num)
+        else:
+            ungrouped.append(num)
+    return {"groups": groups, "ungrouped": ungrouped}
 
 
 @app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_auth)])
