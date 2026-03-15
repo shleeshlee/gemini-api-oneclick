@@ -162,13 +162,13 @@ if [[ -f .env ]]; then
 
       # 确保 GATEWAY_PORT 写入 .env（老用户可能没有）
       if ! grep -q '^GATEWAY_PORT=' .env 2>/dev/null; then
-        GATEWAY_PORT="${GATEWAY_PORT:-9800}"
+        GATEWAY_PORT="${GATEWAY_PORT:-9880}"
         echo "" >> .env
         echo "# Gateway (智能轮询总入口)" >> .env
         echo "GATEWAY_PORT=${GATEWAY_PORT}" >> .env
         info "已添加 GATEWAY_PORT=${GATEWAY_PORT} 到 .env"
       fi
-      GATEWAY_PORT="${GATEWAY_PORT:-9800}"
+      GATEWAY_PORT="${GATEWAY_PORT:-9880}"
 
       info "重新生成 compose ..."
       python3 scripts/generate_compose.py
@@ -340,9 +340,9 @@ echo ""
 
 # [5/5] Gateway port
 step "5/5" "Gateway 统一入口端口"
-GATEWAY_PORT="9800"
-read -rp "  端口 [9800]: " USER_GW_PORT
-GATEWAY_PORT="${USER_GW_PORT:-9800}"
+GATEWAY_PORT="9880"
+read -rp "  端口 [9880]: " USER_GW_PORT
+GATEWAY_PORT="${USER_GW_PORT:-9880}"
 
 if port_in_use "$GATEWAY_PORT"; then
   warn "端口 ${GATEWAY_PORT} 已被占用！"
