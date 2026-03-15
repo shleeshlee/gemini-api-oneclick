@@ -215,8 +215,7 @@ GWEOF
       fi
 
       echo ""
-      info "更新完成！"
-      ./scripts/healthcheck.sh || true
+      info "更新完成！Gateway 地址: http://YOUR_IP:${GATEWAY_PORT}"
       exit 0
       ;;
     2)
@@ -475,8 +474,12 @@ fi
 # Step: Health check
 CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "健康检查 ..."
-sleep 3
-./scripts/healthcheck.sh || true
+sleep 5
+if curl -fsS --max-time 5 "http://127.0.0.1:${GATEWAY_PORT}/health" >/dev/null 2>&1; then
+  info "Gateway 运行正常"
+else
+  warn "Gateway 暂未响应，可能还在启动中，请稍后访问面板确认"
+fi
 
 # ══════════════════════════════════════════════════════════════
 # Done!
