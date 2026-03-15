@@ -396,8 +396,11 @@ body::before {
     <span class="login-icon">&#x26A1;</span>
     <h1>Gemini Gateway</h1>
     <p>Gemini API OneClick</p>
-    <input type="password" class="login-input" id="loginPwd" placeholder="输入密码" autocomplete="off">
-    <button class="login-btn" id="loginBtn" onclick="doLogin()">登录</button>
+    <form onsubmit="doLogin();return false;" autocomplete="on">
+      <input type="text" name="username" value="admin" autocomplete="username" style="position:absolute;opacity:0;height:0;pointer-events:none" tabindex="-1">
+      <input type="password" class="login-input" id="loginPwd" name="password" placeholder="输入密码" autocomplete="current-password">
+      <button type="submit" class="login-btn" id="loginBtn">登录</button>
+    </form>
     <div class="login-error" id="loginErr"></div>
   </div>
 </div>
@@ -633,9 +636,7 @@ function doLogout() {
   document.getElementById('loginErr').textContent = '';
 }
 
-document.getElementById('loginPwd').addEventListener('keydown', e => {
-  if (e.key === 'Enter') doLogin();
-});
+// Enter 由 form onsubmit 处理
 
 // ── Data Loading ───────────────────────────────────────────
 async function loadAll() {
