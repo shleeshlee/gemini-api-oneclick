@@ -297,6 +297,7 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 _last_log_ts: dict[int, str] = {}  # container num -> last seen log timestamp
 _LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback",
                  "credentials", "401", "403", "500", "timeout", "client_ready"}
+_LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "waiting for"}
 
 
 _log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
@@ -322,6 +323,8 @@ async def sample_container_logs():
             for line in lines:
                 lower = line.lower()
                 if not any(kw in lower for kw in _LOG_KEYWORDS):
+                    continue
+                if any(sk in lower for sk in _LOG_SKIP):
                     continue
                 # Deduplicate by content hash
                 text = line.split(" ", 1)[-1].strip()[:150] if " " in line else line.strip()[:150]
