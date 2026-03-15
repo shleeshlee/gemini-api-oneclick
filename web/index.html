@@ -888,7 +888,7 @@ async function testContainer(num) {
       btn.style.borderColor = 'var(--success)';
       btn.style.color = '#2D7A52';
       btn.style.background = 'var(--success-light)';
-      toast(`#${num} 正常 — "${data.reply}"`, 'ok');
+      toast(`#${num} [${data.model}] 正常 — "${data.reply}"`, 'ok');
     } else {
       btn.textContent = '✗ 异常';
       btn.style.borderColor = 'var(--danger)';

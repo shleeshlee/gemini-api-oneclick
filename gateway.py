@@ -298,39 +298,45 @@ _LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback
                  "credentials", "401", "403", "500", "timeout", "client_ready"}
 
 
+_log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
+
+
 async def sample_container_logs():
-    """Read recent docker logs from all containers, surface important entries."""
+    """Read recent docker logs from all containers, surface new important entries only."""
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - HEALTH_INTERVAL - 5))
     for c in containers.values():
         cname = f"gemini_api_account_{c.num}"
         try:
-            since = _last_log_ts.get(c.num, "")
-            args = ["docker", "logs", "--tail", "10", "--timestamps", cname]
-            if since:
-                args = ["docker", "logs", "--since", since, "--timestamps", cname]
+            # Only read logs since last check interval
             proc = await asyncio.create_subprocess_exec(
-                *args,
+                "docker", "logs", "--since", now_iso, "--timestamps", cname,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
             lines = stdout.decode(errors="replace").splitlines()
-            if lines:
-                # Update timestamp cursor
-                last = lines[-1]
-                if last and last[0].isdigit() and "T" in last[:30]:
-                    _last_log_ts[c.num] = last.split(" ")[0]
-                # Surface important lines
-                for line in lines:
-                    lower = line.lower()
-                    if any(kw in lower for kw in _LOG_KEYWORDS):
-                        # Strip docker timestamp prefix for cleaner display
-                        text = line.split(" ", 1)[-1] if " " in line else line
-                        text = text.strip()[:150]
-                        if text:
-                            level = "error" if any(k in lower for k in {"error", "exception", "failed", "traceback"}) else "warn"
-                            add_log(level, c.num, text)
+            if c.num not in _log_seen:
+                _log_seen[c.num] = set()
+            seen = _log_seen[c.num]
+            for line in lines:
+                lower = line.lower()
+                if not any(kw in lower for kw in _LOG_KEYWORDS):
+                    continue
+                # Deduplicate by content hash
+                text = line.split(" ", 1)[-1].strip()[:150] if " " in line else line.strip()[:150]
+                if not text:
+                    continue
+                h = hash(text)
+                if h in seen:
+                    continue
+                seen.add(h)
+                level = "error" if any(k in lower for k in {"error", "exception", "failed", "traceback"}) else "warn"
+                add_log(level, c.num, text)
+            # Keep seen set bounded
+            if len(seen) > 500:
+                _log_seen[c.num] = set()
         except Exception:
-            pass  # Don't let log sampling crash the loop
+            pass
 
 
 async def health_loop():
@@ -811,18 +817,28 @@ async def test_container(num: int):
             if not health_data.get("client_ready"):
                 return {"ok": False, "error": "Cookie 未就绪或已过期", "detail": health_data}
 
+            # Get first available model from container
+            models_resp = await client.get(f"{c.url}/v1/models")
+            model_name = "unspecified"
+            if models_resp.status_code == 200:
+                model_data = models_resp.json().get("data", [])
+                for m in model_data:
+                    if m.get("id") and m["id"] != "unspecified":
+                        model_name = m["id"]
+                        break
+
             # Send a minimal chat request
             resp = await client.post(
                 f"{c.url}/v1/chat/completions",
-                json={"model": "gemini-2.0-flash", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5},
+                json={"model": model_name, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5},
                 headers={"Authorization": f"Bearer {API_KEY}"},
             )
             if resp.status_code == 200:
                 data = resp.json()
                 reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return {"ok": True, "reply": reply[:100], "status": resp.status_code}
+                return {"ok": True, "reply": reply[:100], "model": model_name, "status": resp.status_code}
             else:
-                return {"ok": False, "error": resp.text[:200], "status": resp.status_code}
+                return {"ok": False, "error": resp.text[:200], "model": model_name, "status": resp.status_code}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
