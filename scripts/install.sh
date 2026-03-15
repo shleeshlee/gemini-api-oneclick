@@ -419,6 +419,16 @@ python3 scripts/generate_compose.py
 # Step: Build and start
 CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "构建并启动容器 ..."
+
+# 清理同名残留容器（用户可能删了目录但容器还在）
+for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
+  cname="${CONTAINER_PREFIX}${i}"
+  if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+    docker stop "$cname" 2>/dev/null || true
+    docker rm "$cname" 2>/dev/null || true
+  fi
+done
+
 docker compose -f docker-compose.accounts.yml up -d --build
 
 # Step: Gateway (智能轮询网关)
@@ -453,7 +463,7 @@ EOF
 
   sudo systemctl daemon-reload
   sudo systemctl enable gemini-gateway
-  sudo systemctl start gemini-gateway
+  sudo systemctl restart gemini-gateway
   info "Gateway 已安装为系统服务"
 else
   warn "未找到 systemctl，后台启动 Gateway ..."
