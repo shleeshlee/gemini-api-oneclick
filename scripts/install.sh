@@ -264,8 +264,8 @@ if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
   TOTAL_STEPS=$((TOTAL_STEPS + 1))
 fi
 
-# Gateway port = START_PORT + ACCOUNT_COUNT (first free port after containers)
-GATEWAY_PORT=$((START_PORT + ACCOUNT_COUNT))
+# Gateway 端口固定，不随容器数量变化
+GATEWAY_PORT=9800
 
 CURRENT_STEP=0
 

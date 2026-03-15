@@ -60,25 +60,11 @@ list_account_nums() {
   done | sort -n
 }
 
-# 更新 Gateway 端口并重启
-update_gateway() {
-  local total
-  total=$(count_accounts)
-  local new_gw_port=$(( START_PORT + total ))
-
-  if [[ -f .env ]]; then
-    # 更新 .env 里的 GATEWAY_PORT
-    if grep -q "^GATEWAY_PORT=" .env; then
-      sed -i "s/^GATEWAY_PORT=.*/GATEWAY_PORT=${new_gw_port}/" .env
-    fi
-  fi
-
-  # 重启 Gateway
+# 重启 Gateway（端口不变，只重新发现容器）
+restart_gateway() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active gemini-gateway >/dev/null 2>&1; then
-    sudo sed -i "s/GATEWAY_PORT=.*/GATEWAY_PORT=${new_gw_port}/" /etc/systemd/system/gemini-gateway.service 2>/dev/null || true
-    sudo systemctl daemon-reload
     sudo systemctl restart gemini-gateway
-    info "Gateway 已重启，新端口: ${new_gw_port}"
+    info "Gateway 已重启，自动发现新容器"
   fi
 }
 
@@ -140,7 +126,7 @@ EOF
   info "启动新容器 ..."
   docker compose -f docker-compose.accounts.yml up -d --build --no-recreate
 
-  update_gateway
+  restart_gateway
 
   echo ""
   info "完成！已添加 ${add_count} 个容器"
@@ -203,7 +189,7 @@ do_remove() {
   info "重新生成 compose ..."
   python3 scripts/generate_compose.py
 
-  update_gateway
+  restart_gateway
 
   echo ""
   info "删除完成"
