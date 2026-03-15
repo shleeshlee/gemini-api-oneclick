@@ -139,8 +139,10 @@ account_names: dict[int, str] = {}  # num -> display name, persisted to state/ac
 ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
 GATEWAY_STATE_FILE = ROOT_DIR / "state" / "gateway-state.json"
 GROUPS_FILE = ROOT_DIR / "state" / "groups.json"
+GROUP_DEFS_FILE = ROOT_DIR / "state" / "group-defs.json"
 
 container_groups: dict[int, str] = {}  # num -> group name (e.g. "pro", "was")
+group_defs: list[str] = []  # defined group names, created by user
 group_round_robin: dict[str, int] = {}  # group -> round robin index
 _models_cache: list[dict] = []
 _models_cache_time: float = 0
@@ -163,13 +165,24 @@ def save_account_names():
 
 
 def load_groups():
-    global container_groups
+    global container_groups, group_defs
     try:
         if GROUPS_FILE.exists():
             data = json.loads(GROUPS_FILE.read_text(encoding="utf-8"))
             container_groups = {int(k): v for k, v in data.items() if v}
     except Exception:
         container_groups = {}
+    try:
+        if GROUP_DEFS_FILE.exists():
+            group_defs = json.loads(GROUP_DEFS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        group_defs = []
+    # Auto-create defs for any existing assignments (migration)
+    for g in set(container_groups.values()):
+        if g and g not in group_defs:
+            group_defs.append(g)
+    if group_defs:
+        save_group_defs()
 
 
 def save_groups():
@@ -180,8 +193,13 @@ def save_groups():
     )
 
 
+def save_group_defs():
+    GROUP_DEFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GROUP_DEFS_FILE.write_text(json.dumps(sorted(group_defs), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def get_all_group_names() -> set[str]:
-    return {v for v in container_groups.values() if v}
+    return set(group_defs) if group_defs else set()
 
 
 def load_gateway_state():
@@ -483,7 +501,7 @@ async def gateway_status():
         "containers": [containers[n].to_dict() for n in sorted(containers.keys())],
         "available": sum(1 for c in containers.values() if c.available),
         "total": len(containers),
-        "groups": sorted(get_all_group_names()),
+        "group_defs": sorted(group_defs),
     }
 
 
@@ -545,51 +563,95 @@ async def refresh_health():
 
 @app.post("/gateway/group/{num}", dependencies=[Depends(verify_auth)])
 async def set_container_group(num: int, request: Request):
-    """Set group tag for a container. Empty string removes the group."""
+    """Set group for a container. Must be a defined group or empty (= default)."""
     if num not in containers:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
     body = await request.json()
     group = body.get("group", "").strip().lower()
+    if group and group not in group_defs:
+        raise HTTPException(status_code=400, detail=f"分组 [{group}] 不存在，请先创建")
     if group:
         container_groups[num] = group
     else:
         container_groups.pop(num, None)
     save_groups()
-    add_log("info", num, f"Group set to [{group}]" if group else "Group removed")
+    add_log("info", num, f"Group set to [{group}]" if group else "Group → 默认")
     return {"ok": True}
 
 
 @app.post("/gateway/batch-group", dependencies=[Depends(verify_auth)])
 async def batch_set_groups(request: Request):
-    """Batch set groups. Body: {"groups": {"1": "pro", "2": "pro", "13": "was", ...}}"""
+    """Batch assign containers to a group. Body: {"group": "pro", "containers": [1,2,3,...]}"""
     body = await request.json()
-    updates = body.get("groups", {})
-    for num_str, group in updates.items():
-        num = int(num_str)
+    group = body.get("group", "").strip().lower()
+    nums = body.get("containers", [])
+    if group and group not in group_defs:
+        raise HTTPException(status_code=400, detail=f"分组 [{group}] 不存在，请先创建")
+    count = 0
+    for num in nums:
+        num = int(num)
         if num not in containers:
             continue
-        group = group.strip().lower()
         if group:
             container_groups[num] = group
         else:
             container_groups.pop(num, None)
+        count += 1
     save_groups()
-    add_log("info", None, f"Batch group update: {len(updates)} containers")
-    return {"ok": True}
+    label = f"[{group}]" if group else "默认"
+    add_log("info", None, f"批量分组 → {label}: {count} 个容器")
+    return {"ok": True, "count": count}
 
 
 @app.get("/gateway/groups", dependencies=[Depends(verify_auth)])
 async def get_groups():
-    """Return all groups with their container lists."""
+    """Return defined groups with their container lists."""
     groups: dict[str, list[int]] = {}
+    for g in group_defs:
+        groups[g] = []
     ungrouped = []
     for num in sorted(containers.keys()):
         g = container_groups.get(num, "")
-        if g:
-            groups.setdefault(g, []).append(num)
+        if g and g in groups:
+            groups[g].append(num)
         else:
             ungrouped.append(num)
-    return {"groups": groups, "ungrouped": ungrouped}
+    return {"groups": groups, "ungrouped": ungrouped, "defs": sorted(group_defs)}
+
+
+@app.post("/gateway/create-group", dependencies=[Depends(verify_auth)])
+async def create_group(request: Request):
+    """Create a new group definition."""
+    body = await request.json()
+    name = body.get("name", "").strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名不能为空")
+    if not re.match(r'^[a-z0-9_-]+$', name):
+        raise HTTPException(status_code=400, detail="分组名只能包含小写字母、数字、下划线、横杠")
+    if name in group_defs:
+        raise HTTPException(status_code=400, detail=f"分组 [{name}] 已存在")
+    group_defs.append(name)
+    save_group_defs()
+    add_log("info", None, f"Created group [{name}]")
+    return {"ok": True}
+
+
+@app.post("/gateway/delete-group", dependencies=[Depends(verify_auth)])
+async def delete_group(request: Request):
+    """Delete a group definition and ungroup its containers."""
+    body = await request.json()
+    name = body.get("name", "").strip().lower()
+    if name not in group_defs:
+        raise HTTPException(status_code=404, detail=f"分组 [{name}] 不存在")
+    group_defs.remove(name)
+    # Ungroup all containers in this group
+    removed = [n for n, g in container_groups.items() if g == name]
+    for n in removed:
+        del container_groups[n]
+    save_group_defs()
+    save_groups()
+    add_log("info", None, f"Deleted group [{name}], {len(removed)} containers → 默认")
+    return {"ok": True, "ungrouped": len(removed)}
 
 
 @app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_auth)])
