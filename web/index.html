@@ -365,22 +365,46 @@ body::before {
 }
 .threshold-input:focus { border-color: var(--primary-light); }
 
-/* --- BATCH GROUP --- */
-.batch-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 0.4rem;
-  max-height: 280px; overflow-y: auto; padding: 0.6rem;
-  background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius-sm);
+/* --- SELECTION & GROUP MANAGER --- */
+.card-checkbox {
+  position: absolute; top: 0.6rem; right: 0.6rem; width: 20px; height: 20px;
+  border: 2px solid var(--border); border-radius: 6px; background: var(--card);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; color: white; transition: all 0.15s; z-index: 2;
 }
-.batch-item {
-  display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem;
-  border-radius: 8px; cursor: pointer; transition: all 0.15s; user-select: none;
-  font-size: 0.82rem; font-family: 'Nunito', sans-serif; font-weight: 600;
+.card-checkbox:hover { border-color: var(--primary); }
+.card-checkbox.checked { background: var(--primary); border-color: var(--primary); }
+
+.selection-toolbar {
+  position: fixed; bottom: -70px; left: 50%; transform: translateX(-50%);
+  background: var(--card); border-radius: 16px; box-shadow: var(--shadow-lg);
+  padding: 0.7rem 1.2rem; display: flex; align-items: center; gap: 0.8rem;
+  z-index: 600; transition: bottom 0.3s ease; border: 2px solid var(--border);
 }
-.batch-item:hover { background: var(--bg-warm); }
-.batch-item.selected { background: var(--primary-light); color: white; }
-.batch-item .batch-group-dot {
-  font-size: 0.6rem; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+.selection-toolbar.visible { bottom: 1.5rem; }
+.sel-count { font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.9rem; white-space: nowrap; }
+.sel-group-select {
+  padding: 0.4rem 0.8rem; border: 2px solid var(--border); border-radius: 8px;
+  font-family: 'Outfit', sans-serif; font-size: 0.85rem; background: var(--bg);
+  outline: none; cursor: pointer; min-width: 120px;
 }
+
+.group-def-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.6rem 0.8rem; background: var(--bg); border-radius: 8px;
+  margin-bottom: 0.4rem;
+}
+.group-def-name {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.95rem;
+}
+.group-def-count { font-size: 0.78rem; color: var(--text-muted); font-weight: 400; }
+.group-def-del {
+  width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
+  cursor: pointer; font-size: 0.9rem; color: var(--text-light); transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.group-def-del:hover { background: var(--danger-light); color: var(--danger); }
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -419,7 +443,7 @@ body::before {
       <span class="stat-pill ok" id="statOk">0 正常</span>
       <span class="stat-pill warn" id="statBad">0 异常</span>
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
-      <button class="btn-topbar" onclick="openBatchGroup()"><span class="icon">&#x1F3F7;</span> 批量分组</button>
+      <button class="btn-topbar" onclick="openGroupManager()"><span class="icon">&#x1F3F7;</span> 分组管理</button>
       <button class="btn-topbar" id="refreshBtn" onclick="doRefresh()"><span class="icon">&#x21BB;</span> 刷新</button>
       <button class="btn-topbar" onclick="openGuardSettings()"><span class="icon">&#x2699;</span> 设置</button>
       <button class="btn-topbar" onclick="doLogout()"><span class="icon">&#x2192;</span> 退出</button>
@@ -451,9 +475,10 @@ body::before {
       <input type="text" class="form-input form-input-name" id="mName" placeholder="可选别名">
     </div>
     <div class="form-group">
-      <label class="form-label">分组标签</label>
-      <input type="text" class="form-input form-input-name" id="mGroup" placeholder="如 pro / was（留空 = 默认池）" spellcheck="false">
-      <div class="guard-hint">同一分组名的容器共享轮询池，通过模型前缀路由（如 pro-gemini-2.0-flash）</div>
+      <label class="form-label">所属分组</label>
+      <select class="form-input form-input-name" id="mGroup" style="font-family:'Outfit',sans-serif;font-size:0.95rem">
+        <option value="">默认分组</option>
+      </select>
     </div>
     <div class="form-group">
       <label class="form-label">SECURE_1PSID</label>
@@ -525,32 +550,36 @@ body::before {
   </div>
 </div>
 
-<!-- BATCH GROUP MODAL -->
-<div class="modal-overlay" id="batchGroupOverlay" onclick="event.target===this&&closeBatchGroup()">
-  <div class="modal" style="width:min(540px,92vw)">
+<!-- GROUP MANAGER MODAL -->
+<div class="modal-overlay" id="groupMgrOverlay" onclick="event.target===this&&closeGroupManager()">
+  <div class="modal" style="width:min(460px,92vw)">
     <div class="modal-header">
-      <div class="modal-title">&#x1F3F7; 批量分组</div>
-      <button class="modal-close" onclick="closeBatchGroup()">&#x2715;</button>
+      <div class="modal-title">&#x1F3F7; 分组管理</div>
+      <button class="modal-close" onclick="closeGroupManager()">&#x2715;</button>
     </div>
     <div class="form-group">
-      <label class="form-label">分组名称</label>
-      <input type="text" class="form-input form-input-name" id="batchGroupName" placeholder="输入分组名（如 pro / was），留空 = 移除分组" spellcheck="false">
-    </div>
-    <div class="form-group">
-      <label class="form-label">选择容器</label>
-      <div style="display:flex;gap:0.5rem;margin-bottom:0.6rem;flex-wrap:wrap">
-        <button class="card-btn" onclick="batchSelectAll()" style="font-size:0.78rem">全选</button>
-        <button class="card-btn" onclick="batchSelectNone()" style="font-size:0.78rem">全不选</button>
-        <button class="card-btn" onclick="batchSelectRange()" style="font-size:0.78rem">按范围选</button>
+      <label class="form-label">新建分组</label>
+      <div style="display:flex;gap:0.5rem">
+        <input type="text" class="form-input form-input-name" id="newGroupName" placeholder="分组名（小写字母/数字）" spellcheck="false" style="flex:1">
+        <button class="btn btn-primary" onclick="createGroup()" style="flex:0 0 auto;padding:0.6rem 1.2rem">创建</button>
       </div>
-      <div class="batch-grid" id="batchGrid"></div>
     </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeBatchGroup()">取消</button>
-      <button class="btn btn-primary" onclick="applyBatchGroup()">应用</button>
+    <div class="form-group">
+      <label class="form-label">已有分组</label>
+      <div id="groupDefsList" style="min-height:40px"></div>
     </div>
-    <div class="modal-msg" id="batchMsg"></div>
+    <div class="modal-msg" id="groupMgrMsg"></div>
   </div>
+</div>
+
+<!-- SELECTION TOOLBAR (floating at bottom when cards selected) -->
+<div class="selection-toolbar" id="selToolbar">
+  <span class="sel-count" id="selCount">已选 0 个</span>
+  <select class="sel-group-select" id="selGroupSelect">
+    <option value="">默认分组</option>
+  </select>
+  <button class="btn btn-primary" onclick="applySelection()" style="padding:0.5rem 1.2rem;font-size:0.85rem">应用</button>
+  <button class="btn btn-ghost" onclick="clearSelection()" style="padding:0.5rem 0.8rem;font-size:0.85rem">取消</button>
 </div>
 
 <!-- TOASTS -->
@@ -743,11 +772,17 @@ function renderGrid() {
       errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
     }
 
-    const groupBadge = group ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>` : '';
+    const groupBadge = group
+      ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>`
+      : `<span class="group-badge" style="background:var(--border);color:var(--text-muted)">默认</span>`;
     const portLabel = port ? `<span class="card-port">:${port}</span>` : '';
+    const checked = selectedCards.has(num) ? 'checked' : '';
 
     return `
       <div class="card ${cardClass}" onclick="openModal(${num})">
+        <div class="card-checkbox ${checked}" onclick="event.stopPropagation();toggleSelect(${num})">
+          ${selectedCards.has(num) ? '&#x2713;' : ''}
+        </div>
         <div class="card-header">
           <span class="card-num">#${num}</span>
           <span class="card-status ${dotClass}" title="${stateLabel}"></span>
@@ -810,6 +845,7 @@ function openModal(num) {
   const group = (gw && gw.group) || '';
   document.getElementById('modalTitle').textContent = '#' + num + ' — gemini_api_account_' + num;
   document.getElementById('mName').value = displayName;
+  populateGroupSelect('mGroup');
   document.getElementById('mGroup').value = group;
   document.getElementById('mPsid').value = '';
   document.getElementById('mPsidts').value = '';
@@ -840,7 +876,9 @@ function saveGroup(num, group) {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (document.getElementById('guardOverlay').classList.contains('active')) closeGuardSettings();
+    if (document.getElementById('groupMgrOverlay').classList.contains('active')) closeGroupManager();
+    else if (document.getElementById('guardOverlay').classList.contains('active')) closeGuardSettings();
+    else if (selectedCards.size > 0) clearSelection();
     else closeModal();
   }
 });
@@ -1038,102 +1076,145 @@ function saveGuardSettings() {
   });
 }
 
-// ── Batch Group ─────────────────────────────────────────────
-let batchSelected = new Set();
+// ── Card Selection (主界面勾选) ─────────────────────────────
+let selectedCards = new Set();
 
-function openBatchGroup() {
-  batchSelected = new Set();
-  document.getElementById('batchGroupName').value = '';
-  document.getElementById('batchMsg').textContent = '';
-  renderBatchGrid();
-  document.getElementById('batchGroupOverlay').classList.add('active');
+function toggleSelect(num) {
+  if (selectedCards.has(num)) selectedCards.delete(num);
+  else selectedCards.add(num);
+  updateSelectionUI();
+  renderGrid();
 }
 
-function closeBatchGroup() {
-  document.getElementById('batchGroupOverlay').classList.remove('active');
+function clearSelection() {
+  selectedCards.clear();
+  updateSelectionUI();
+  renderGrid();
 }
 
-function renderBatchGrid() {
-  const grid = document.getElementById('batchGrid');
-  const gwMap = {};
-  if (gatewayStatus && gatewayStatus.containers) {
-    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
+function updateSelectionUI() {
+  const toolbar = document.getElementById('selToolbar');
+  if (selectedCards.size > 0) {
+    toolbar.classList.add('visible');
+    document.getElementById('selCount').textContent = `已选 ${selectedCards.size} 个`;
+    populateGroupSelect('selGroupSelect');
+  } else {
+    toolbar.classList.remove('visible');
   }
-  grid.innerHTML = accounts.map(a => {
-    const num = a.num;
-    const gw = gwMap[num];
-    const group = (gw && gw.group) || '';
-    const sel = batchSelected.has(num) ? 'selected' : '';
-    const dot = group ? `<span class="batch-group-dot" style="background:${groupColor(group)}"></span>` : '';
-    const label = group ? `#${num} <span style="font-weight:400;font-size:0.72rem;opacity:0.7">${esc(group)}</span>` : `#${num}`;
-    return `<div class="batch-item ${sel}" onclick="toggleBatchItem(${num})">${dot}${label}</div>`;
-  }).join('');
 }
 
-function toggleBatchItem(num) {
-  if (batchSelected.has(num)) batchSelected.delete(num);
-  else batchSelected.add(num);
-  renderBatchGrid();
+function populateGroupSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  const current = sel.value;
+  const defs = (gatewayStatus && gatewayStatus.group_defs) || [];
+  sel.innerHTML = '<option value="">默认分组</option>' +
+    defs.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+  sel.value = current;
 }
 
-function batchSelectAll() {
-  accounts.forEach(a => batchSelected.add(a.num));
-  renderBatchGrid();
-}
-
-function batchSelectNone() {
-  batchSelected.clear();
-  renderBatchGrid();
-}
-
-function batchSelectRange() {
-  const input = prompt('输入范围，如 1-12');
-  if (!input) return;
-  const m = input.match(/^(\d+)\s*[-~到]\s*(\d+)$/);
-  if (!m) { toast('格式错误，请输入如 1-12', 'err'); return; }
-  const lo = parseInt(m[1]), hi = parseInt(m[2]);
-  for (let i = lo; i <= hi; i++) {
-    if (accounts.some(a => a.num === i)) batchSelected.add(i);
-  }
-  renderBatchGrid();
-}
-
-function applyBatchGroup() {
-  if (batchSelected.size === 0) {
-    document.getElementById('batchMsg').className = 'modal-msg err';
-    document.getElementById('batchMsg').textContent = '请至少选择一个容器';
-    return;
-  }
-  const group = document.getElementById('batchGroupName').value.trim().toLowerCase();
-  const groups = {};
-  batchSelected.forEach(num => { groups[String(num)] = group; });
-
+function applySelection() {
+  const group = document.getElementById('selGroupSelect').value;
+  const nums = Array.from(selectedCards);
   fetch('/gateway/batch-group', {
     method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({groups})
+    body: JSON.stringify({group: group, containers: nums})
   })
   .then(r => r.json().then(data => ({ok: r.ok, data})))
   .then(({ok, data}) => {
     if (ok) {
-      const action = group ? `已设为 [${group}]` : '已移除分组';
-      toast(`${batchSelected.size} 个容器${action}`, 'ok');
-      closeBatchGroup();
+      const label = group || '默认';
+      toast(`${nums.length} 个容器 → [${label}]`, 'ok');
+      clearSelection();
       loadAll();
     } else {
       throw new Error(data.detail || '操作失败');
     }
   })
-  .catch(e => {
-    document.getElementById('batchMsg').className = 'modal-msg err';
-    document.getElementById('batchMsg').textContent = e.message;
-  });
+  .catch(e => toast(e.message, 'err'));
 }
 
-// ESC also closes batch group modal
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && document.getElementById('batchGroupOverlay').classList.contains('active')) {
-    closeBatchGroup();
+// ── Group Manager (分组管理弹窗) ────────────────────────────
+function openGroupManager() {
+  document.getElementById('newGroupName').value = '';
+  document.getElementById('groupMgrMsg').textContent = '';
+  renderGroupDefs();
+  document.getElementById('groupMgrOverlay').classList.add('active');
+}
+
+function closeGroupManager() {
+  document.getElementById('groupMgrOverlay').classList.remove('active');
+}
+
+function renderGroupDefs() {
+  const defs = (gatewayStatus && gatewayStatus.group_defs) || [];
+  const gwMap = {};
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
   }
+  const counts = {};
+  defs.forEach(g => { counts[g] = 0; });
+  Object.values(gwMap).forEach(c => {
+    if (c.group && counts[c.group] !== undefined) counts[c.group]++;
+  });
+
+  const list = document.getElementById('groupDefsList');
+  if (defs.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;padding:0.5rem">暂无分组，创建一个吧</div>';
+    return;
+  }
+  list.innerHTML = defs.map(g => `
+    <div class="group-def-item">
+      <div class="group-def-name">
+        <span class="group-badge" style="background:${groupColor(g)};color:#fff">${esc(g)}</span>
+        <span class="group-def-count">${counts[g] || 0} 个容器</span>
+      </div>
+      <button class="group-def-del" onclick="deleteGroup('${esc(g)}')" title="删除分组">&#x1F5D1;</button>
+    </div>
+  `).join('');
+}
+
+function createGroup() {
+  const name = document.getElementById('newGroupName').value.trim().toLowerCase();
+  const msg = document.getElementById('groupMgrMsg');
+  if (!name) { msg.className = 'modal-msg err'; msg.textContent = '名称不能为空'; return; }
+  fetch('/gateway/create-group', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({name})
+  })
+  .then(r => r.json().then(data => ({ok: r.ok, data})))
+  .then(({ok, data}) => {
+    if (ok) {
+      toast(`分组 [${name}] 已创建`, 'ok');
+      document.getElementById('newGroupName').value = '';
+      msg.textContent = '';
+      loadAll().then(() => renderGroupDefs());
+    } else {
+      throw new Error(data.detail || '创建失败');
+    }
+  })
+  .catch(e => { msg.className = 'modal-msg err'; msg.textContent = e.message; });
+}
+
+function deleteGroup(name) {
+  if (!confirm(`删除分组 [${name}]？其中的容器将回到默认分组`)) return;
+  fetch('/gateway/delete-group', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({name})
+  })
+  .then(r => r.json().then(data => ({ok: r.ok, data})))
+  .then(({ok, data}) => {
+    if (ok) {
+      toast(`分组 [${name}] 已删除`, 'ok');
+      loadAll().then(() => renderGroupDefs());
+    } else {
+      throw new Error(data.detail || '删除失败');
+    }
+  })
+  .catch(e => toast(e.message, 'err'));
+}
+
+document.getElementById('newGroupName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); createGroup(); }
 });
 
 </script>
