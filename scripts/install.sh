@@ -219,6 +219,25 @@ GWEOF
       exit 0
       ;;
     2)
+      # 读取旧配置作为默认值
+      OLD_START_PORT=$(grep '^START_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      OLD_API_KEY=$(grep '^API_KEY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      OLD_GATEWAY_PORT=$(grep '^GATEWAY_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      OLD_PASSWORD=$(grep '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null | cut -d= -f2 || echo "")
+
+      existing_env_count=$(ls envs/account*.env 2>/dev/null | wc -l | tr -d ' ')
+      existing_container_count=$(docker ps --format '{{.Names}}' | grep -c "^gemini_api_account_" 2>/dev/null || echo "0")
+
+      if (( existing_env_count > 0 )); then
+        echo ""
+        warn "当前已有 ${existing_env_count} 个账号配置、${existing_container_count} 个运行中容器"
+        warn "全新安装会覆盖 .env 主配置（端口/密钥/密码），但保留已有的 Cookie 配置"
+        [[ -n "$OLD_START_PORT" ]] && echo -e "  当前起始端口: ${BOLD}${OLD_START_PORT}${NC}"
+        echo ""
+        read -rp "  确认全新安装？[y/N]: " confirm_fresh
+        [[ "$confirm_fresh" =~ ^[Yy]$ ]] || { info "已取消"; exit 0; }
+      fi
+
       info "开始全新安装 ..."
       ;;
     q|Q)
@@ -247,12 +266,13 @@ if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT
 fi
 echo ""
 
-# 容器端口分配
-DEFAULT_START=3001
+# 容器端口分配（优先沿用旧配置）
+DEFAULT_START="${OLD_START_PORT:-3001}"
 END_PORT=$((DEFAULT_START + ACCOUNT_COUNT - 1))
-echo -e "  推荐端口范围: ${BOLD}${DEFAULT_START}-${END_PORT}${NC}"
+[[ -n "${OLD_START_PORT:-}" ]] && echo -e "  ${GREEN}沿用已有端口配置${NC}"
+echo -e "  端口范围: ${BOLD}${DEFAULT_START}-${END_PORT}${NC}"
 echo ""
-echo "  [1] 使用推荐范围 ${DEFAULT_START}-${END_PORT}"
+echo "  [1] 使用端口范围 ${DEFAULT_START}-${END_PORT}"
 echo "  [2] 自定义起始端口"
 echo ""
 read -rp "  选择 [1/2, 默认 1]: " port_choice
@@ -307,10 +327,15 @@ echo ""
 
 # [2/5] API key
 step "2/5" "API 密钥（回车自动生成）"
-read -rp "  API_KEY [自动]: " USER_API_KEY
-if [[ -z "$USER_API_KEY" ]]; then
-  USER_API_KEY=$(random_key)
-  info "已生成 API 密钥: $USER_API_KEY"
+if [[ -n "${OLD_API_KEY:-}" ]]; then
+  read -rp "  API_KEY [保留当前: ${OLD_API_KEY:0:8}...]: " USER_API_KEY
+  USER_API_KEY="${USER_API_KEY:-$OLD_API_KEY}"
+else
+  read -rp "  API_KEY [自动]: " USER_API_KEY
+  if [[ -z "$USER_API_KEY" ]]; then
+    USER_API_KEY=$(random_key)
+    info "已生成 API 密钥: $USER_API_KEY"
+  fi
 fi
 echo ""
 
@@ -328,20 +353,23 @@ echo ""
 # [4/5] Gateway 面板密码（已集成 Cookie 管理功能）
 step "4/5" "Gateway 面板密码（Cookie 管理已集成到 Gateway）"
 COOKIE_MANAGER_PORT="9880"
-COOKIE_MANAGER_PASSWORD=""
-USE_COOKIE_MGR="N"  # Cookie Manager 独立服务已弃用，功能已合并到 Gateway
-read -rp "  面板密码 [自动]: " COOKIE_MANAGER_PASSWORD
-if [[ -z "$COOKIE_MANAGER_PASSWORD" ]]; then
-  COOKIE_MANAGER_PASSWORD=$(random_key | head -c 16)
-  info "已生成面板密码: $COOKIE_MANAGER_PASSWORD"
+if [[ -n "${OLD_PASSWORD:-}" ]]; then
+  read -rp "  面板密码 [保留当前: ${OLD_PASSWORD:0:6}...]: " COOKIE_MANAGER_PASSWORD
+  COOKIE_MANAGER_PASSWORD="${COOKIE_MANAGER_PASSWORD:-$OLD_PASSWORD}"
+else
+  read -rp "  面板密码 [自动]: " COOKIE_MANAGER_PASSWORD
+  if [[ -z "$COOKIE_MANAGER_PASSWORD" ]]; then
+    COOKIE_MANAGER_PASSWORD=$(random_key | head -c 16)
+    info "已生成面板密码: $COOKIE_MANAGER_PASSWORD"
+  fi
 fi
 echo ""
 
 # [5/5] Gateway port
 step "5/5" "Gateway 统一入口端口"
-GATEWAY_PORT="9880"
-read -rp "  端口 [9880]: " USER_GW_PORT
-GATEWAY_PORT="${USER_GW_PORT:-9880}"
+DEFAULT_GW="${OLD_GATEWAY_PORT:-9880}"
+read -rp "  端口 [${DEFAULT_GW}]: " USER_GW_PORT
+GATEWAY_PORT="${USER_GW_PORT:-$DEFAULT_GW}"
 
 if port_in_use "$GATEWAY_PORT"; then
   warn "端口 ${GATEWAY_PORT} 已被占用！"
@@ -365,20 +393,33 @@ CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "创建账号配置文件 ..."
 mkdir -p envs cookie-cache state
 
+new_count=0
+kept_count=0
 for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
   env_file="envs/account${i}.env"
   if [[ -f "$env_file" ]]; then
-    echo "  $env_file 已存在，保留"
+    kept_count=$((kept_count + 1))
   else
     cat > "$env_file" <<EOF
 API_KEY=
 SECURE_1PSID=
 SECURE_1PSIDTS=
 EOF
-    echo "  已创建 $env_file"
+    new_count=$((new_count + 1))
   fi
   mkdir -p "cookie-cache/account${i}"
 done
+
+# 统计总数（包含超出 ACCOUNT_COUNT 的已有 env）
+total_envs=$(ls envs/account*.env 2>/dev/null | wc -l | tr -d ' ')
+if (( total_envs > ACCOUNT_COUNT )); then
+  extra=$((total_envs - ACCOUNT_COUNT))
+  info "新建 ${new_count} 个，保留 ${kept_count} 个，另有 ${extra} 个已有配置（共 ${total_envs} 个容器）"
+elif (( kept_count > 0 )); then
+  info "新建 ${new_count} 个，保留 ${kept_count} 个（共 ${total_envs} 个容器）"
+else
+  info "已创建 ${new_count} 个账号配置"
+fi
 
 # Step: Write .env
 CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -420,9 +461,12 @@ python3 scripts/generate_compose.py
 CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "构建并启动容器 ..."
 
-# 清理同名残留容器（用户可能删了目录但容器还在）
-for (( i=1; i<=ACCOUNT_COUNT; i++ )); do
-  cname="${CONTAINER_PREFIX}${i}"
+# 清理所有残留的同名容器（扫描全部 env 文件，不仅是 1~N）
+for env_file in envs/account*.env; do
+  [[ -f "$env_file" ]] || continue
+  n="${env_file##*account}"; n="${n%.env}"
+  [[ "$n" =~ ^[0-9]+$ ]] || continue
+  cname="${CONTAINER_PREFIX}${n}"
   if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
     docker stop "$cname" 2>/dev/null || true
     docker rm "$cname" 2>/dev/null || true
@@ -507,7 +551,8 @@ echo -e "  ${BOLD}模型列表:${NC}   http://YOUR_IP:${GATEWAY_PORT}/v1/models"
 echo -e "  ${BOLD}状态面板:${NC}   http://YOUR_IP:${GATEWAY_PORT}"
 echo -e "  ${BOLD}API 密钥:${NC}   ${USER_API_KEY}"
 echo ""
-echo -e "  智能轮询 ${ACCOUNT_COUNT} 个容器，自动跳过故障节点"
+FINAL_COUNT=$(ls envs/account*.env 2>/dev/null | wc -l | tr -d ' ')
+echo -e "  智能轮询 ${FINAL_COUNT} 个容器，自动跳过故障节点"
 echo -e "  支持 OpenAI 兼容格式，可直接接入酒馆/Kelivo/NewAPI 等"
 
 echo -e "  ${BOLD}面板密码:${NC}   ${COOKIE_MANAGER_PASSWORD}"
