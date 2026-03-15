@@ -203,33 +203,41 @@ async def proxy(request: Request, path: str):
         c.total_requests += 1
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                if is_stream:
-                    # Streaming proxy
-                    async with client.stream(
-                        request.method, target_url, content=body,
-                        headers=headers
-                    ) as resp:
-                        if resp.status_code >= 500:
-                            error_body = ""
-                            async for chunk in resp.aiter_bytes():
-                                error_body += chunk.decode(errors="replace")
-                            raise httpx.HTTPStatusError(
-                                f"HTTP {resp.status_code}: {error_body[:200]}",
-                                request=resp.request, response=resp
-                            )
-                        c.error_count = 0
+            if is_stream:
+                # Streaming: keep client alive until stream finishes
+                client = httpx.AsyncClient(timeout=120.0)
+                try:
+                    req = client.build_request(request.method, target_url, content=body, headers=headers)
+                    resp = await client.send(req, stream=True)
 
-                        async def stream_generator():
+                    if resp.status_code >= 500:
+                        error_body = (await resp.aread()).decode(errors="replace")[:200]
+                        await resp.aclose()
+                        await client.aclose()
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {resp.status_code}: {error_body}",
+                            request=resp.request, response=resp
+                        )
+                    c.error_count = 0
+
+                    async def stream_generator():
+                        try:
                             async for chunk in resp.aiter_bytes():
                                 yield chunk
+                        finally:
+                            await resp.aclose()
+                            await client.aclose()
 
-                        return StreamingResponse(
-                            stream_generator(),
-                            status_code=resp.status_code,
-                            media_type=resp.headers.get("content-type", "text/event-stream"),
-                        )
-                else:
+                    return StreamingResponse(
+                        stream_generator(),
+                        status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "text/event-stream"),
+                    )
+                except Exception:
+                    await client.aclose()
+                    raise
+            else:
+                async with httpx.AsyncClient(timeout=120.0) as client:
                     resp = await client.request(
                         request.method, target_url, content=body, headers=headers
                     )
