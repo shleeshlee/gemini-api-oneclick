@@ -459,16 +459,14 @@ async def fetch_base_models() -> list[dict]:
 
 @app.get("/v1/models", dependencies=[Depends(verify_auth)])
 async def list_models():
-    """Return model list with group prefixes."""
-    base_models = await fetch_base_models()
+    """Return model list with group prefixes, filtering out 'unspecified'."""
+    base_models = [m for m in await fetch_base_models() if m.get("id") != "unspecified"]
     groups = get_all_group_names()
 
     if not groups:
-        # No groups configured — return base models as-is
         return {"object": "list", "data": base_models}
 
     result = []
-    # Prefixed models for each group
     for g in sorted(groups):
         for m in base_models:
             result.append({
@@ -477,7 +475,6 @@ async def list_models():
                 "created": m.get("created", 0),
                 "owned_by": m.get("owned_by", "google"),
             })
-    # Also include unprefixed models (for ungrouped containers / backward compat)
     result.extend(base_models)
     return {"object": "list", "data": result}
 
