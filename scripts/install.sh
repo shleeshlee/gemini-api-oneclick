@@ -206,14 +206,61 @@ if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT
 fi
 echo ""
 
-# Port detection: find free range for ACCOUNT_COUNT containers
-DEFAULT_START=8001
-START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$DEFAULT_START") || error "Cannot find $ACCOUNT_COUNT consecutive free ports starting from $DEFAULT_START"
+# 容器端口分配
+DEFAULT_START=3001
+END_PORT=$((DEFAULT_START + ACCOUNT_COUNT - 1))
+echo -e "  推荐端口范围: ${BOLD}${DEFAULT_START}-${END_PORT}${NC}"
+echo ""
+echo "  [1] 使用推荐范围 ${DEFAULT_START}-${END_PORT}"
+echo "  [2] 自定义起始端口"
+echo ""
+read -rp "  选择 [1/2, 默认 1]: " port_choice
+port_choice="${port_choice:-1}"
 
-if (( START_PORT != DEFAULT_START )); then
-  warn "端口 $DEFAULT_START 已被占用，自动偏移到 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
+if [[ "$port_choice" == "2" ]]; then
+  read -rp "  输入起始端口: " DEFAULT_START
+  if ! [[ "$DEFAULT_START" =~ ^[0-9]+$ ]] || (( DEFAULT_START < 1024 || DEFAULT_START > 65000 )); then
+    error "端口无效（1024-65000）"
+  fi
+fi
+
+# 检测端口占用
+START_PORT="$DEFAULT_START"
+occupied_ports=()
+for (( i=0; i<ACCOUNT_COUNT; i++ )); do
+  p=$((START_PORT + i))
+  if port_in_use "$p"; then
+    occupied_ports+=("$p")
+  fi
+done
+
+if (( ${#occupied_ports[@]} > 0 )); then
+  warn "以下端口已被占用: ${occupied_ports[*]}"
+  echo ""
+  echo "  [1] 跳过已占用端口，自动顺延"
+  echo "  [2] 重新输入起始端口"
+  echo ""
+  read -rp "  选择 [1/2]: " conflict_choice
+
+  if [[ "$conflict_choice" == "2" ]]; then
+    read -rp "  输入新的起始端口: " START_PORT
+    if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || (( START_PORT < 1024 || START_PORT > 65000 )); then
+      error "端口无效（1024-65000）"
+    fi
+    # 再检一次
+    for (( i=0; i<ACCOUNT_COUNT; i++ )); do
+      p=$((START_PORT + i))
+      if port_in_use "$p"; then
+        error "端口 $p 仍被占用，请释放后重试"
+      fi
+    done
+  else
+    # 跳过占用端口，找到足够的连续空闲段
+    START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$START_PORT") || error "找不到 $ACCOUNT_COUNT 个连续空闲端口"
+    info "已顺延到 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
+  fi
 else
-  info "端口 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) 可用"
+  info "端口 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) 全部可用"
 fi
 echo ""
 
