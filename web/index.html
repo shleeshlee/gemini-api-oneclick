@@ -126,13 +126,15 @@ body::before {
 .stat-pill.warn { background: var(--danger-light); color: #B94A4A; }
 .stat-pill.disabled { background: var(--warn-light); color: #92610E; }
 
-.btn-icon {
-  width: 38px; height: 38px; border-radius: 10px; border: 2px solid var(--border);
-  background: var(--card); cursor: pointer; display: flex; align-items: center;
-  justify-content: center; font-size: 1.1rem; transition: all 0.15s;
+.btn-topbar {
+  padding: 0.4rem 0.9rem; border-radius: 10px; border: 2px solid var(--border);
+  background: var(--card); cursor: pointer; display: inline-flex; align-items: center;
+  gap: 0.35rem; font-size: 0.8rem; font-family: 'Outfit', sans-serif; font-weight: 500;
+  color: var(--text-muted); transition: all 0.15s; white-space: nowrap;
 }
-.btn-icon:hover { border-color: var(--primary-light); background: var(--bg-warm); }
-.btn-icon.spinning { animation: spin 0.8s linear infinite; }
+.btn-topbar:hover { border-color: var(--primary-light); background: var(--bg-warm); color: var(--text); }
+.btn-topbar.spinning { animation: spin 0.8s linear infinite; }
+.btn-topbar .icon { font-size: 0.95rem; line-height: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* --- GRID --- */
@@ -150,7 +152,11 @@ body::before {
 }
 .card.healthy::after { background: linear-gradient(90deg, var(--success), var(--accent)); }
 .card.unhealthy::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
-.card.disabled-card::after { background: linear-gradient(90deg, var(--warn), var(--accent)); }
+.card.disabled-card {
+  background: #F3F0ED; opacity: 0.55; filter: grayscale(0.6);
+}
+.card.disabled-card::after { background: var(--text-light); }
+.card.disabled-card:hover { opacity: 0.75; filter: grayscale(0.3); }
 .card.no-cookie::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
 .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--border); }
 
@@ -164,6 +170,13 @@ body::before {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 .card-name { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; flex-wrap: wrap; }
+.card-port { font-size: 0.7rem; color: var(--text-light); font-family: 'SF Mono', 'Fira Code', monospace; }
+.group-badge {
+  display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.5rem;
+  border-radius: 10px; letter-spacing: 0.3px; text-transform: uppercase;
+  font-family: 'Nunito', sans-serif;
+}
 
 .card-preview {
   font-size: 0.75rem; color: var(--text-light); font-family: 'SF Mono', 'Fira Code', monospace;
@@ -352,6 +365,23 @@ body::before {
 }
 .threshold-input:focus { border-color: var(--primary-light); }
 
+/* --- BATCH GROUP --- */
+.batch-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 0.4rem;
+  max-height: 280px; overflow-y: auto; padding: 0.6rem;
+  background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius-sm);
+}
+.batch-item {
+  display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem;
+  border-radius: 8px; cursor: pointer; transition: all 0.15s; user-select: none;
+  font-size: 0.82rem; font-family: 'Nunito', sans-serif; font-weight: 600;
+}
+.batch-item:hover { background: var(--bg-warm); }
+.batch-item.selected { background: var(--primary-light); color: white; }
+.batch-item .batch-group-dot {
+  font-size: 0.6rem; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -386,9 +416,10 @@ body::before {
       <span class="stat-pill ok" id="statOk">0 正常</span>
       <span class="stat-pill warn" id="statBad">0 异常</span>
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
-      <button class="btn-icon" id="refreshBtn" onclick="doRefresh()" title="刷新状态">&#x21BB;</button>
-      <button class="btn-icon" onclick="openGuardSettings()" title="Guard 设置">&#x2699;</button>
-      <button class="btn-icon" onclick="doLogout()" title="退出登录">&#x23FB;</button>
+      <button class="btn-topbar" onclick="openBatchGroup()"><span class="icon">&#x1F3F7;</span> 批量分组</button>
+      <button class="btn-topbar" id="refreshBtn" onclick="doRefresh()"><span class="icon">&#x21BB;</span> 刷新</button>
+      <button class="btn-topbar" onclick="openGuardSettings()"><span class="icon">&#x2699;</span> 设置</button>
+      <button class="btn-topbar" onclick="doLogout()"><span class="icon">&#x2192;</span> 退出</button>
     </div>
   </div>
   <div class="grid" id="grid"></div>
@@ -415,6 +446,11 @@ body::before {
     <div class="form-group">
       <label class="form-label">账号名称</label>
       <input type="text" class="form-input form-input-name" id="mName" placeholder="可选别名">
+    </div>
+    <div class="form-group">
+      <label class="form-label">分组标签</label>
+      <input type="text" class="form-input form-input-name" id="mGroup" placeholder="如 pro / was（留空 = 默认池）" spellcheck="false">
+      <div class="guard-hint">同一分组名的容器共享轮询池，通过模型前缀路由（如 pro-gemini-2.0-flash）</div>
     </div>
     <div class="form-group">
       <label class="form-label">SECURE_1PSID</label>
@@ -486,6 +522,34 @@ body::before {
   </div>
 </div>
 
+<!-- BATCH GROUP MODAL -->
+<div class="modal-overlay" id="batchGroupOverlay" onclick="event.target===this&&closeBatchGroup()">
+  <div class="modal" style="width:min(540px,92vw)">
+    <div class="modal-header">
+      <div class="modal-title">&#x1F3F7; 批量分组</div>
+      <button class="modal-close" onclick="closeBatchGroup()">&#x2715;</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">分组名称</label>
+      <input type="text" class="form-input form-input-name" id="batchGroupName" placeholder="输入分组名（如 pro / was），留空 = 移除分组" spellcheck="false">
+    </div>
+    <div class="form-group">
+      <label class="form-label">选择容器</label>
+      <div style="display:flex;gap:0.5rem;margin-bottom:0.6rem;flex-wrap:wrap">
+        <button class="card-btn" onclick="batchSelectAll()" style="font-size:0.78rem">全选</button>
+        <button class="card-btn" onclick="batchSelectNone()" style="font-size:0.78rem">全不选</button>
+        <button class="card-btn" onclick="batchSelectRange()" style="font-size:0.78rem">按范围选</button>
+      </div>
+      <div class="batch-grid" id="batchGrid"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeBatchGroup()">取消</button>
+      <button class="btn btn-primary" onclick="applyBatchGroup()">应用</button>
+    </div>
+    <div class="modal-msg" id="batchMsg"></div>
+  </div>
+</div>
+
 <!-- TOASTS -->
 <div class="toast-container" id="toasts"></div>
 
@@ -508,6 +572,13 @@ function esc(s) {
 function gwUrl(path) {
   const sep = path.includes('?') ? '&' : '?';
   return password ? `${path}${sep}key=${encodeURIComponent(password)}` : path;
+}
+
+const GROUP_COLORS = ['#7C5CFC','#E06B5E','#2D9CDB','#27AE60','#F2994A','#9B51E0','#EB5757','#219653'];
+function groupColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return GROUP_COLORS[Math.abs(h) % GROUP_COLORS.length];
 }
 
 function loadNames() {
@@ -630,6 +701,8 @@ function renderGrid() {
     const gw = gwMap[num] || null;
     const name = (gw && gw.name) || names[num] || '';
     const preview = a.psid_preview || '';
+    const group = (gw && gw.group) || '';
+    const port = (gw && gw.port) || '';
 
     let cardClass, dotClass, stateLabel;
     if (gw && !gw.enabled) {
@@ -668,12 +741,16 @@ function renderGrid() {
       errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
     }
 
+    const groupBadge = group ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>` : '';
+    const portLabel = port ? `<span class="card-port">:${port}</span>` : '';
+
     return `
       <div class="card ${cardClass}" onclick="openModal(${num})">
         <div class="card-header">
           <span class="card-num">#${num}</span>
           <span class="card-status ${dotClass}" title="${stateLabel}"></span>
         </div>
+        <div class="card-meta">${portLabel}${groupBadge}</div>
         <div class="card-name">${esc(name || 'Container ' + num)}</div>
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
@@ -728,8 +805,10 @@ function openModal(num) {
   currentNum = num;
   const gw = gatewayStatus && gatewayStatus.containers ? gatewayStatus.containers.find(c => c.num === num) : null;
   const displayName = (gw && gw.name) || names[num] || '';
+  const group = (gw && gw.group) || '';
   document.getElementById('modalTitle').textContent = '#' + num + ' — gemini_api_account_' + num;
   document.getElementById('mName').value = displayName;
+  document.getElementById('mGroup').value = group;
   document.getElementById('mPsid').value = '';
   document.getElementById('mPsidts').value = '';
   document.getElementById('modalMsg').textContent = '';
@@ -743,10 +822,18 @@ function closeModal() {
   if (currentNum !== null) {
     const nameVal = document.getElementById('mName').value.trim();
     saveName(currentNum, nameVal);
+    saveGroup(currentNum, document.getElementById('mGroup').value.trim());
     renderGrid();
   }
   document.getElementById('modalOverlay').classList.remove('active');
   currentNum = null;
+}
+
+function saveGroup(num, group) {
+  fetch(gwUrl(`/gateway/group/${num}`), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({group: group || ''})
+  }).then(() => loadAll()).catch(() => {});
 }
 
 document.addEventListener('keydown', e => {
@@ -770,6 +857,7 @@ function doDeploy() {
 
   const nameVal = document.getElementById('mName').value.trim();
   saveName(currentNum, nameVal);
+  saveGroup(currentNum, document.getElementById('mGroup').value.trim());
 
   btn.disabled = true;
   btn.textContent = '部署中...';
@@ -947,6 +1035,104 @@ function saveGuardSettings() {
     btn.textContent = '保存';
   });
 }
+
+// ── Batch Group ─────────────────────────────────────────────
+let batchSelected = new Set();
+
+function openBatchGroup() {
+  batchSelected = new Set();
+  document.getElementById('batchGroupName').value = '';
+  document.getElementById('batchMsg').textContent = '';
+  renderBatchGrid();
+  document.getElementById('batchGroupOverlay').classList.add('active');
+}
+
+function closeBatchGroup() {
+  document.getElementById('batchGroupOverlay').classList.remove('active');
+}
+
+function renderBatchGrid() {
+  const grid = document.getElementById('batchGrid');
+  const gwMap = {};
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
+  }
+  grid.innerHTML = accounts.map(a => {
+    const num = a.num;
+    const gw = gwMap[num];
+    const group = (gw && gw.group) || '';
+    const sel = batchSelected.has(num) ? 'selected' : '';
+    const dot = group ? `<span class="batch-group-dot" style="background:${groupColor(group)}"></span>` : '';
+    const label = group ? `#${num} <span style="font-weight:400;font-size:0.72rem;opacity:0.7">${esc(group)}</span>` : `#${num}`;
+    return `<div class="batch-item ${sel}" onclick="toggleBatchItem(${num})">${dot}${label}</div>`;
+  }).join('');
+}
+
+function toggleBatchItem(num) {
+  if (batchSelected.has(num)) batchSelected.delete(num);
+  else batchSelected.add(num);
+  renderBatchGrid();
+}
+
+function batchSelectAll() {
+  accounts.forEach(a => batchSelected.add(a.num));
+  renderBatchGrid();
+}
+
+function batchSelectNone() {
+  batchSelected.clear();
+  renderBatchGrid();
+}
+
+function batchSelectRange() {
+  const input = prompt('输入范围，如 1-12');
+  if (!input) return;
+  const m = input.match(/^(\d+)\s*[-~到]\s*(\d+)$/);
+  if (!m) { toast('格式错误，请输入如 1-12', 'err'); return; }
+  const lo = parseInt(m[1]), hi = parseInt(m[2]);
+  for (let i = lo; i <= hi; i++) {
+    if (accounts.some(a => a.num === i)) batchSelected.add(i);
+  }
+  renderBatchGrid();
+}
+
+function applyBatchGroup() {
+  if (batchSelected.size === 0) {
+    document.getElementById('batchMsg').className = 'modal-msg err';
+    document.getElementById('batchMsg').textContent = '请至少选择一个容器';
+    return;
+  }
+  const group = document.getElementById('batchGroupName').value.trim().toLowerCase();
+  const groups = {};
+  batchSelected.forEach(num => { groups[String(num)] = group; });
+
+  fetch(gwUrl('/gateway/batch-group'), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({groups})
+  })
+  .then(r => r.json().then(data => ({ok: r.ok, data})))
+  .then(({ok, data}) => {
+    if (ok) {
+      const action = group ? `已设为 [${group}]` : '已移除分组';
+      toast(`${batchSelected.size} 个容器${action}`, 'ok');
+      closeBatchGroup();
+      loadAll();
+    } else {
+      throw new Error(data.detail || '操作失败');
+    }
+  })
+  .catch(e => {
+    document.getElementById('batchMsg').className = 'modal-msg err';
+    document.getElementById('batchMsg').textContent = e.message;
+  });
+}
+
+// ESC also closes batch group modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('batchGroupOverlay').classList.contains('active')) {
+    closeBatchGroup();
+  }
+});
 
 </script>
 </body>
