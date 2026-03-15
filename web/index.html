@@ -191,7 +191,7 @@ body::before {
   padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.card-actions { margin-top: 0.4rem; display: flex; gap: 0.4rem; }
+.card-actions { margin-top: 0.4rem; display: flex; gap: 0.4rem; justify-content: space-between; }
 .card-btn {
   font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg); cursor: pointer; font-family: 'Outfit'; transition: all 0.15s;
@@ -815,9 +815,9 @@ function renderGrid() {
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
       if (gw.enabled) {
-        actionBtn = testBtn + `<button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
+        actionBtn = testBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
-        actionBtn = testBtn + `<button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
+        actionBtn = testBtn + `<span style="flex:1"></span><button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
       }
     }
 
