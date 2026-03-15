@@ -661,6 +661,12 @@ function doLogin() {
       throw new Error(data.detail || data.error || '登录失败');
     }
     password = pwd;
+    // 触发浏览器保存密码
+    if (window.PasswordCredential) {
+      try {
+        navigator.credentials.store(new PasswordCredential({id: 'admin', password: pwd}));
+      } catch(e) {}
+    }
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.add('visible');
     loadNames();
@@ -681,7 +687,14 @@ function doLogout() {
   document.getElementById('loginErr').textContent = '';
 }
 
-// Enter 由 form onsubmit 处理
+// 自动填充已保存的密码
+if (window.PasswordCredential) {
+  navigator.credentials.get({password: true}).then(cred => {
+    if (cred && cred.password) {
+      document.getElementById('loginPwd').value = cred.password;
+    }
+  }).catch(() => {});
+}
 
 // ── Data Loading ───────────────────────────────────────────
 async function loadAll() {
