@@ -25,7 +25,7 @@ import uvicorn
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENVS_DIR = ROOT_DIR / "envs"
-GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "9800"))
+GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "9880"))
 GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
 BASE_PORT = int(os.environ.get("BASE_PORT", "8001"))
 
