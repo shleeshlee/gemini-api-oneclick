@@ -365,30 +365,7 @@ body::before {
 }
 .threshold-input:focus { border-color: var(--primary-light); }
 
-/* --- SELECTION & GROUP MANAGER --- */
-.card-checkbox {
-  position: absolute; top: 0.6rem; right: 0.6rem; width: 20px; height: 20px;
-  border: 2px solid var(--border); border-radius: 6px; background: var(--card);
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; color: white; transition: all 0.15s; z-index: 2;
-}
-.card-checkbox:hover { border-color: var(--primary); }
-.card-checkbox.checked { background: var(--primary); border-color: var(--primary); }
-
-.selection-toolbar {
-  position: fixed; bottom: -70px; left: 50%; transform: translateX(-50%);
-  background: var(--card); border-radius: 16px; box-shadow: var(--shadow-lg);
-  padding: 0.7rem 1.2rem; display: flex; align-items: center; gap: 0.8rem;
-  z-index: 600; transition: bottom 0.3s ease; border: 2px solid var(--border);
-}
-.selection-toolbar.visible { bottom: 1.5rem; }
-.sel-count { font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.9rem; white-space: nowrap; }
-.sel-group-select {
-  padding: 0.4rem 0.8rem; border: 2px solid var(--border); border-radius: 8px;
-  font-family: 'Outfit', sans-serif; font-size: 0.85rem; background: var(--bg);
-  outline: none; cursor: pointer; min-width: 120px;
-}
-
+/* --- GROUP MANAGER --- */
 .group-def-item {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0.6rem 0.8rem; background: var(--bg); border-radius: 8px;
@@ -405,6 +382,38 @@ body::before {
   display: flex; align-items: center; justify-content: center;
 }
 .group-def-del:hover { background: var(--danger-light); color: var(--danger); }
+.group-def-actions { display: flex; gap: 0.3rem; }
+.group-def-btn {
+  width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
+  cursor: pointer; font-size: 0.85rem; color: var(--text-light); transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.group-def-btn:hover { background: var(--bg-warm); color: var(--text); }
+
+.gm-picker {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 0.35rem;
+  max-height: 240px; overflow-y: auto; padding: 0.5rem;
+  background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius-sm);
+}
+.gm-pick-item {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0.35rem 0.4rem; border-radius: 8px; cursor: pointer;
+  transition: all 0.15s; user-select: none;
+  font-size: 0.82rem; font-family: 'Nunito', sans-serif; font-weight: 600;
+  border: 2px solid transparent;
+}
+.gm-pick-item:hover { background: var(--bg-warm); }
+.gm-pick-item.picked { background: var(--primary); color: white; border-color: var(--primary-dark); }
+.gm-pick-item.other-group { opacity: 0.4; }
+.gm-section-title {
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.85rem;
+  color: var(--text-muted); margin: 0.8rem 0 0.4rem; display: flex; align-items: center; gap: 0.5rem;
+}
+.gm-back-btn {
+  font-size: 0.85rem; color: var(--primary); cursor: pointer; font-weight: 600;
+  background: none; border: none; font-family: 'Outfit', sans-serif; padding: 0;
+}
+.gm-back-btn:hover { text-decoration: underline; }
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -552,35 +561,41 @@ body::before {
 
 <!-- GROUP MANAGER MODAL -->
 <div class="modal-overlay" id="groupMgrOverlay" onclick="event.target===this&&closeGroupManager()">
-  <div class="modal" style="width:min(460px,92vw)">
+  <div class="modal" style="width:min(520px,92vw)">
     <div class="modal-header">
-      <div class="modal-title">&#x1F3F7; 分组管理</div>
+      <div class="modal-title" id="gmTitle">&#x1F3F7; 分组管理</div>
       <button class="modal-close" onclick="closeGroupManager()">&#x2715;</button>
     </div>
-    <div class="form-group">
-      <label class="form-label">新建分组</label>
-      <div style="display:flex;gap:0.5rem">
-        <input type="text" class="form-input form-input-name" id="newGroupName" placeholder="分组名（小写字母/数字）" spellcheck="false" style="flex:1">
-        <button class="btn btn-primary" onclick="createGroup()" style="flex:0 0 auto;padding:0.6rem 1.2rem">创建</button>
+    <!-- Main view: group list -->
+    <div id="gmMainView">
+      <div class="form-group">
+        <label class="form-label">新建分组</label>
+        <div style="display:flex;gap:0.5rem">
+          <input type="text" class="form-input form-input-name" id="newGroupName" placeholder="分组名（小写字母/数字）" spellcheck="false" style="flex:1">
+          <button class="btn btn-primary" onclick="createGroup()" style="flex:0 0 auto;padding:0.6rem 1.2rem">创建</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">分组列表</label>
+        <div id="groupDefsList" style="min-height:40px"></div>
       </div>
     </div>
-    <div class="form-group">
-      <label class="form-label">已有分组</label>
-      <div id="groupDefsList" style="min-height:40px"></div>
+    <!-- Picker view: assign containers to a group -->
+    <div id="gmPickerView" style="display:none">
+      <div style="margin-bottom:0.8rem">
+        <button class="gm-back-btn" onclick="gmShowMain()">&#x2190; 返回列表</button>
+      </div>
+      <div class="gm-section-title">勾选要加入此分组的容器（点击切换）</div>
+      <div class="gm-picker" id="gmPickerGrid"></div>
+      <div class="modal-actions" style="margin-top:1rem">
+        <button class="btn btn-ghost" onclick="gmShowMain()">取消</button>
+        <button class="btn btn-primary" onclick="gmSavePicker()">保存</button>
+      </div>
     </div>
     <div class="modal-msg" id="groupMgrMsg"></div>
   </div>
 </div>
 
-<!-- SELECTION TOOLBAR (floating at bottom when cards selected) -->
-<div class="selection-toolbar" id="selToolbar">
-  <span class="sel-count" id="selCount">已选 0 个</span>
-  <select class="sel-group-select" id="selGroupSelect">
-    <option value="">默认分组</option>
-  </select>
-  <button class="btn btn-primary" onclick="applySelection()" style="padding:0.5rem 1.2rem;font-size:0.85rem">应用</button>
-  <button class="btn btn-ghost" onclick="clearSelection()" style="padding:0.5rem 0.8rem;font-size:0.85rem">取消</button>
-</div>
 
 <!-- TOASTS -->
 <div class="toast-container" id="toasts"></div>
@@ -776,13 +791,9 @@ function renderGrid() {
       ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>`
       : `<span class="group-badge" style="background:var(--border);color:var(--text-muted)">默认</span>`;
     const portLabel = port ? `<span class="card-port">:${port}</span>` : '';
-    const checked = selectedCards.has(num) ? 'checked' : '';
 
     return `
       <div class="card ${cardClass}" onclick="openModal(${num})">
-        <div class="card-checkbox ${checked}" onclick="event.stopPropagation();toggleSelect(${num})">
-          ${selectedCards.has(num) ? '&#x2713;' : ''}
-        </div>
         <div class="card-header">
           <span class="card-num">#${num}</span>
           <span class="card-status ${dotClass}" title="${stateLabel}"></span>
@@ -878,7 +889,6 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.getElementById('groupMgrOverlay').classList.contains('active')) closeGroupManager();
     else if (document.getElementById('guardOverlay').classList.contains('active')) closeGuardSettings();
-    else if (selectedCards.size > 0) clearSelection();
     else closeModal();
   }
 });
@@ -1076,32 +1086,9 @@ function saveGuardSettings() {
   });
 }
 
-// ── Card Selection (主界面勾选) ─────────────────────────────
-let selectedCards = new Set();
-
-function toggleSelect(num) {
-  if (selectedCards.has(num)) selectedCards.delete(num);
-  else selectedCards.add(num);
-  updateSelectionUI();
-  renderGrid();
-}
-
-function clearSelection() {
-  selectedCards.clear();
-  updateSelectionUI();
-  renderGrid();
-}
-
-function updateSelectionUI() {
-  const toolbar = document.getElementById('selToolbar');
-  if (selectedCards.size > 0) {
-    toolbar.classList.add('visible');
-    document.getElementById('selCount').textContent = `已选 ${selectedCards.size} 个`;
-    populateGroupSelect('selGroupSelect');
-  } else {
-    toolbar.classList.remove('visible');
-  }
-}
+// ── Group Manager (分组管理弹窗) ────────────────────────────
+let gmPickerGroup = '';  // which group is being edited in picker
+let gmPickerSet = new Set();  // container nums selected in picker
 
 function populateGroupSelect(selectId) {
   const sel = document.getElementById(selectId);
@@ -1112,31 +1099,10 @@ function populateGroupSelect(selectId) {
   sel.value = current;
 }
 
-function applySelection() {
-  const group = document.getElementById('selGroupSelect').value;
-  const nums = Array.from(selectedCards);
-  fetch('/gateway/batch-group', {
-    method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({group: group, containers: nums})
-  })
-  .then(r => r.json().then(data => ({ok: r.ok, data})))
-  .then(({ok, data}) => {
-    if (ok) {
-      const label = group || '默认';
-      toast(`${nums.length} 个容器 → [${label}]`, 'ok');
-      clearSelection();
-      loadAll();
-    } else {
-      throw new Error(data.detail || '操作失败');
-    }
-  })
-  .catch(e => toast(e.message, 'err'));
-}
-
-// ── Group Manager (分组管理弹窗) ────────────────────────────
 function openGroupManager() {
   document.getElementById('newGroupName').value = '';
   document.getElementById('groupMgrMsg').textContent = '';
+  gmShowMain();
   renderGroupDefs();
   document.getElementById('groupMgrOverlay').classList.add('active');
 }
@@ -1145,32 +1111,59 @@ function closeGroupManager() {
   document.getElementById('groupMgrOverlay').classList.remove('active');
 }
 
+function gmShowMain() {
+  document.getElementById('gmMainView').style.display = '';
+  document.getElementById('gmPickerView').style.display = 'none';
+  document.getElementById('gmTitle').innerHTML = '&#x1F3F7; 分组管理';
+}
+
+function gmGetCounts() {
+  const counts = {};
+  const defs = (gatewayStatus && gatewayStatus.group_defs) || [];
+  defs.forEach(g => { counts[g] = 0; });
+  let defaultCount = 0;
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => {
+      if (c.group && counts[c.group] !== undefined) counts[c.group]++;
+      else defaultCount++;
+    });
+  }
+  counts['__default__'] = defaultCount;
+  return counts;
+}
+
 function renderGroupDefs() {
   const defs = (gatewayStatus && gatewayStatus.group_defs) || [];
-  const gwMap = {};
-  if (gatewayStatus && gatewayStatus.containers) {
-    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
-  }
-  const counts = {};
-  defs.forEach(g => { counts[g] = 0; });
-  Object.values(gwMap).forEach(c => {
-    if (c.group && counts[c.group] !== undefined) counts[c.group]++;
-  });
-
+  const counts = gmGetCounts();
   const list = document.getElementById('groupDefsList');
-  if (defs.length === 0) {
-    list.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;padding:0.5rem">暂无分组，创建一个吧</div>';
-    return;
-  }
-  list.innerHTML = defs.map(g => `
+
+  // Default group (always shown)
+  let html = `
     <div class="group-def-item">
       <div class="group-def-name">
-        <span class="group-badge" style="background:${groupColor(g)};color:#fff">${esc(g)}</span>
-        <span class="group-def-count">${counts[g] || 0} 个容器</span>
+        <span class="group-badge" style="background:var(--border);color:var(--text-muted)">默认</span>
+        <span class="group-def-count">${counts['__default__'] || 0} 个容器</span>
       </div>
-      <button class="group-def-del" onclick="deleteGroup('${esc(g)}')" title="删除分组">&#x1F5D1;</button>
-    </div>
-  `).join('');
+    </div>`;
+
+  if (defs.length === 0) {
+    html += '<div style="color:var(--text-muted);font-size:0.85rem;padding:0.5rem">暂无自定义分组</div>';
+  } else {
+    html += defs.map(g => `
+      <div class="group-def-item">
+        <div class="group-def-name">
+          <span class="group-badge" style="background:${groupColor(g)};color:#fff">${esc(g)}</span>
+          <span class="group-def-count">${counts[g] || 0} 个容器</span>
+        </div>
+        <div class="group-def-actions">
+          <button class="group-def-btn" onclick="gmOpenPicker('${esc(g)}')" title="选择容器">&#x1F4E6;</button>
+          <button class="group-def-btn" onclick="renameGroup('${esc(g)}')" title="改名">&#x270F;</button>
+          <button class="group-def-del" onclick="deleteGroup('${esc(g)}')" title="删除">&#x1F5D1;</button>
+        </div>
+      </div>
+    `).join('');
+  }
+  list.innerHTML = html;
 }
 
 function createGroup() {
@@ -1188,9 +1181,7 @@ function createGroup() {
       document.getElementById('newGroupName').value = '';
       msg.textContent = '';
       loadAll().then(() => renderGroupDefs());
-    } else {
-      throw new Error(data.detail || '创建失败');
-    }
+    } else { throw new Error(data.detail || '创建失败'); }
   })
   .catch(e => { msg.className = 'modal-msg err'; msg.textContent = e.message; });
 }
@@ -1203,14 +1194,101 @@ function deleteGroup(name) {
   })
   .then(r => r.json().then(data => ({ok: r.ok, data})))
   .then(({ok, data}) => {
-    if (ok) {
-      toast(`分组 [${name}] 已删除`, 'ok');
-      loadAll().then(() => renderGroupDefs());
-    } else {
-      throw new Error(data.detail || '删除失败');
-    }
+    if (ok) { toast(`分组 [${name}] 已删除`, 'ok'); loadAll().then(() => renderGroupDefs()); }
+    else { throw new Error(data.detail || '删除失败'); }
   })
   .catch(e => toast(e.message, 'err'));
+}
+
+function renameGroup(name) {
+  const newName = prompt(`修改分组名 [${name}]，输入新名称：`, name);
+  if (!newName || newName.trim().toLowerCase() === name) return;
+  fetch('/gateway/rename-group', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({old: name, new: newName.trim().toLowerCase()})
+  })
+  .then(r => r.json().then(data => ({ok: r.ok, data})))
+  .then(({ok, data}) => {
+    if (ok) { toast(`分组已改名 → [${newName.trim().toLowerCase()}]`, 'ok'); loadAll().then(() => renderGroupDefs()); }
+    else { throw new Error(data.detail || '改名失败'); }
+  })
+  .catch(e => toast(e.message, 'err'));
+}
+
+// ── Container Picker (为分组选择容器) ────────────────────────
+function gmOpenPicker(group) {
+  gmPickerGroup = group;
+  gmPickerSet = new Set();
+  // Pre-select containers already in this group
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => {
+      if (c.group === group) gmPickerSet.add(c.num);
+    });
+  }
+  document.getElementById('gmMainView').style.display = 'none';
+  document.getElementById('gmPickerView').style.display = '';
+  document.getElementById('gmTitle').innerHTML =
+    `&#x1F4E6; 为 <span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span> 选择容器`;
+  gmRenderPicker();
+}
+
+function gmRenderPicker() {
+  const grid = document.getElementById('gmPickerGrid');
+  const gwMap = {};
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
+  }
+  grid.innerHTML = accounts.map(a => {
+    const num = a.num;
+    const gw = gwMap[num];
+    const curGroup = (gw && gw.group) || '';
+    const picked = gmPickerSet.has(num);
+    const otherGroup = curGroup && curGroup !== gmPickerGroup;
+    const cls = picked ? 'picked' : (otherGroup ? 'other-group' : '');
+    const suffix = otherGroup ? ` <span style="font-size:0.65rem;font-weight:400">(${curGroup})</span>` : '';
+    return `<div class="gm-pick-item ${cls}" onclick="gmTogglePick(${num})">#${num}${suffix}</div>`;
+  }).join('');
+}
+
+function gmTogglePick(num) {
+  if (gmPickerSet.has(num)) gmPickerSet.delete(num);
+  else gmPickerSet.add(num);
+  gmRenderPicker();
+}
+
+function gmSavePicker() {
+  // Find what changed: containers to add to this group + containers to remove
+  const toAdd = Array.from(gmPickerSet);
+  const toRemove = [];
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => {
+      if (c.group === gmPickerGroup && !gmPickerSet.has(c.num)) {
+        toRemove.push(c.num);
+      }
+    });
+  }
+
+  // Batch set: selected → this group, deselected → default
+  const promises = [];
+  if (toAdd.length > 0) {
+    promises.push(fetch('/gateway/batch-group', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({group: gmPickerGroup, containers: toAdd})
+    }));
+  }
+  if (toRemove.length > 0) {
+    promises.push(fetch('/gateway/batch-group', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({group: '', containers: toRemove})
+    }));
+  }
+
+  Promise.all(promises)
+    .then(() => {
+      toast(`[${gmPickerGroup}] 已更新`, 'ok');
+      loadAll().then(() => { renderGroupDefs(); gmShowMain(); });
+    })
+    .catch(e => toast(e.message, 'err'));
 }
 
 document.getElementById('newGroupName').addEventListener('keydown', e => {

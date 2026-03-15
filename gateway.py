@@ -636,6 +636,32 @@ async def create_group(request: Request):
     return {"ok": True}
 
 
+@app.post("/gateway/rename-group", dependencies=[Depends(verify_auth)])
+async def rename_group(request: Request):
+    """Rename a group definition. Containers follow automatically."""
+    body = await request.json()
+    old = body.get("old", "").strip().lower()
+    new = body.get("new", "").strip().lower()
+    if old not in group_defs:
+        raise HTTPException(status_code=404, detail=f"分组 [{old}] 不存在")
+    if not new:
+        raise HTTPException(status_code=400, detail="新名称不能为空")
+    if not re.match(r'^[a-z0-9_-]+$', new):
+        raise HTTPException(status_code=400, detail="分组名只能包含小写字母、数字、下划线、横杠")
+    if new != old and new in group_defs:
+        raise HTTPException(status_code=400, detail=f"分组 [{new}] 已存在")
+    # Rename in defs
+    group_defs[group_defs.index(old)] = new
+    # Rename in container assignments
+    for num in list(container_groups.keys()):
+        if container_groups[num] == old:
+            container_groups[num] = new
+    save_group_defs()
+    save_groups()
+    add_log("info", None, f"Group renamed [{old}] → [{new}]")
+    return {"ok": True}
+
+
 @app.post("/gateway/delete-group", dependencies=[Depends(verify_auth)])
 async def delete_group(request: Request):
     """Delete a group definition and ungroup its containers."""
