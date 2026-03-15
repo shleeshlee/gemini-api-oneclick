@@ -463,7 +463,6 @@ body::before {
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
       <button class="btn-topbar" onclick="openGroupManager()"><span class="icon">&#x1F3F7;</span> 分组管理</button>
       <button class="btn-topbar" id="refreshBtn" onclick="doRefresh()"><span class="icon">&#x21BB;</span> 刷新</button>
-      <button class="btn-topbar" onclick="refreshModels()"><span class="icon">&#x1F504;</span> 刷新模型</button>
       <button class="btn-topbar" onclick="openGuardSettings()"><span class="icon">&#x2699;</span> 设置</button>
       <button class="btn-topbar" onclick="doLogout()"><span class="icon">&#x2192;</span> 退出</button>
     </div>
@@ -569,6 +568,17 @@ body::before {
         <input type="text" class="tag-new-input" id="keywordsInput" placeholder="输入关键词 + 回车">
       </div>
       <div class="guard-hint">错误信息包含这些关键词时触发计数。不区分大小写。</div>
+    </div>
+
+    <div class="guard-section">
+      <div class="guard-section-title">模型列表</div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label" id="modelInfo">从容器获取可用模型</div>
+          <div class="toggle-desc">更新 /v1/models 返回的模型列表</div>
+        </div>
+        <button class="btn btn-primary" onclick="refreshModels()" style="padding:0.4rem 1rem;font-size:0.82rem">刷新模型</button>
+      </div>
     </div>
 
     <div class="modal-actions">
@@ -866,19 +876,37 @@ async function toggleContainer(num, enable) {
 // ── Container Test ─────────────────────────────────────────
 async function testContainer(num) {
   const btn = document.getElementById('testBtn' + num);
-  if (btn) { btn.classList.add('testing'); btn.textContent = '测试中...'; }
+  if (!btn) return;
+  btn.classList.add('testing');
+  btn.textContent = '测试中...';
+  btn.style.minWidth = btn.offsetWidth + 'px';
   try {
     const resp = await fetch(`/gateway/test/${num}`, { method: 'POST', headers: authHeaders() });
     const data = await resp.json();
     if (data.ok) {
-      toast(`#${num} 正常 ✓ "${data.reply}"`, 'ok');
+      btn.textContent = '✓ 可用';
+      btn.style.borderColor = 'var(--success)';
+      btn.style.color = '#2D7A52';
+      btn.style.background = 'var(--success-light)';
+      toast(`#${num} 正常 — "${data.reply}"`, 'ok');
     } else {
+      btn.textContent = '✗ 异常';
+      btn.style.borderColor = 'var(--danger)';
+      btn.style.color = '#B94A4A';
+      btn.style.background = 'var(--danger-light)';
       toast(`#${num} 异常: ${data.error}`, 'err');
     }
   } catch(e) {
+    btn.textContent = '✗ 失败';
+    btn.style.borderColor = 'var(--danger)';
+    btn.style.color = '#B94A4A';
     toast(`#${num} 测试失败: ${e.message}`, 'err');
   } finally {
-    if (btn) { btn.classList.remove('testing'); btn.textContent = '测试'; }
+    btn.classList.remove('testing');
+    setTimeout(() => {
+      btn.textContent = '测试';
+      btn.style.cssText = '';
+    }, 5000);
   }
 }
 

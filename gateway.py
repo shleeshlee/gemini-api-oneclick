@@ -293,8 +293,48 @@ async def check_health(c: Container, client: httpx.AsyncClient):
         add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
 
 
+_last_log_ts: dict[int, str] = {}  # container num -> last seen log timestamp
+_LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback",
+                 "credentials", "401", "403", "500", "timeout", "client_ready"}
+
+
+async def sample_container_logs():
+    """Read recent docker logs from all containers, surface important entries."""
+    for c in containers.values():
+        cname = f"gemini_api_account_{c.num}"
+        try:
+            since = _last_log_ts.get(c.num, "")
+            args = ["docker", "logs", "--tail", "10", "--timestamps", cname]
+            if since:
+                args = ["docker", "logs", "--since", since, "--timestamps", cname]
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            lines = stdout.decode(errors="replace").splitlines()
+            if lines:
+                # Update timestamp cursor
+                last = lines[-1]
+                if last and last[0].isdigit() and "T" in last[:30]:
+                    _last_log_ts[c.num] = last.split(" ")[0]
+                # Surface important lines
+                for line in lines:
+                    lower = line.lower()
+                    if any(kw in lower for kw in _LOG_KEYWORDS):
+                        # Strip docker timestamp prefix for cleaner display
+                        text = line.split(" ", 1)[-1] if " " in line else line
+                        text = text.strip()[:150]
+                        if text:
+                            level = "error" if any(k in lower for k in {"error", "exception", "failed", "traceback"}) else "warn"
+                            add_log(level, c.num, text)
+        except Exception:
+            pass  # Don't let log sampling crash the loop
+
+
 async def health_loop():
-    """Background health check loop."""
+    """Background health check + log aggregation loop."""
     await asyncio.sleep(5)  # initial delay
     async with httpx.AsyncClient() as client:
         while True:
@@ -304,6 +344,9 @@ async def health_loop():
             available = sum(1 for c in containers.values() if c.available)
             total = len(containers)
             add_log("info", None, f"Health check: {available}/{total} available")
+
+            # Sample container logs for errors
+            await sample_container_logs()
 
             await asyncio.sleep(HEALTH_INTERVAL)
 
