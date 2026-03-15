@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cookie Manager</title>
+<title>Gemini Gateway</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -23,6 +23,8 @@
   --success-light: #D4F0E1;
   --danger: #FF7B7B;
   --danger-light: #FFD4D4;
+  --warn: #FFB347;
+  --warn-light: #FFE4B5;
   --text: #3D3535;
   --text-muted: #9E8E8E;
   --text-light: #C4B0B0;
@@ -106,7 +108,7 @@ body::before {
 
 /* --- TOPBAR --- */
 .topbar {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.8rem;
   margin-bottom: 1.5rem; padding: 1rem 1.5rem;
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
 }
@@ -114,7 +116,7 @@ body::before {
 .topbar-logo { font-size: 1.8rem; }
 .topbar-title { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.3rem; }
 .topbar-sub { font-size: 0.8rem; color: var(--text-muted); }
-.topbar-right { display: flex; align-items: center; gap: 0.6rem; }
+.topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 
 .stat-pill {
   display: inline-flex; align-items: center; gap: 0.4rem;
@@ -122,6 +124,7 @@ body::before {
 }
 .stat-pill.ok { background: var(--success-light); color: #2D7A52; }
 .stat-pill.warn { background: var(--danger-light); color: #B94A4A; }
+.stat-pill.disabled { background: var(--warn-light); color: #92610E; }
 
 .btn-icon {
   width: 38px; height: 38px; border-radius: 10px; border: 2px solid var(--border);
@@ -133,7 +136,7 @@ body::before {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* --- GRID --- */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 
 /* --- CARD --- */
 .card {
@@ -145,18 +148,22 @@ body::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: var(--border); transition: background 0.2s;
 }
-.card.has-cookie::after { background: linear-gradient(90deg, var(--success), var(--accent)); }
+.card.healthy::after { background: linear-gradient(90deg, var(--success), var(--accent)); }
+.card.unhealthy::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
+.card.disabled-card::after { background: linear-gradient(90deg, var(--warn), var(--accent)); }
 .card.no-cookie::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
 .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--border); }
 
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
 .card-num { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.1rem; color: var(--text); }
 .card-status { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.card-status.ok { background: var(--success); box-shadow: 0 0 8px rgba(110,200,155,0.4); }
-.card-status.bad { background: var(--danger); box-shadow: 0 0 8px rgba(255,123,123,0.4); animation: pulse 2s ease-in-out infinite; }
+.card-status.green { background: var(--success); box-shadow: 0 0 8px rgba(110,200,155,0.4); }
+.card-status.red { background: var(--danger); box-shadow: 0 0 8px rgba(255,123,123,0.4); animation: pulse 2s ease-in-out infinite; }
+.card-status.yellow { background: var(--warn); }
+.card-status.grey { background: var(--text-light); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.card-name { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .card-preview {
   font-size: 0.75rem; color: var(--text-light); font-family: 'SF Mono', 'Fira Code', monospace;
@@ -164,6 +171,21 @@ body::before {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .card-preview.empty { color: var(--danger); background: var(--danger-light); font-family: 'Outfit', sans-serif; }
+
+.card-stats { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
+.card-error {
+  font-size: 0.7rem; color: var(--danger); background: var(--danger-light);
+  padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-actions { margin-top: 0.4rem; display: flex; gap: 0.4rem; }
+.card-btn {
+  font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); cursor: pointer; font-family: 'Outfit'; transition: all 0.15s;
+}
+.card-btn:hover { background: var(--bg-warm); border-color: var(--primary-light); }
+.card-btn.enable { border-color: var(--success); color: #2D7A52; }
+.card-btn.disable { border-color: var(--danger); color: #B94A4A; }
 
 /* --- MODAL --- */
 .modal-overlay {
@@ -214,6 +236,35 @@ body::before {
 .modal-msg { margin-top: 0.8rem; font-size: 0.85rem; min-height: 1.2rem; text-align: center; }
 .modal-msg.ok { color: var(--success); }
 .modal-msg.err { color: var(--danger); }
+
+/* --- LOG PANEL --- */
+.log-panel {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  overflow: hidden; margin-bottom: 1.5rem;
+}
+.log-toggle {
+  padding: 0.8rem 1.2rem; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; user-select: none;
+}
+.log-toggle:hover { background: var(--bg-warm); }
+.log-header {
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.95rem;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.log-arrow { transition: transform 0.2s; font-size: 0.8rem; color: var(--text-muted); }
+.log-arrow.open { transform: rotate(180deg); }
+.log-body { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+.log-body.open { max-height: 350px; overflow-y: auto; }
+.log-list { padding: 0 1.2rem 0.8rem; }
+.log-entry {
+  font-size: 0.78rem; font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 0.2rem 0; border-bottom: 1px solid var(--bg); line-height: 1.5;
+}
+.log-entry .time { color: var(--text-light); margin-right: 0.5rem; }
+.log-entry .cnum { color: var(--primary); font-weight: 600; margin-right: 0.4rem; }
+.log-entry.error { color: var(--danger); }
+.log-entry.warn { color: var(--warn); }
+.log-entry.info { color: var(--text-muted); }
 
 /* --- TOAST --- */
 .toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-end; }
@@ -312,11 +363,11 @@ body::before {
 <!-- LOGIN -->
 <div class="login-screen" id="loginScreen">
   <div class="login-box">
-    <span class="login-icon">&#x1F36A;</span>
-    <h1>Cookie Manager</h1>
+    <span class="login-icon">&#x26A1;</span>
+    <h1>Gemini Gateway</h1>
     <p>Gemini API OneClick</p>
-    <input type="password" class="login-input" id="loginPwd" placeholder="Enter password" autocomplete="off">
-    <button class="login-btn" id="loginBtn" onclick="doLogin()">Sign In</button>
+    <input type="password" class="login-input" id="loginPwd" placeholder="输入密码" autocomplete="off">
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">登录</button>
     <div class="login-error" id="loginErr"></div>
   </div>
 </div>
@@ -325,24 +376,36 @@ body::before {
 <div class="app" id="app">
   <div class="topbar">
     <div class="topbar-left">
-      <span class="topbar-logo">&#x1F36A;</span>
+      <span class="topbar-logo">&#x26A1;</span>
       <div>
-        <div class="topbar-title">Cookie Manager</div>
+        <div class="topbar-title">Gemini Gateway</div>
         <div class="topbar-sub" id="topbarSub">Gemini API OneClick</div>
       </div>
     </div>
     <div class="topbar-right">
-      <span class="stat-pill ok" id="statOk">0 active</span>
-      <span class="stat-pill warn" id="statBad">0 empty</span>
-      <button class="btn-icon" id="refreshBtn" onclick="loadAccounts()" title="Refresh">&#x21BB;</button>
-      <button class="btn-icon" onclick="openGuardSettings()" title="Guard Settings">&#x2699;</button>
-      <button class="btn-icon" onclick="doLogout()" title="Logout">&#x23FB;</button>
+      <span class="stat-pill ok" id="statOk">0 正常</span>
+      <span class="stat-pill warn" id="statBad">0 异常</span>
+      <span class="stat-pill disabled" id="statOff">0 已禁用</span>
+      <button class="btn-icon" id="refreshBtn" onclick="doRefresh()" title="刷新状态">&#x21BB;</button>
+      <button class="btn-icon" onclick="openGuardSettings()" title="Guard 设置">&#x2699;</button>
+      <button class="btn-icon" onclick="doLogout()" title="退出登录">&#x23FB;</button>
     </div>
   </div>
   <div class="grid" id="grid"></div>
+
+  <!-- Log Panel (collapsible) -->
+  <div class="log-panel">
+    <div class="log-toggle" onclick="toggleLogs()">
+      <div class="log-header">&#x1F4CB; 网关日志</div>
+      <span class="log-arrow" id="logArrow">&#x25BC;</span>
+    </div>
+    <div class="log-body" id="logBody">
+      <div class="log-list" id="logList"></div>
+    </div>
+  </div>
 </div>
 
-<!-- MODAL -->
+<!-- DEPLOY MODAL -->
 <div class="modal-overlay" id="modalOverlay" onclick="event.target===this&&closeModal()">
   <div class="modal">
     <div class="modal-header">
@@ -350,20 +413,20 @@ body::before {
       <button class="modal-close" onclick="closeModal()">&#x2715;</button>
     </div>
     <div class="form-group">
-      <label class="form-label">Account Name</label>
-      <input type="text" class="form-input form-input-name" id="mName" placeholder="Optional alias">
+      <label class="form-label">账号名称</label>
+      <input type="text" class="form-input form-input-name" id="mName" placeholder="可选别名">
     </div>
     <div class="form-group">
       <label class="form-label">SECURE_1PSID</label>
-      <input type="text" class="form-input" id="mPsid" placeholder="Paste cookie value" spellcheck="false">
+      <input type="text" class="form-input" id="mPsid" placeholder="粘贴 cookie 值" spellcheck="false">
     </div>
     <div class="form-group">
       <label class="form-label">SECURE_1PSIDTS</label>
-      <input type="text" class="form-input" id="mPsidts" placeholder="Paste cookie value" spellcheck="false">
+      <input type="text" class="form-input" id="mPsidts" placeholder="粘贴 cookie 值" spellcheck="false">
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="deployBtn" onclick="doDeploy()">Deploy</button>
+      <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="deployBtn" onclick="doDeploy()">部署</button>
     </div>
     <div class="modal-msg" id="modalMsg"></div>
   </div>
@@ -380,8 +443,8 @@ body::before {
     <div class="guard-section">
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">Auto-Disable</div>
-          <div class="toggle-desc">Hit threshold auto-disables channel in NewAPI</div>
+          <div class="toggle-label">自动禁用</div>
+          <div class="toggle-desc">达到阈值后自动禁用容器</div>
         </div>
         <label class="toggle-switch">
           <input type="checkbox" id="guardAutoDisable">
@@ -392,32 +455,32 @@ body::before {
 
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">Error Threshold</div>
-          <div class="toggle-desc">How many matching errors before disabling</div>
+          <div class="toggle-label">错误阈值</div>
+          <div class="toggle-desc">连续多少次匹配错误后禁用</div>
         </div>
         <input type="number" class="threshold-input" id="guardThreshold" min="1" max="99" value="3">
       </div>
     </div>
 
     <div class="guard-section">
-      <div class="guard-section-title">Disable on Status Codes</div>
+      <div class="guard-section-title">触发禁用的状态码</div>
       <div class="tag-input-area" id="codesArea" onclick="this.querySelector('input').focus()">
-        <input type="text" class="tag-new-input" id="codesInput" placeholder="Type code (e.g. 503) + Enter">
+        <input type="text" class="tag-new-input" id="codesInput" placeholder="输入状态码 (如 503) + 回车">
       </div>
-      <div class="guard-hint">Only these HTTP status codes trigger disable counting. Leave empty to ignore status codes.</div>
+      <div class="guard-hint">仅这些 HTTP 状态码会触发计数。留空则忽略状态码。</div>
     </div>
 
     <div class="guard-section">
-      <div class="guard-section-title">Disable on Keywords</div>
+      <div class="guard-section-title">触发禁用的关键词</div>
       <div class="tag-input-area" id="keywordsArea" onclick="this.querySelector('input').focus()">
-        <input type="text" class="tag-new-input" id="keywordsInput" placeholder="Type keyword + Enter">
+        <input type="text" class="tag-new-input" id="keywordsInput" placeholder="输入关键词 + 回车">
       </div>
-      <div class="guard-hint">Errors containing these keywords trigger disable counting. Case-insensitive.</div>
+      <div class="guard-hint">错误信息包含这些关键词时触发计数。不区分大小写。</div>
     </div>
 
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeGuardSettings()">Cancel</button>
-      <button class="btn btn-primary" id="guardSaveBtn" onclick="saveGuardSettings()">Save</button>
+      <button class="btn btn-ghost" onclick="closeGuardSettings()">取消</button>
+      <button class="btn btn-primary" id="guardSaveBtn" onclick="saveGuardSettings()">保存</button>
     </div>
     <div class="modal-msg" id="guardMsg"></div>
   </div>
@@ -430,21 +493,41 @@ body::before {
 const API = '/api';
 let password = '';
 let accounts = [];
+let gatewayStatus = null;
 let currentNum = null;
 let names = {};
+let autoRefreshTimer = null;
+
+// ── Helpers ────────────────────────────────────────────────
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function gwUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return password ? `${path}${sep}key=${encodeURIComponent(password)}` : path;
+}
 
 function loadNames() {
   try { names = JSON.parse(localStorage.getItem('cm-names') || '{}'); } catch { names = {}; }
 }
+
 function saveName(num, name) {
   if (name) names[num] = name; else delete names[num];
   localStorage.setItem('cm-names', JSON.stringify(names));
+  fetch(gwUrl(`/gateway/name/${num}`), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name || ''})
+  }).catch(() => {});
 }
 
+// ── Login ──────────────────────────────────────────────────
 function doLogin() {
   const pwd = document.getElementById('loginPwd').value;
   const errEl = document.getElementById('loginErr');
-  if (!pwd) { errEl.textContent = 'Please enter password'; return; }
+  if (!pwd) { errEl.textContent = '请输入密码'; return; }
   errEl.textContent = '';
 
   fetch(API + '/login', {
@@ -455,30 +538,24 @@ function doLogin() {
   .then(async r => ({ ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }))
   .then(({ ok, status, data }) => {
     if (!ok) {
-      if (status === 401) throw new Error('Password incorrect');
-      throw new Error(data.error || 'Login failed');
+      if (status === 401) throw new Error('密码错误');
+      throw new Error(data.detail || data.error || '登录失败');
     }
     password = pwd;
-    return fetch(API + '/accounts');
-  })
-  .then(r => {
-    if (!r.ok) throw new Error('Failed to load accounts');
-    return r.json();
-  })
-  .then(data => {
-    accounts = (data.accounts || []).sort((a, b) => Number(a.num) - Number(b.num));
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.add('visible');
     loadNames();
-    renderGrid();
+    loadAll();
+    startAutoRefresh();
   })
   .catch(e => {
-    errEl.textContent = e.message || 'Connection failed';
+    errEl.textContent = e.message || '连接失败';
   });
 }
 
 function doLogout() {
   password = '';
+  stopAutoRefresh();
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('app').classList.remove('visible');
   document.getElementById('loginPwd').value = '';
@@ -489,61 +566,175 @@ document.getElementById('loginPwd').addEventListener('keydown', e => {
   if (e.key === 'Enter') doLogin();
 });
 
-function loadAccounts() {
-  const btn = document.getElementById('refreshBtn');
-  btn.classList.add('spinning');
-  fetch(API + '/accounts').then(r => r.json()).then(data => {
-    accounts = (data.accounts || []).sort((a, b) => Number(a.num) - Number(b.num));
+// ── Data Loading ───────────────────────────────────────────
+async function loadAll() {
+  try {
+    const [accountsRes, statusRes, logsRes] = await Promise.all([
+      fetch(API + '/accounts'),
+      fetch(gwUrl('/gateway/status')),
+      fetch(gwUrl('/gateway/logs?limit=80')),
+    ]);
+    if (accountsRes.ok) {
+      const data = await accountsRes.json();
+      accounts = (data.accounts || []).sort((a, b) => Number(a.num) - Number(b.num));
+    }
+    if (statusRes.ok) {
+      gatewayStatus = await statusRes.json();
+    }
+    if (logsRes.ok) {
+      const logData = await logsRes.json();
+      renderLogs(logData.logs || []);
+    }
     renderGrid();
-    toast('Refreshed', 'info');
-  }).catch(e => {
-    toast('Refresh failed', 'err');
-  }).finally(() => {
-    btn.classList.remove('spinning');
-  });
+  } catch(e) {
+    toast('加载失败: ' + e.message, 'err');
+  }
 }
 
+async function doRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+  try {
+    await fetch(gwUrl('/gateway/refresh'), { method: 'POST' });
+    await loadAll();
+    toast('已刷新', 'info');
+  } catch(e) {
+    toast('刷新失败', 'err');
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  autoRefreshTimer = setInterval(loadAll, 10000);
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+}
+
+// ── Render Grid ────────────────────────────────────────────
 function renderGrid() {
   const grid = document.getElementById('grid');
-  let okCount = 0, badCount = 0;
+  let okCount = 0, badCount = 0, offCount = 0;
+
+  const gwMap = {};
+  if (gatewayStatus && gatewayStatus.containers) {
+    gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
+  }
 
   const cards = accounts.map(a => {
     const num = a.num;
     const hasCookie = a.has_cookie;
-    const name = names[num] || '';
+    const gw = gwMap[num] || null;
+    const name = (gw && gw.name) || names[num] || '';
     const preview = a.psid_preview || '';
 
-    if (hasCookie) okCount++; else badCount++;
+    let cardClass, dotClass, stateLabel;
+    if (gw && !gw.enabled) {
+      cardClass = 'disabled-card'; dotClass = 'yellow'; stateLabel = '已禁用';
+      offCount++;
+    } else if (gw && gw.healthy) {
+      cardClass = 'healthy'; dotClass = 'green'; stateLabel = '正常';
+      okCount++;
+    } else if (gw && !gw.healthy) {
+      cardClass = 'unhealthy'; dotClass = 'red'; stateLabel = '异常';
+      badCount++;
+    } else if (hasCookie) {
+      cardClass = 'healthy'; dotClass = 'grey'; stateLabel = '未检测';
+      okCount++;
+    } else {
+      cardClass = 'no-cookie'; dotClass = 'grey'; stateLabel = '无 Cookie';
+      badCount++;
+    }
+
+    let actionBtn = '';
+    if (gw) {
+      if (gw.enabled) {
+        actionBtn = `<button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
+      } else {
+        actionBtn = `<button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
+      }
+    }
+
+    let statsLine = '';
+    if (gw) {
+      statsLine = `<div class="card-stats">${gw.total_requests} 请求 / ${gw.total_errors} 错误</div>`;
+    }
+
+    let errorLine = '';
+    if (gw && gw.last_error) {
+      errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
+    }
 
     return `
-      <div class="card ${hasCookie ? 'has-cookie' : 'no-cookie'}" onclick="openModal(${num})">
+      <div class="card ${cardClass}" onclick="openModal(${num})">
         <div class="card-header">
           <span class="card-num">#${num}</span>
-          <span class="card-status ${hasCookie ? 'ok' : 'bad'}"></span>
+          <span class="card-status ${dotClass}" title="${stateLabel}"></span>
         </div>
-        <div class="card-name">${name || 'Container ' + num}</div>
+        <div class="card-name">${esc(name || 'Container ' + num)}</div>
         <div class="card-preview ${preview ? '' : 'empty'}">
-          ${preview || 'No cookie'}
+          ${preview ? esc(preview) : '无 Cookie'}
         </div>
+        ${statsLine}
+        ${errorLine}
+        <div class="card-actions">${actionBtn}</div>
       </div>
     `;
   });
 
   grid.innerHTML = cards.join('');
-  document.getElementById('statOk').textContent = okCount + ' active';
-  document.getElementById('statBad').textContent = badCount + ' empty';
-  document.getElementById('topbarSub').textContent = accounts.length + ' Containers';
+  document.getElementById('statOk').textContent = okCount + ' 正常';
+  document.getElementById('statBad').textContent = badCount + ' 异常';
+  document.getElementById('statOff').textContent = offCount + ' 已禁用';
+
+  const total = accounts.length;
+  const avail = gatewayStatus ? gatewayStatus.available : okCount;
+  document.getElementById('topbarSub').textContent = `${avail}/${total} 可用`;
 }
 
+// ── Gateway Actions ────────────────────────────────────────
+async function toggleContainer(num, enable) {
+  const action = enable ? 'enable' : 'disable';
+  try {
+    await fetch(gwUrl(`/gateway/${action}/${num}`), { method: 'POST' });
+    toast(`#${num} 已${enable ? '启用' : '禁用'}`, 'ok');
+    await loadAll();
+  } catch(e) {
+    toast('操作失败', 'err');
+  }
+}
+
+// ── Logs ───────────────────────────────────────────────────
+function renderLogs(logEntries) {
+  const html = logEntries.map(l => {
+    const cn = l.container !== null ? `<span class="cnum">#${l.container}</span>` : '';
+    return `<div class="log-entry ${l.level}"><span class="time">${esc(l.time)}</span>${cn}${esc(l.message)}</div>`;
+  }).join('');
+  document.getElementById('logList').innerHTML = html || '<div class="log-entry info">暂无日志</div>';
+}
+
+function toggleLogs() {
+  const body = document.getElementById('logBody');
+  const arrow = document.getElementById('logArrow');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+// ── Deploy Modal ───────────────────────────────────────────
 function openModal(num) {
   currentNum = num;
+  const gw = gatewayStatus && gatewayStatus.containers ? gatewayStatus.containers.find(c => c.num === num) : null;
+  const displayName = (gw && gw.name) || names[num] || '';
   document.getElementById('modalTitle').textContent = '#' + num + ' — gemini_api_account_' + num;
-  document.getElementById('mName').value = names[num] || '';
+  document.getElementById('mName').value = displayName;
   document.getElementById('mPsid').value = '';
   document.getElementById('mPsidts').value = '';
   document.getElementById('modalMsg').textContent = '';
   document.getElementById('deployBtn').disabled = false;
-  document.getElementById('deployBtn').textContent = 'Deploy';
+  document.getElementById('deployBtn').textContent = '部署';
   document.getElementById('modalOverlay').classList.add('active');
   setTimeout(() => document.getElementById('mPsid').focus(), 200);
 }
@@ -571,9 +762,9 @@ function doDeploy() {
   const msg = document.getElementById('modalMsg');
   const btn = document.getElementById('deployBtn');
 
-  if (!psid || !psidts) {
+  if (!psid) {
     msg.className = 'modal-msg err';
-    msg.textContent = 'Both cookie fields are required';
+    msg.textContent = 'SECURE_1PSID 不能为空';
     return;
   }
 
@@ -581,40 +772,36 @@ function doDeploy() {
   saveName(currentNum, nameVal);
 
   btn.disabled = true;
-  btn.textContent = 'Deploying...';
+  btn.textContent = '部署中...';
   msg.className = 'modal-msg';
   msg.textContent = '';
 
-  fetch(API + '/deploy', {
+  fetch(gwUrl(`/gateway/deploy/${currentNum}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      password: password,
-      account: currentNum,
-      psid: psid,
-      psidts: psidts
-    })
+    body: JSON.stringify({ psid: psid, psidts: psidts })
   })
   .then(r => r.json().then(data => ({ ok: r.ok, data })))
   .then(({ ok, data }) => {
-    if (ok && data.success) {
+    if (ok) {
       msg.className = 'modal-msg ok';
-      msg.textContent = 'Deployed successfully!';
-      toast('#' + currentNum + ' deployed', 'ok');
-      setTimeout(() => { loadAccounts(); closeModal(); }, 1200);
+      msg.textContent = '部署成功！';
+      toast('#' + currentNum + ' 已部署', 'ok');
+      setTimeout(() => { loadAll(); closeModal(); }, 1200);
     } else {
-      throw new Error(data.error || 'Deploy failed');
+      throw new Error(data.detail || data.error || '部署失败');
     }
   })
   .catch(e => {
     msg.className = 'modal-msg err';
     msg.textContent = e.message;
     btn.disabled = false;
-    btn.textContent = 'Deploy';
-    toast('#' + currentNum + ' failed: ' + e.message, 'err');
+    btn.textContent = '部署';
+    toast('#' + currentNum + ' 失败: ' + e.message, 'err');
   });
 }
 
+// ── Toast ──────────────────────────────────────────────────
 function toast(text, type) {
   const container = document.getElementById('toasts');
   const el = document.createElement('div');
@@ -642,7 +829,7 @@ function renderTags(containerId, items, type) {
   items.forEach((val, i) => {
     const tag = document.createElement('span');
     tag.className = 'tag ' + type;
-    tag.innerHTML = val + ' <span class="tag-remove" onclick="removeTag(\'' + containerId + '\',' + i + ')">&times;</span>';
+    tag.innerHTML = esc(val) + ' <span class="tag-remove" onclick="removeTag(\'' + containerId + '\',' + i + ')">&times;</span>';
     area.insertBefore(tag, input);
   });
 }
@@ -690,7 +877,7 @@ document.getElementById('keywordsInput').addEventListener('keydown', function(e)
 function openGuardSettings() {
   document.getElementById('guardMsg').textContent = '';
   document.getElementById('guardSaveBtn').disabled = true;
-  document.getElementById('guardSaveBtn').textContent = 'Loading...';
+  document.getElementById('guardSaveBtn').textContent = '加载中...';
   document.getElementById('guardOverlay').classList.add('active');
 
   fetch(API + '/guard-settings')
@@ -707,13 +894,13 @@ function openGuardSettings() {
       renderTags('keywordsArea', guardKeywords, 'keyword');
 
       document.getElementById('guardSaveBtn').disabled = false;
-      document.getElementById('guardSaveBtn').textContent = 'Save';
+      document.getElementById('guardSaveBtn').textContent = '保存';
     })
     .catch(e => {
       document.getElementById('guardMsg').className = 'modal-msg err';
-      document.getElementById('guardMsg').textContent = 'Failed to load settings';
+      document.getElementById('guardMsg').textContent = '加载设置失败';
       document.getElementById('guardSaveBtn').disabled = false;
-      document.getElementById('guardSaveBtn').textContent = 'Save';
+      document.getElementById('guardSaveBtn').textContent = '保存';
     });
 }
 
@@ -725,7 +912,7 @@ function saveGuardSettings() {
   const btn = document.getElementById('guardSaveBtn');
   const msg = document.getElementById('guardMsg');
   btn.disabled = true;
-  btn.textContent = 'Saving...';
+  btn.textContent = '保存中...';
   msg.textContent = '';
 
   const settings = {
@@ -744,11 +931,11 @@ function saveGuardSettings() {
   .then(({ ok, data }) => {
     if (ok) {
       msg.className = 'modal-msg ok';
-      msg.textContent = 'Saved! Takes effect on next guard cycle (~1min).';
-      toast('Guard settings saved', 'ok');
+      msg.textContent = '已保存！下次 guard 周期生效（约 1 分钟）';
+      toast('Guard 设置已保存', 'ok');
       setTimeout(() => closeGuardSettings(), 1500);
     } else {
-      throw new Error(data.error || 'Save failed');
+      throw new Error(data.detail || data.error || '保存失败');
     }
   })
   .catch(e => {
@@ -757,7 +944,7 @@ function saveGuardSettings() {
   })
   .finally(() => {
     btn.disabled = false;
-    btn.textContent = 'Save';
+    btn.textContent = '保存';
   });
 }
 
