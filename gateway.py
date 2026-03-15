@@ -203,54 +203,39 @@ async def proxy(request: Request, path: str):
         c.total_requests += 1
 
         try:
-            if is_stream:
-                # Streaming: keep client alive until stream finishes
-                client = httpx.AsyncClient(timeout=120.0)
-                try:
-                    req = client.build_request(request.method, target_url, content=body, headers=headers)
-                    resp = await client.send(req, stream=True)
+            # Always use streaming proxy to avoid client timeout
+            # (Gemini can take 5+ seconds before first byte)
+            client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0))
+            try:
+                req = client.build_request(request.method, target_url, content=body, headers=headers)
+                resp = await client.send(req, stream=True)
 
-                    if resp.status_code >= 500:
-                        error_body = (await resp.aread()).decode(errors="replace")[:200]
+                if resp.status_code >= 500:
+                    error_body = (await resp.aread()).decode(errors="replace")[:200]
+                    await resp.aclose()
+                    await client.aclose()
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}: {error_body}",
+                        request=resp.request, response=resp
+                    )
+                c.error_count = 0
+
+                async def stream_generator():
+                    try:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                    finally:
                         await resp.aclose()
                         await client.aclose()
-                        raise httpx.HTTPStatusError(
-                            f"HTTP {resp.status_code}: {error_body}",
-                            request=resp.request, response=resp
-                        )
-                    c.error_count = 0
 
-                    async def stream_generator():
-                        try:
-                            async for chunk in resp.aiter_bytes():
-                                yield chunk
-                        finally:
-                            await resp.aclose()
-                            await client.aclose()
-
-                    return StreamingResponse(
-                        stream_generator(),
-                        status_code=resp.status_code,
-                        media_type=resp.headers.get("content-type", "text/event-stream"),
-                    )
-                except Exception:
-                    await client.aclose()
-                    raise
-            else:
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.request(
-                        request.method, target_url, content=body, headers=headers
-                    )
-                    if resp.status_code >= 500:
-                        raise httpx.HTTPStatusError(
-                            f"HTTP {resp.status_code}: {resp.text[:200]}",
-                            request=resp.request, response=resp
-                        )
-                    c.error_count = 0
-                    return JSONResponse(
-                        content=resp.json(),
-                        status_code=resp.status_code,
-                    )
+                return StreamingResponse(
+                    stream_generator(),
+                    status_code=resp.status_code,
+                    media_type=resp.headers.get("content-type", "application/json"),
+                )
+            except Exception:
+                await client.aclose()
+                raise
 
         except Exception as e:
             error_msg = str(e)[:200]
