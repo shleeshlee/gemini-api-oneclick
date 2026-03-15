@@ -301,27 +301,26 @@ _LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "wa
 
 
 async def count_container_requests():
-    """Count real requests/errors from container docker logs."""
+    """Count real requests/errors from container docker logs (tail only)."""
     for c in containers.values():
         cname = f"gemini_api_account_{c.num}"
         try:
             proc = await asyncio.create_subprocess_exec(
-                "docker", "logs", cname,
+                "docker", "logs", "--tail", "200", cname,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-            text = stdout.decode(errors="replace")
-            # Count POST /v1/ lines (real API calls, not health checks)
-            reqs = text.count("POST /v1/")
-            errs = text.count("500 Internal Server Error") + text.count("POST /v1/") - text.count("200 OK")
-            # Only count lines with POST /v1/ that have non-200
-            err_count = 0
-            for line in text.splitlines():
-                if "POST /v1/" in line and "200 OK" not in line:
-                    err_count += 1
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            reqs = 0
+            errs = 0
+            for line in stdout.decode(errors="replace").splitlines():
+                if "POST /v1/" not in line:
+                    continue
+                reqs += 1
+                if "200 OK" not in line:
+                    errs += 1
             c.total_requests = reqs
-            c.total_errors = err_count
+            c.total_errors = errs
         except Exception:
             pass
 
