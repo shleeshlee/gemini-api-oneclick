@@ -499,6 +499,8 @@ async def proxy(request: Request, path: str):
                     # Rewrite model to real name before forwarding
                     body_json["model"] = real_model
                     body = json.dumps(body_json).encode("utf-8")
+                    # Update content-length to match new body
+                    headers["content-length"] = str(len(body))
                     add_log("info", None, f"Route [{target_group}] {model} → {real_model}")
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
