@@ -160,7 +160,7 @@ body::before {
 .card.no-cookie::after { background: linear-gradient(90deg, var(--danger), var(--primary-light)); }
 .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--border); }
 
-.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
 .card-num { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.1rem; color: var(--text); }
 .card-status { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .card-status.green { background: var(--success); box-shadow: 0 0 8px rgba(110,200,155,0.4); }
@@ -169,8 +169,8 @@ body::before {
 .card-status.grey { background: var(--text-light); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.card-name { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-meta { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; flex-wrap: wrap; }
+.card-meta { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+.card-name { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .card-port { font-size: 0.7rem; color: var(--text-light); font-family: 'SF Mono', 'Fira Code', monospace; }
 .group-badge {
   display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.5rem;
@@ -810,16 +810,13 @@ function renderGrid() {
     const groupBadge = group
       ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>`
       : `<span class="group-badge" style="background:var(--border);color:var(--text-muted)">默认</span>`;
-    const portLabel = port ? `<span class="card-port">:${port}</span>` : '';
-
     return `
       <div class="card ${cardClass}" onclick="openModal(${num})">
         <div class="card-header">
-          <span class="card-num">#${num}</span>
+          <span class="card-num">#${num} <span class="card-port">:${port}</span></span>
           <span class="card-status ${dotClass}" title="${stateLabel}"></span>
         </div>
-        <div class="card-meta">${portLabel}${groupBadge}</div>
-        <div class="card-name">${esc(name || 'Container ' + num)}</div>
+        <div class="card-meta"><span class="card-name">${esc(name || 'Container ' + num)}</span>${groupBadge}</div>
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
