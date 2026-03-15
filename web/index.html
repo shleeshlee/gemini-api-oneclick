@@ -391,20 +391,27 @@ body::before {
 .group-def-btn:hover { background: var(--bg-warm); color: var(--text); }
 
 .gm-picker {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 0.35rem;
-  max-height: 240px; overflow-y: auto; padding: 0.5rem;
+  display: flex; flex-direction: column; gap: 0.3rem;
+  max-height: 320px; overflow-y: auto; padding: 0.5rem;
   background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius-sm);
 }
 .gm-pick-item {
-  display: flex; align-items: center; justify-content: center;
-  padding: 0.35rem 0.4rem; border-radius: 8px; cursor: pointer;
-  transition: all 0.15s; user-select: none;
-  font-size: 0.82rem; font-family: 'Nunito', sans-serif; font-weight: 600;
-  border: 2px solid transparent;
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.5rem 0.7rem; border-radius: 8px; cursor: pointer;
+  transition: all 0.15s; user-select: none; border: 2px solid transparent;
 }
 .gm-pick-item:hover { background: var(--bg-warm); }
-.gm-pick-item.picked { background: var(--primary); color: white; border-color: var(--primary-dark); }
-.gm-pick-item.other-group { opacity: 0.4; }
+.gm-pick-item.picked { background: rgba(255,139,126,0.12); border-color: var(--primary); }
+.gm-pick-item.other-group { opacity: 0.45; }
+.gm-pick-num { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 0.85rem; min-width: 32px; }
+.gm-pick-name { font-size: 0.82rem; color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-pick-port { font-size: 0.72rem; color: var(--text-light); font-family: 'SF Mono', monospace; }
+.gm-pick-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.gm-pick-check {
+  width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--border);
+  display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: white; flex-shrink: 0;
+}
+.gm-pick-item.picked .gm-pick-check { background: var(--primary); border-color: var(--primary); }
 .gm-section-title {
   font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.85rem;
   color: var(--text-muted); margin: 0.8rem 0 0.4rem; display: flex; align-items: center; gap: 0.5rem;
@@ -1255,11 +1262,23 @@ function gmRenderPicker() {
     const num = a.num;
     const gw = gwMap[num];
     const curGroup = (gw && gw.group) || '';
+    const name = (gw && gw.name) || '';
+    const port = (gw && gw.port) || '';
+    const healthy = gw && gw.healthy;
+    const enabled = gw ? gw.enabled : true;
     const picked = gmPickerSet.has(num);
     const otherGroup = curGroup && curGroup !== gmPickerGroup;
     const cls = picked ? 'picked' : (otherGroup ? 'other-group' : '');
-    const suffix = otherGroup ? ` <span style="font-size:0.65rem;font-weight:400">(${curGroup})</span>` : '';
-    return `<div class="gm-pick-item ${cls}" onclick="gmTogglePick(${num})">#${num}${suffix}</div>`;
+    const dotColor = !enabled ? 'var(--text-light)' : healthy ? 'var(--success)' : 'var(--danger)';
+    const groupTag = otherGroup ? `<span class="group-badge" style="background:${groupColor(curGroup)};color:#fff;font-size:0.6rem;padding:0.05rem 0.35rem">${esc(curGroup)}</span>` : '';
+    return `<div class="gm-pick-item ${cls}" onclick="gmTogglePick(${num})">
+      <span class="gm-pick-check">${picked ? '&#x2713;' : ''}</span>
+      <span class="gm-pick-dot" style="background:${dotColor}"></span>
+      <span class="gm-pick-num">#${num}</span>
+      <span class="gm-pick-name">${esc(name || 'Container ' + num)}</span>
+      ${groupTag}
+      <span class="gm-pick-port">:${port}</span>
+    </div>`;
   }).join('');
 }
 
