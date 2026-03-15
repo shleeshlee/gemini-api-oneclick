@@ -377,18 +377,18 @@ body::before {
 }
 .group-def-count { font-size: 0.78rem; color: var(--text-muted); font-weight: 400; }
 .group-def-del {
-  width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
-  cursor: pointer; font-size: 0.9rem; color: var(--text-light); transition: all 0.15s;
-  display: flex; align-items: center; justify-content: center;
+  padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); cursor: pointer; font-size: 0.72rem; color: var(--danger);
+  font-family: 'Outfit', sans-serif; transition: all 0.15s; white-space: nowrap;
 }
-.group-def-del:hover { background: var(--danger-light); color: var(--danger); }
+.group-def-del:hover { background: var(--danger-light); border-color: var(--danger); }
 .group-def-actions { display: flex; gap: 0.3rem; }
 .group-def-btn {
-  width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
-  cursor: pointer; font-size: 0.85rem; color: var(--text-light); transition: all 0.15s;
-  display: flex; align-items: center; justify-content: center;
+  padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); cursor: pointer; font-size: 0.72rem; color: var(--text-muted);
+  font-family: 'Outfit', sans-serif; transition: all 0.15s; white-space: nowrap;
 }
-.group-def-btn:hover { background: var(--bg-warm); color: var(--text); }
+.group-def-btn:hover { background: var(--bg-warm); border-color: var(--primary-light); color: var(--text); }
 
 .gm-picker {
   display: flex; flex-direction: column; gap: 0.3rem;
@@ -1176,9 +1176,9 @@ function renderGroupDefs() {
           <span class="group-def-count">${counts[g] || 0} 个容器</span>
         </div>
         <div class="group-def-actions">
-          <button class="group-def-btn" onclick="gmOpenPicker('${esc(g)}')" title="选择容器">&#x1F4E6;</button>
-          <button class="group-def-btn" onclick="renameGroup('${esc(g)}')" title="改名">&#x270F;</button>
-          <button class="group-def-del" onclick="deleteGroup('${esc(g)}')" title="删除">&#x1F5D1;</button>
+          <button class="group-def-btn" onclick="gmOpenPicker('${esc(g)}')">选容器</button>
+          <button class="group-def-btn" onclick="renameGroup('${esc(g)}')">改名</button>
+          <button class="group-def-del" onclick="deleteGroup('${esc(g)}')">删除</button>
         </div>
       </div>
     `).join('');
