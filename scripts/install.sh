@@ -160,16 +160,58 @@ if [[ -f .env ]]; then
       # shellcheck disable=SC1091
       source .env
 
+      # 确保 GATEWAY_PORT 写入 .env（老用户可能没有）
+      if ! grep -q '^GATEWAY_PORT=' .env 2>/dev/null; then
+        GATEWAY_PORT="${GATEWAY_PORT:-9800}"
+        echo "" >> .env
+        echo "# Gateway (智能轮询总入口)" >> .env
+        echo "GATEWAY_PORT=${GATEWAY_PORT}" >> .env
+        info "已添加 GATEWAY_PORT=${GATEWAY_PORT} 到 .env"
+      fi
+      GATEWAY_PORT="${GATEWAY_PORT:-9800}"
+
       info "重新生成 compose ..."
       python3 scripts/generate_compose.py
 
       info "重建并重启容器 ..."
       docker compose -f docker-compose.accounts.yml up -d --build
 
-      # 重启 Gateway
-      if command -v systemctl >/dev/null 2>&1 && systemctl is-active gemini-gateway >/dev/null 2>&1; then
-        sudo systemctl restart gemini-gateway
-        info "Gateway 已重启"
+      # 重启或安装 Gateway 服务
+      if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active gemini-gateway >/dev/null 2>&1; then
+          sudo systemctl restart gemini-gateway
+          info "Gateway 已重启"
+        elif [[ ! -f /etc/systemd/system/gemini-gateway.service ]]; then
+          # 老用户没有 Gateway 服务，补装
+          info "检测到缺少 Gateway 服务，正在安装 ..."
+          pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败"
+
+          PYTHON_BIN=$(command -v python3)
+          SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
+          sudo tee "$SERVICE_FILE" > /dev/null <<GWEOF
+[Unit]
+Description=Gemini API Gateway — 智能轮询网关
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${PYTHON_BIN} ${ROOT_DIR}/gateway.py
+Restart=on-failure
+RestartSec=5
+Environment=GATEWAY_PORT=${GATEWAY_PORT}
+Environment=BASE_PORT=${START_PORT:-3001}
+EnvironmentFile=${ROOT_DIR}/.env
+
+[Install]
+WantedBy=multi-user.target
+GWEOF
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable gemini-gateway
+          sudo systemctl start gemini-gateway
+          info "Gateway 已安装为系统服务（端口 ${GATEWAY_PORT}）"
+        fi
       fi
 
       echo ""
