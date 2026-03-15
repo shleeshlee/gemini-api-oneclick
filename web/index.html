@@ -133,7 +133,7 @@ body::before {
   color: var(--text-muted); transition: all 0.15s; white-space: nowrap;
 }
 .btn-topbar:hover { border-color: var(--primary-light); background: var(--bg-warm); color: var(--text); }
-.btn-topbar.spinning { animation: spin 0.8s linear infinite; }
+.btn-topbar.spinning .icon { display: inline-block; animation: spin 0.8s linear infinite; }
 .btn-topbar .icon { font-size: 0.95rem; line-height: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
