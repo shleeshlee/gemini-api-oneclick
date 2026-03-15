@@ -89,13 +89,7 @@ bash scripts/install.sh
 - 手动启用/禁用容器
 - 一键刷新健康检查
 
-## Cookie 管理面板
-
-访问 `http://你的IP:9880`（默认端口），功能：
-
-- 查看所有账号及 Cookie 状态
-- 编辑单个账号的 Cookie
-- 一键保存 + 重启该容器
+Cookie 管理功能已集成在 Gateway 面板中，点击容器卡片即可部署 Cookie。
 
 ## 容器管理
 
@@ -105,22 +99,21 @@ bash scripts/manage.sh
 make manage
 ```
 
-- **[1] 新增容器** — 指定数量，自动创建 env、生成 compose、增量启动
-- **[2] 查看状态** — 容器运行状态 + 健康检查
-- **[3] 完整卸载** — 清理容器和配置（保留 envs/ 防误删）
+- **[1] 添加容器** — 指定数量，自动创建 env、生成 compose、增量启动
+- **[2] 删除容器** — 选择编号，停止容器、删除配置
+- **[3] 查看状态** — 容器运行状态 + Gateway 状态
+- **[4] 完整卸载** — 清理容器和配置（保留 envs/ 防误删）
 
 ## 常用命令
 
 | 命令 | 说明 |
 |------|------|
 | `make install` | 运行交互式安装 |
-| `make manage` | 容器管理菜单 |
+| `make manage` | 容器管理菜单（添加/删除/状态/卸载） |
 | `make up` | 启动所有容器 |
 | `make down` | 停止所有容器 |
 | `make restart` | 重启所有容器 |
-| `make status` | 查看容器状态 |
 | `make logs` | 实时查看日志 |
-| `make health` | 运行健康检查 |
 | `make generate` | 重新生成 docker-compose |
 
 ## 安全提醒
