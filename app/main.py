@@ -382,6 +382,9 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
             else:
                 reply_text += str(response)
             reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
+            reply_text = reply_text.replace("\\#", "#").replace("\\!", "!").replace("\\|", "|")
+            # Strip code fences wrapping HTML content (Gemini sometimes wraps HTML in ```)
+            reply_text = re.sub(r'```\s*\n(<[a-zA-Z][\s\S]*?)\n```', r'\1', reply_text)
             reply_text = correct_markdown(reply_text)
 
             logger.info(f"Response: {reply_text[:200]}...")
