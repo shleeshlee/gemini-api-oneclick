@@ -281,12 +281,13 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
         if c.healthy:
             c.error_count = 0
-            if not was_healthy:
-                add_log("info", c.num, "Container recovered — now healthy")
+            # Only log recovery if container was previously confirmed unhealthy (not first check)
+            if not was_healthy and c.last_check > 0:
+                add_log("info", c.num, "恢复正常")
         else:
             reason = "client not ready" if resp.status_code == 200 else f"HTTP {resp.status_code}"
             if was_healthy:
-                add_log("warn", c.num, f"Health check failed: {reason}")
+                add_log("warn", c.num, f"健康检查失败: {reason}")
     except Exception as e:
         c.healthy = False
         c.last_check = time.time()
@@ -836,7 +837,9 @@ async def test_container(num: int):
             if resp.status_code == 200:
                 data = resp.json()
                 reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return {"ok": True, "reply": reply[:100], "model": model_name, "status": resp.status_code}
+                # Strip <think>...</think> tags
+                reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
+                return {"ok": True, "reply": reply[:80], "model": model_name, "status": resp.status_code}
             else:
                 return {"ok": False, "error": resp.text[:200], "model": model_name, "status": resp.status_code}
     except Exception as e:
