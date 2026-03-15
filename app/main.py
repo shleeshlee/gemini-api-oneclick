@@ -488,26 +488,53 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
     """DALL-E compatible image generation endpoint using Gemini ImageFX."""
     try:
         client = await get_or_create_client()
-        model = map_model_name(request.model)
-        logger.info(f"Image generation request: '{request.prompt[:100]}' model={model}")
+        logger.info(f"Image generation request: '{request.prompt[:100]}'")
 
-        response = await client.generate_content(
-            f"Generate an image: {request.prompt}",
-            model=model,
-        )
+        # ImageFX needs explicit English prompt to trigger image generation
+        # Use unspecified model (default) which routes to the model that supports ImageFX
+        prompt = f"Generate an image of: {request.prompt}"
+        logger.info(f"Sending to Gemini: '{prompt[:150]}'")
 
-        images = getattr(response, "images", [])
+        response = await client.generate_content(prompt)
+
+        # Log what we got back for debugging
+        logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
+        logger.info(f"Response images: {response.images}")
+        logger.info(f"Generated images: {response.candidates[response.chosen].generated_images}")
+        logger.info(f"Web images: {response.candidates[response.chosen].web_images}")
+
+        images = response.images
         if not images:
-            raise HTTPException(status_code=500, detail="Gemini did not return any images")
+            # Try alternate prompt format
+            logger.info("No images with first prompt, trying alternate format...")
+            response = await client.generate_content(
+                f"Create a picture: {request.prompt}"
+            )
+            images = response.images
+            logger.info(f"Alternate attempt images: {images}")
+
+        if not images:
+            return {
+                "created": int(time.time()),
+                "data": [],
+                "error": {
+                    "message": f"Gemini did not generate images. Response: {response.text[:300] if response.text else 'empty'}",
+                    "type": "no_images",
+                }
+            }
 
         result_data = []
         for img in images[:request.n]:
+            logger.info(f"Downloading image: {type(img).__name__} url={img.url[:80]}...")
             b64 = await download_image_as_base64(img)
             if b64:
                 result_data.append({"b64_json": b64})
+                logger.info(f"Image downloaded OK, base64 length={len(b64)}")
+            else:
+                logger.warning(f"Failed to download image: {img.url[:80]}")
 
         if not result_data:
-            raise HTTPException(status_code=500, detail="Failed to download generated images")
+            raise HTTPException(status_code=500, detail="Images found but all downloads failed")
 
         logger.info(f"Image generation complete: {len(result_data)} image(s)")
         return {"created": int(time.time()), "data": result_data}
