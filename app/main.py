@@ -490,12 +490,14 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
         client = await get_or_create_client()
         logger.info(f"Image generation request: '{request.prompt[:100]}'")
 
-        # ImageFX needs explicit English prompt to trigger image generation
-        # Use unspecified model (default) which routes to the model that supports ImageFX
-        prompt = f"Generate an image of: {request.prompt}"
-        logger.info(f"Sending to Gemini: '{prompt[:150]}'")
+        model = map_model_name(request.model) if request.model else None
+        prompt = f"Generate an image: {request.prompt}"
+        logger.info(f"Sending to Gemini: '{prompt[:150]}' model={model}")
 
-        response = await client.generate_content(prompt)
+        kwargs = {}
+        if model:
+            kwargs["model"] = model
+        response = await client.generate_content(prompt, **kwargs)
 
         # Log what we got back for debugging
         logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
