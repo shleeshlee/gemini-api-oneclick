@@ -8,12 +8,13 @@ Port: 9800 (configurable via GATEWAY_PORT env)
 """
 
 import asyncio
+import hmac
 import json
 import os
 import re
 import subprocess
 import time
-from collections import deque
+from collections import defaultdict, deque
 from pathlib import Path
 
 import httpx
@@ -47,22 +48,48 @@ _dotenv = _read_dotenv()
 API_KEY = _dotenv.get("API_KEY", "")
 COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
 
+def _safe_compare(a: str, b: str) -> bool:
+    """Timing-safe string comparison."""
+    return hmac.compare_digest(a.encode(), b.encode())
+
+
+# ── Rate Limiter ───────────────────────────────────────────────────
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 5  # max attempts per window
+
+
+def _check_rate_limit(ip: str):
+    """Raise 429 if IP exceeds login attempt limit."""
+    now = time.time()
+    attempts = _login_attempts[ip]
+    # Clean old entries
+    _login_attempts[ip] = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+    if len(_login_attempts[ip]) >= RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    _login_attempts[ip].append(now)
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def verify_auth(request: Request):
-    """Dependency: check key query param, Authorization Bearer header, or cookie-manager password."""
+    """Dependency: check Authorization Bearer header."""
     if not API_KEY and not COOKIE_MANAGER_PASSWORD:
         return  # no key configured, allow all
-    valid_keys = {k for k in (API_KEY, COOKIE_MANAGER_PASSWORD) if k}
-    # Check query param
-    key = request.query_params.get("key", "")
-    if key and key in valid_keys:
-        return
+    valid_keys = [k for k in (API_KEY, COOKIE_MANAGER_PASSWORD) if k]
     # Check Authorization header
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:].strip()
-        if token in valid_keys:
+        if any(_safe_compare(token, k) for k in valid_keys):
             return
-    raise HTTPException(status_code=401, detail="未授权：密钥无效")
+    raise HTTPException(status_code=401, detail="未授权")
+
 HEALTH_INTERVAL = 30  # seconds between health checks
 MAX_RETRIES = 5  # max containers to try per request
 ERROR_THRESHOLD = 3  # consecutive errors before auto-disable
@@ -325,7 +352,7 @@ async def fetch_base_models() -> list[dict]:
     return _models_cache  # return stale cache if all fail
 
 
-@app.get("/v1/models")
+@app.get("/v1/models", dependencies=[Depends(verify_auth)])
 async def list_models():
     """Return model list with group prefixes."""
     base_models = await fetch_base_models()
@@ -350,7 +377,7 @@ async def list_models():
     return {"object": "list", "data": result}
 
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST"])
+@app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
     body = await request.body()
@@ -569,8 +596,8 @@ async def get_groups():
 async def deploy_cookie(num: int, request: Request):
     """Deploy cookies to a container: write env file and recreate container."""
     body = await request.json()
-    psid = body.get("psid", "").strip()
-    psidts = body.get("psidts", "").strip()
+    psid = body.get("psid", "").strip().replace("\n", "").replace("\r", "")
+    psidts = body.get("psidts", "").strip().replace("\n", "").replace("\r", "")
     if not psid:
         raise HTTPException(status_code=400, detail="psid 不能为空")
 
@@ -624,17 +651,19 @@ DOTENV_PATH = ROOT_DIR / ".env"
 
 @app.post("/api/login")
 async def api_login(request: Request):
-    """Authenticate with cookie-manager password."""
+    """Authenticate with cookie-manager password (rate-limited)."""
+    ip = _get_client_ip(request)
+    _check_rate_limit(ip)
     body = await request.json()
     if not COOKIE_MANAGER_PASSWORD:
         return {"ok": True}
     password = body.get("password", "")
-    if password != COOKIE_MANAGER_PASSWORD:
+    if not _safe_compare(password, COOKIE_MANAGER_PASSWORD):
         raise HTTPException(status_code=401, detail="unauthorized")
     return {"ok": True}
 
 
-@app.get("/api/accounts")
+@app.get("/api/accounts", dependencies=[Depends(verify_auth)])
 async def api_accounts():
     """List accounts from envs/ directory with cookie status."""
     accounts_list = []
@@ -663,7 +692,7 @@ async def api_accounts():
     return {"accounts": accounts_list}
 
 
-@app.get("/api/guard-settings")
+@app.get("/api/guard-settings", dependencies=[Depends(verify_auth)])
 async def api_get_guard_settings():
     """Read guard settings from .env."""
     current = _read_dotenv()
@@ -685,7 +714,7 @@ async def api_set_guard_settings(request: Request):
     body = await request.json()
     if COOKIE_MANAGER_PASSWORD:
         password = body.get("password", "")
-        if password != COOKIE_MANAGER_PASSWORD:
+        if not _safe_compare(password, COOKIE_MANAGER_PASSWORD):
             raise HTTPException(status_code=401, detail="unauthorized")
 
     new_settings = body.get("settings", {})
