@@ -81,6 +81,11 @@ body::before {
 .card-dot.yellow { background: var(--warn); }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
 
+.card-name {
+  font-size: 0.8rem; color: var(--text); margin-bottom: 0.3rem; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-name:hover { color: var(--primary); }
 .card-stats { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.3rem; }
 .card-error {
   font-size: 0.7rem; color: var(--danger); background: var(--danger-light);
@@ -138,28 +143,28 @@ body::before {
       <span class="topbar-logo">&#x26A1;</span>
       <div>
         <div class="topbar-title">Gemini Gateway</div>
-        <div class="topbar-sub" id="topSub">Loading...</div>
+        <div class="topbar-sub" id="topSub">加载中...</div>
       </div>
     </div>
     <div class="topbar-right">
       <span class="stat-pill ok" id="statOk">-</span>
       <span class="stat-pill warn" id="statBad">-</span>
       <span class="stat-pill disabled" id="statOff">-</span>
-      <button class="btn-icon" id="refreshBtn" onclick="doRefresh()" title="Force health check">&#x21BB;</button>
+      <button class="btn-icon" id="refreshBtn" onclick="doRefresh()" title="立即健康检查">&#x21BB;</button>
     </div>
   </div>
 
   <div class="api-info">
-    API endpoint: <code id="apiUrl">http://host:9800</code> &nbsp;
-    Chat: <code>/v1/chat/completions</code> &nbsp;
-    Image: <code>/v1/images/generations</code> &nbsp;
-    Models: <code>/v1/models</code>
+    统一入口: <code id="apiUrl">http://host:9800</code> &nbsp;
+    聊天: <code>/v1/chat/completions</code> &nbsp;
+    生图: <code>/v1/images/generations</code> &nbsp;
+    模型: <code>/v1/models</code>
   </div>
 
   <div class="grid" id="grid"></div>
 
   <div class="log-panel">
-    <div class="log-header">&#x1F4CB; Gateway Log</div>
+    <div class="log-header">&#x1F4CB; 网关日志</div>
     <div id="logList"></div>
   </div>
 </div>
@@ -179,7 +184,7 @@ async function loadStatus() {
     renderContainers(status);
     renderLogs(logData.logs);
   } catch(e) {
-    document.getElementById('topSub').textContent = 'Connection failed';
+    document.getElementById('topSub').textContent = '连接失败';
   }
 }
 
@@ -194,8 +199,10 @@ function renderContainers(status) {
     else { cls = 'unhealthy'; dot = 'red'; bad++; }
 
     const btn = c.enabled
-      ? `<button class="card-btn disable" onclick="toggleContainer(${c.num}, false)">Disable</button>`
-      : `<button class="card-btn enable" onclick="toggleContainer(${c.num}, true)">Enable</button>`;
+      ? `<button class="card-btn disable" onclick="toggleContainer(${c.num}, false)">禁用</button>`
+      : `<button class="card-btn enable" onclick="toggleContainer(${c.num}, true)">启用</button>`;
+
+    const nameDisplay = c.name ? esc(c.name) : '<i style="color:var(--text-light)">未命名</i>';
 
     return `
       <div class="card ${cls}">
@@ -203,17 +210,18 @@ function renderContainers(status) {
           <span class="card-num">#${c.num}</span>
           <span class="card-dot ${dot}"></span>
         </div>
-        <div class="card-stats">${c.total_requests} req / ${c.total_errors} err</div>
+        <div class="card-name" onclick="editName(${c.num}, this)" title="点击编辑账号名称">${nameDisplay}</div>
+        <div class="card-stats">${c.total_requests} 请求 / ${c.total_errors} 错误</div>
         ${c.last_error ? `<div class="card-error" title="${esc(c.last_error)}">${esc(c.last_error)}</div>` : ''}
         <div class="card-actions">${btn}</div>
       </div>`;
   });
 
   document.getElementById('grid').innerHTML = cards.join('');
-  document.getElementById('statOk').textContent = ok + ' healthy';
-  document.getElementById('statBad').textContent = bad + ' down';
-  document.getElementById('statOff').textContent = off + ' disabled';
-  document.getElementById('topSub').textContent = `${ok}/${cs.length} available`;
+  document.getElementById('statOk').textContent = ok + ' 正常';
+  document.getElementById('statBad').textContent = bad + ' 异常';
+  document.getElementById('statOff').textContent = off + ' 已禁用';
+  document.getElementById('topSub').textContent = `${ok}/${cs.length} 可用`;
   document.getElementById('apiUrl').textContent = location.origin;
 }
 
@@ -222,7 +230,18 @@ function renderLogs(logs) {
     const cn = l.container !== null ? `<span class="cnum">#${l.container}</span>` : '';
     return `<div class="log-entry ${l.level}"><span class="time">${l.time}</span>${cn}${esc(l.message)}</div>`;
   }).join('');
-  document.getElementById('logList').innerHTML = html || '<div class="log-entry info">No logs yet</div>';
+  document.getElementById('logList').innerHTML = html || '<div class="log-entry info">暂无日志</div>';
+}
+
+async function editName(num, el) {
+  const current = el.textContent.trim();
+  const name = prompt(`容器 #${num} 的账号名称:`, current === '未命名' ? '' : current);
+  if (name === null) return;
+  await fetch(`${GW}/gateway/name/${num}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  });
+  loadStatus();
 }
 
 async function toggleContainer(num, enable) {

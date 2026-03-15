@@ -55,6 +55,7 @@ class Container:
         return {
             "num": self.num,
             "port": self.port,
+            "name": account_names.get(self.num, ""),
             "healthy": self.healthy,
             "enabled": self.enabled,
             "available": self.available,
@@ -69,6 +70,24 @@ class Container:
 containers: dict[int, Container] = {}
 round_robin_index = 0
 logs: deque = deque(maxlen=MAX_LOG_ENTRIES)
+account_names: dict[int, str] = {}  # num -> display name, persisted to state/accounts.json
+
+ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
+
+
+def load_account_names():
+    global account_names
+    try:
+        if ACCOUNTS_FILE.exists():
+            data = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
+            account_names = {int(k): v for k, v in data.items()}
+    except Exception:
+        account_names = {}
+
+
+def save_account_names():
+    ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACCOUNTS_FILE.write_text(json.dumps(account_names, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def add_log(level: str, container_num: int | None, message: str):
@@ -159,6 +178,7 @@ app = FastAPI(title="Gemini API Gateway")
 
 @app.on_event("startup")
 async def startup():
+    load_account_names()
     discover_containers()
     asyncio.create_task(health_loop())
 
@@ -294,6 +314,21 @@ async def disable_container(num: int):
     c.enabled = False
     add_log("info", num, "Manually disabled")
     return {"ok": True, "message": f"Container {num} disabled"}
+
+
+@app.post("/gateway/name/{num}")
+async def set_container_name(num: int, request: Request):
+    """Set display name for a container (persisted to disk)."""
+    if num not in containers:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if name:
+        account_names[num] = name
+    else:
+        account_names.pop(num, None)
+    save_account_names()
+    return {"ok": True}
 
 
 @app.post("/gateway/refresh")
