@@ -319,7 +319,7 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 
 
 async def download_image_as_base64(image, cookies=None) -> str | None:
-    """Download an image and return as base64 data URL.
+    """Download an image and return as raw base64 string (no data: prefix).
 
     For GeneratedImage: appends =s2048 for full size, uses its cookies.
     For WebImage: downloads directly.
@@ -337,11 +337,7 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
         ) as http_client:
             resp = await http_client.get(url)
             if resp.status_code == 200:
-                content_type = resp.headers.get("content-type", "image/png")
-                if ";" in content_type:
-                    content_type = content_type.split(";")[0].strip()
-                b64 = base64.b64encode(resp.content).decode("utf-8")
-                return f"data:{content_type};base64,{b64}"
+                return base64.b64encode(resp.content).decode("utf-8")
             else:
                 logger.warning(f"Failed to download image: {resp.status_code} {url[:80]}")
                 return None
@@ -387,20 +383,6 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                 reply_text += str(response)
             reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
             reply_text = correct_markdown(reply_text)
-
-            # Handle generated/web images in response
-            images = getattr(response, "images", [])
-            if images:
-                logger.info(f"Response contains {len(images)} image(s), downloading...")
-                for idx, img in enumerate(images):
-                    data_url = await download_image_as_base64(img)
-                    if data_url:
-                        alt = getattr(img, "alt", "") or f"image_{idx}"
-                        reply_text += f"\n\n![{alt}]({data_url})"
-                        logger.info(f"Image {idx} embedded as base64 ({len(data_url)} chars)")
-                    else:
-                        logger.warning(f"Image {idx} download failed, falling back to URL")
-                        reply_text += f"\n\n![image_{idx}]({img.url})"
 
             logger.info(f"Response: {reply_text[:200]}...")
 
@@ -486,6 +468,55 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 @app.get("/")
 async def root():
     return {"status": "online", "message": "Gemini API OneClick is running"}
+
+
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    model: Optional[str] = "gemini-3.0-flash"
+    n: Optional[int] = 1
+    size: Optional[str] = "1024x1024"
+    quality: Optional[str] = "standard"
+    style: Optional[str] = None
+    response_format: Optional[str] = "b64_json"
+
+
+@app.post("/v1/images/generations")
+async def create_image(request: ImageGenerationRequest, api_key: str = Depends(verify_api_key)):
+    """DALL-E compatible image generation endpoint using Gemini ImageFX."""
+    try:
+        client = await get_or_create_client()
+        model = map_model_name(request.model)
+        logger.info(f"Image generation request: '{request.prompt[:100]}' model={model}")
+
+        response = await client.generate_content(
+            f"Generate an image: {request.prompt}",
+            model=model,
+        )
+
+        images = getattr(response, "images", [])
+        if not images:
+            raise HTTPException(status_code=500, detail="Gemini did not return any images")
+
+        result_data = []
+        for img in images[:request.n]:
+            b64 = await download_image_as_base64(img)
+            if b64:
+                result_data.append({"b64_json": b64})
+
+        if not result_data:
+            raise HTTPException(status_code=500, detail="Failed to download generated images")
+
+        logger.info(f"Image generation complete: {len(result_data)} image(s)")
+        return {"created": int(time.time()), "data": result_data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image generation error: {e}", exc_info=True)
+        error_msg = str(e).lower()
+        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+            await reset_client()
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
 
 if __name__ == "__main__":
