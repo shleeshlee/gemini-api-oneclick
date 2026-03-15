@@ -572,9 +572,10 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function gwUrl(path) {
-  const sep = path.includes('?') ? '&' : '?';
-  return password ? `${path}${sep}key=${encodeURIComponent(password)}` : path;
+function authHeaders(extra) {
+  const h = Object.assign({'Content-Type': 'application/json'}, extra || {});
+  if (password) h['Authorization'] = 'Bearer ' + password;
+  return h;
 }
 
 const GROUP_COLORS = ['#7C5CFC','#E06B5E','#2D9CDB','#27AE60','#F2994A','#9B51E0','#EB5757','#219653'];
@@ -591,8 +592,8 @@ function loadNames() {
 function saveName(num, name) {
   if (name) names[num] = name; else delete names[num];
   localStorage.setItem('cm-names', JSON.stringify(names));
-  fetch(gwUrl(`/gateway/name/${num}`), {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+  fetch(`/gateway/name/${num}`, {
+    method: 'POST', headers: authHeaders(),
     body: JSON.stringify({name: name || ''})
   }).catch(() => {});
 }
@@ -642,9 +643,9 @@ function doLogout() {
 async function loadAll() {
   try {
     const [accountsRes, statusRes, logsRes] = await Promise.all([
-      fetch(API + '/accounts'),
-      fetch(gwUrl('/gateway/status')),
-      fetch(gwUrl('/gateway/logs?limit=80')),
+      fetch(API + '/accounts', {headers: authHeaders()}),
+      fetch('/gateway/status', {headers: authHeaders()}),
+      fetch('/gateway/logs?limit=80', {headers: authHeaders()}),
     ]);
     if (accountsRes.ok) {
       const data = await accountsRes.json();
@@ -667,7 +668,7 @@ async function doRefresh() {
   const btn = document.getElementById('refreshBtn');
   btn.classList.add('spinning');
   try {
-    await fetch(gwUrl('/gateway/refresh'), { method: 'POST' });
+    await fetch('/gateway/refresh', { method: 'POST', headers: authHeaders() });
     await loadAll();
     toast('已刷新', 'info');
   } catch(e) {
@@ -777,7 +778,7 @@ function renderGrid() {
 async function toggleContainer(num, enable) {
   const action = enable ? 'enable' : 'disable';
   try {
-    await fetch(gwUrl(`/gateway/${action}/${num}`), { method: 'POST' });
+    await fetch(`/gateway/${action}/${num}`, { method: 'POST', headers: authHeaders() });
     toast(`#${num} 已${enable ? '启用' : '禁用'}`, 'ok');
     await loadAll();
   } catch(e) {
@@ -831,8 +832,8 @@ function closeModal() {
 }
 
 function saveGroup(num, group) {
-  fetch(gwUrl(`/gateway/group/${num}`), {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+  fetch(`/gateway/group/${num}`, {
+    method: 'POST', headers: authHeaders(),
     body: JSON.stringify({group: group || ''})
   }).then(() => loadAll()).catch(() => {});
 }
@@ -865,9 +866,9 @@ function doDeploy() {
   msg.className = 'modal-msg';
   msg.textContent = '';
 
-  fetch(gwUrl(`/gateway/deploy/${currentNum}`), {
+  fetch(`/gateway/deploy/${currentNum}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ psid: psid, psidts: psidts })
   })
   .then(r => r.json().then(data => ({ ok: r.ok, data })))
@@ -969,7 +970,7 @@ function openGuardSettings() {
   document.getElementById('guardSaveBtn').textContent = '加载中...';
   document.getElementById('guardOverlay').classList.add('active');
 
-  fetch(API + '/guard-settings')
+  fetch(API + '/guard-settings', {headers: authHeaders()})
     .then(r => r.json())
     .then(data => {
       const s = data.settings || {};
@@ -1013,7 +1014,7 @@ function saveGuardSettings() {
 
   fetch(API + '/guard-settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ password: password, settings: settings })
   })
   .then(r => r.json().then(data => ({ ok: r.ok, data })))
@@ -1107,8 +1108,8 @@ function applyBatchGroup() {
   const groups = {};
   batchSelected.forEach(num => { groups[String(num)] = group; });
 
-  fetch(gwUrl('/gateway/batch-group'), {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+  fetch('/gateway/batch-group', {
+    method: 'POST', headers: authHeaders(),
     body: JSON.stringify({groups})
   })
   .then(r => r.json().then(data => ({ok: r.ok, data})))
