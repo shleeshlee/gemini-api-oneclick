@@ -74,8 +74,9 @@ async def get_or_create_client():
                 raise HTTPException(status_code=503, detail="Gemini credentials not configured")
 
             try:
-                logger.info("Initializing Gemini client...")
-                gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS)
+                proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
+                logger.info(f"Initializing Gemini client... proxy={proxy}")
+                gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
                 await gemini_client.init(timeout=300)
                 logger.info("Gemini client initialized successfully.")
             except Exception as e:
