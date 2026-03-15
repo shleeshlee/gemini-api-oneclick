@@ -646,6 +646,15 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function copyText(text, el) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = el.textContent;
+    el.textContent = '已复制';
+    el.style.color = 'var(--success)';
+    setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 1000);
+  }).catch(() => toast('复制失败', 'err'));
+}
+
 function authHeaders(extra) {
   const h = Object.assign({'Content-Type': 'application/json'}, extra || {});
   if (password) h['Authorization'] = 'Bearer ' + password;
@@ -840,7 +849,7 @@ function renderGrid() {
           <span class="card-num">#${num} <span class="card-port">:${port}</span></span>
           <span class="card-status ${dotClass}" title="${stateLabel}"></span>
         </div>
-        <div class="card-meta"><span class="card-name">${esc(name || 'Container ' + num)}</span>${groupBadge}</div>
+        <div class="card-meta"><span class="card-name" ${name ? `onclick="event.stopPropagation();copyText('${esc(name)}',this)" style="cursor:copy" title="点击复制"` : ''}>${esc(name || 'Container ' + num)}</span>${groupBadge}</div>
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>

@@ -300,6 +300,32 @@ _LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback
 _LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "waiting for"}
 
 
+async def count_container_requests():
+    """Count real requests/errors from container docker logs."""
+    for c in containers.values():
+        cname = f"gemini_api_account_{c.num}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "logs", cname,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            text = stdout.decode(errors="replace")
+            # Count POST /v1/ lines (real API calls, not health checks)
+            reqs = text.count("POST /v1/")
+            errs = text.count("500 Internal Server Error") + text.count("POST /v1/") - text.count("200 OK")
+            # Only count lines with POST /v1/ that have non-200
+            err_count = 0
+            for line in text.splitlines():
+                if "POST /v1/" in line and "200 OK" not in line:
+                    err_count += 1
+            c.total_requests = reqs
+            c.total_errors = err_count
+        except Exception:
+            pass
+
+
 _log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
 
 
@@ -355,7 +381,8 @@ async def health_loop():
             total = len(containers)
             add_log("info", None, f"Health check: {available}/{total} available")
 
-            # Sample container logs for errors
+            # Read real stats from containers + sample logs for errors
+            await count_container_requests()
             await sample_container_logs()
 
             await asyncio.sleep(HEALTH_INTERVAL)
