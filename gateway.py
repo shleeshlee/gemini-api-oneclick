@@ -347,13 +347,20 @@ def parse_group_from_model(model: str) -> tuple[str | None, str]:
 
 
 async def fetch_base_models() -> list[dict]:
-    """Fetch model list from a healthy container, with caching."""
+    """Return model list from saved state, or fetch from container."""
     global _models_cache, _models_cache_time
     now = time.time()
     if _models_cache and (now - _models_cache_time) < MODELS_CACHE_TTL:
         return _models_cache
 
-    # Try to get models from any available container
+    # Try saved models first
+    saved = load_saved_models()
+    if saved:
+        _models_cache = saved
+        _models_cache_time = now
+        return _models_cache
+
+    # Fallback: fetch from a healthy container
     for c in containers.values():
         if not c.available:
             continue
@@ -361,13 +368,14 @@ async def fetch_base_models() -> list[dict]:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{c.url}/v1/models")
                 if resp.status_code == 200:
-                    data = resp.json()
-                    _models_cache = data.get("data", [])
+                    data = resp.json().get("data", [])
+                    _models_cache = data
                     _models_cache_time = now
+                    save_models(data)
                     return _models_cache
         except Exception:
             continue
-    return _models_cache  # return stale cache if all fail
+    return _models_cache
 
 
 @app.get("/v1/models", dependencies=[Depends(verify_auth)])
@@ -723,6 +731,98 @@ async def deploy_cookie(num: int, request: Request):
 
     add_log("info", num, "容器已重建")
     return {"ok": True, "message": f"容器 #{num} Cookie 已部署并重建"}
+
+
+# ── Container Logs & Test ──────────────────────────────────────────────
+
+@app.get("/gateway/container-log/{num}", dependencies=[Depends(verify_auth)])
+async def container_log(num: int, tail: int = 60):
+    """Fetch recent docker logs from a specific container."""
+    if num not in containers:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    cname = f"gemini_api_account_{num}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "logs", "--tail", str(min(tail, 200)), "--timestamps", cname,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await proc.communicate()
+        lines = stdout.decode(errors="replace").splitlines()[-min(tail, 200):]
+        return {"ok": True, "lines": lines}
+    except Exception as e:
+        return {"ok": False, "lines": [f"Error: {str(e)[:200]}"]}
+
+
+@app.post("/gateway/test/{num}", dependencies=[Depends(verify_auth)])
+async def test_container(num: int):
+    """Send a minimal test request to a specific container to verify it works."""
+    if num not in containers:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    c = containers[num]
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # First check health
+            health = await client.get(f"{c.url}/health")
+            health_data = health.json()
+            if not health_data.get("client_ready"):
+                return {"ok": False, "error": "Cookie 未就绪或已过期", "detail": health_data}
+
+            # Send a minimal chat request
+            resp = await client.post(
+                f"{c.url}/v1/chat/completions",
+                json={"model": "gemini-2.0-flash", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5},
+                headers={"Authorization": f"Bearer {API_KEY}"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return {"ok": True, "reply": reply[:100], "status": resp.status_code}
+            else:
+                return {"ok": False, "error": resp.text[:200], "status": resp.status_code}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+# ── Model List Management ──────────────────────────────────────────────
+
+MODELS_FILE = ROOT_DIR / "state" / "models.json"
+
+
+def load_saved_models() -> list[dict]:
+    try:
+        if MODELS_FILE.exists():
+            return json.loads(MODELS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def save_models(models: list[dict]):
+    MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MODELS_FILE.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.post("/gateway/refresh-models", dependencies=[Depends(verify_auth)])
+async def refresh_models():
+    """Fetch model list from a healthy container and save to state."""
+    global _models_cache, _models_cache_time
+    for c in containers.values():
+        if not c.available:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{c.url}/v1/models")
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    save_models(data)
+                    _models_cache = data
+                    _models_cache_time = time.time()
+                    add_log("info", c.num, f"模型列表已刷新: {len(data)} 个模型")
+                    return {"ok": True, "models": data, "source": f"container #{c.num}"}
+        except Exception:
+            continue
+    raise HTTPException(status_code=503, detail="无可用容器获取模型列表")
 
 
 # ── Cookie Manager APIs (merged from cookie-manager.py) ────────────────
