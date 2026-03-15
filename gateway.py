@@ -26,34 +26,42 @@ import uvicorn
 ROOT_DIR = Path(__file__).resolve().parent
 ENVS_DIR = ROOT_DIR / "envs"
 GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "9800"))
-GATEWAY_HTML = ROOT_DIR / "web" / "gateway.html"
+GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
 BASE_PORT = int(os.environ.get("BASE_PORT", "8001"))
 
 # ── Auth ─────────────────────────────────────────────────────────────
-def _load_api_key() -> str:
-    """Read API_KEY from .env file."""
+def _read_dotenv() -> dict:
+    """Read all key=value pairs from .env file."""
+    result = {}
     env_file = ROOT_DIR / ".env"
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line.startswith("API_KEY=") and not line.startswith("#"):
-                return line.split("=", 1)[1].strip()
-    return ""
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
 
-API_KEY = _load_api_key()
+_dotenv = _read_dotenv()
+API_KEY = _dotenv.get("API_KEY", "")
+COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
 
 def verify_auth(request: Request):
-    """Dependency: check key query param or Authorization Bearer header."""
-    if not API_KEY:
+    """Dependency: check key query param, Authorization Bearer header, or cookie-manager password."""
+    if not API_KEY and not COOKIE_MANAGER_PASSWORD:
         return  # no key configured, allow all
+    valid_keys = {k for k in (API_KEY, COOKIE_MANAGER_PASSWORD) if k}
     # Check query param
     key = request.query_params.get("key", "")
-    if key == API_KEY:
+    if key and key in valid_keys:
         return
     # Check Authorization header
     auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer ") and auth[7:].strip() == API_KEY:
-        return
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        if token in valid_keys:
+            return
     raise HTTPException(status_code=401, detail="未授权：密钥无效")
 HEALTH_INTERVAL = 30  # seconds between health checks
 MAX_RETRIES = 5  # max containers to try per request
@@ -440,6 +448,114 @@ async def deploy_cookie(num: int, request: Request):
 
     add_log("info", num, "容器已重建")
     return {"ok": True, "message": f"容器 #{num} Cookie 已部署并重建"}
+
+
+# ── Cookie Manager APIs (merged from cookie-manager.py) ────────────────
+
+# Guard settings keys we allow reading/writing from frontend
+_GUARD_KEYS = {
+    "GUARD_AUTO_DISABLE",
+    "GUARD_DISABLE_KEYWORDS",
+    "GUARD_DISABLE_CODES",
+    "GUARD_ERROR_THRESHOLD",
+}
+DOTENV_PATH = ROOT_DIR / ".env"
+
+
+@app.post("/api/login")
+async def api_login(request: Request):
+    """Authenticate with cookie-manager password."""
+    body = await request.json()
+    if not COOKIE_MANAGER_PASSWORD:
+        return {"ok": True}
+    password = body.get("password", "")
+    if password != COOKIE_MANAGER_PASSWORD:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"ok": True}
+
+
+@app.get("/api/accounts")
+async def api_accounts():
+    """List accounts from envs/ directory with cookie status."""
+    accounts_list = []
+    numbered = []
+    for env_file in ENVS_DIR.glob("account*.env"):
+        m = re.match(r"account(\d+)$", env_file.stem)
+        if not m:
+            continue
+        numbered.append((int(m.group(1)), env_file))
+
+    for num, env_file in sorted(numbered, key=lambda x: x[0]):
+        try:
+            content = env_file.read_text()
+            has_cookie = "SECURE_1PSID=" in content
+            psid_preview = ""
+            for line in content.split("\n"):
+                if line.startswith("SECURE_1PSID=") and not line.startswith("SECURE_1PSIDTS"):
+                    val = line.split("=", 1)[1]
+                    if not val.strip():
+                        has_cookie = False
+                    psid_preview = val[:20] + "..." if len(val) > 20 else val
+        except Exception:
+            has_cookie = False
+            psid_preview = ""
+        accounts_list.append({"num": num, "has_cookie": has_cookie, "psid_preview": psid_preview})
+    return {"accounts": accounts_list}
+
+
+@app.get("/api/guard-settings")
+async def api_get_guard_settings():
+    """Read guard settings from .env."""
+    current = _read_dotenv()
+    settings = {}
+    for key in _GUARD_KEYS:
+        settings[key] = current.get(key, "")
+    if not settings.get("GUARD_AUTO_DISABLE"):
+        settings["GUARD_AUTO_DISABLE"] = "true"
+    if not settings.get("GUARD_DISABLE_KEYWORDS"):
+        settings["GUARD_DISABLE_KEYWORDS"] = "credentials not configured,failed to initialize"
+    if not settings.get("GUARD_ERROR_THRESHOLD"):
+        settings["GUARD_ERROR_THRESHOLD"] = "3"
+    return {"settings": settings}
+
+
+@app.post("/api/guard-settings")
+async def api_set_guard_settings(request: Request):
+    """Update guard settings in .env."""
+    body = await request.json()
+    if COOKIE_MANAGER_PASSWORD:
+        password = body.get("password", "")
+        if password != COOKIE_MANAGER_PASSWORD:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    new_settings = body.get("settings", {})
+    if not new_settings:
+        raise HTTPException(status_code=400, detail="no settings provided")
+
+    lines = []
+    seen_keys = set()
+    if DOTENV_PATH.exists():
+        for line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in _GUARD_KEYS and key in new_settings:
+                    lines.append(f"{key}={new_settings[key]}")
+                    seen_keys.add(key)
+                    continue
+            lines.append(line)
+
+    for key in _GUARD_KEYS:
+        if key in new_settings and key not in seen_keys:
+            lines.append(f"{key}={new_settings[key]}")
+
+    DOTENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"ok": True, "message": "Guard settings saved"}
+
+
+@app.get("/api/health")
+async def api_health():
+    return {"status": "ok"}
 
 
 # ── Frontend ────────────────────────────────────────────────────────────

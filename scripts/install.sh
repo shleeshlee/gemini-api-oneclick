@@ -326,20 +326,15 @@ if [[ "$USE_PROXY" =~ ^[Yy]$ ]]; then
 fi
 echo ""
 
-# [4/5] Cookie manager
-step "4/5" "安装 Cookie 管理面板？"
-read -rp "  启用？[Y/n]: " USE_COOKIE_MGR
-USE_COOKIE_MGR="${USE_COOKIE_MGR:-Y}"
+# [4/5] Gateway 面板密码（已集成 Cookie 管理功能）
+step "4/5" "Gateway 面板密码（Cookie 管理已集成到 Gateway）"
 COOKIE_MANAGER_PORT="9880"
 COOKIE_MANAGER_PASSWORD=""
-if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  read -rp "  面板端口 [9880]: " COOKIE_MANAGER_PORT
-  COOKIE_MANAGER_PORT="${COOKIE_MANAGER_PORT:-9880}"
-  read -rp "  面板密码 [自动]: " COOKIE_MANAGER_PASSWORD
-  if [[ -z "$COOKIE_MANAGER_PASSWORD" ]]; then
-    COOKIE_MANAGER_PASSWORD=$(random_key | head -c 16)
-    info "已生成面板密码: $COOKIE_MANAGER_PASSWORD"
-  fi
+USE_COOKIE_MGR="N"  # Cookie Manager 独立服务已弃用，功能已合并到 Gateway
+read -rp "  面板密码 [自动]: " COOKIE_MANAGER_PASSWORD
+if [[ -z "$COOKIE_MANAGER_PASSWORD" ]]; then
+  COOKIE_MANAGER_PASSWORD=$(random_key | head -c 16)
+  info "已生成面板密码: $COOKIE_MANAGER_PASSWORD"
 fi
 echo ""
 
@@ -363,9 +358,6 @@ echo ""
 # Execute installation
 # ══════════════════════════════════════════════════════════════
 TOTAL_STEPS=6  # env + .env + compose + build + gateway + health
-if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  TOTAL_STEPS=$((TOTAL_STEPS + 1))
-fi
 
 CURRENT_STEP=0
 
@@ -470,40 +462,13 @@ else
   info "Gateway 已启动 (PID: $!)"
 fi
 
-# Step: Cookie manager (optional)
-if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  CURRENT_STEP=$((CURRENT_STEP + 1))
-  step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署 Cookie 管理面板 ..."
-
-  if command -v systemctl >/dev/null 2>&1; then
-    PYTHON_BIN=$(command -v python3)
-    SERVICE_FILE="/etc/systemd/system/cookie-manager.service"
-
-    sudo tee "$SERVICE_FILE" > /dev/null <<EOF
-[Unit]
-Description=Gemini API Cookie Manager
-After=network.target docker.service
-
-[Service]
-Type=simple
-WorkingDirectory=${ROOT_DIR}
-ExecStart=${PYTHON_BIN} ${ROOT_DIR}/web/cookie-manager.py
-Restart=on-failure
-RestartSec=5
-EnvironmentFile=${ROOT_DIR}/.env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable cookie-manager
-    sudo systemctl start cookie-manager
-    info "Cookie 管理面板已安装为系统服务"
-  else
-    warn "未找到 systemctl，后台启动 Cookie 管理面板 ..."
-    nohup python3 web/cookie-manager.py > /tmp/cookie-manager.log 2>&1 &
-    info "Cookie 管理面板已启动 (PID: $!)"
+# Cookie Manager 独立服务已弃用（功能已合并到 Gateway）
+# 如果旧版 cookie-manager 服务还在运行，停止它
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active cookie-manager >/dev/null 2>&1; then
+    sudo systemctl stop cookie-manager
+    sudo systemctl disable cookie-manager
+    info "已停止旧版 Cookie Manager 独立服务（功能已集成到 Gateway）"
   fi
 fi
 
@@ -532,15 +497,9 @@ echo ""
 echo -e "  智能轮询 ${ACCOUNT_COUNT} 个容器，自动跳过故障节点"
 echo -e "  支持 OpenAI 兼容格式，可直接接入酒馆/Kelivo/NewAPI 等"
 
-if [[ ! "$USE_COOKIE_MGR" =~ ^[Nn]$ ]]; then
-  echo ""
-  echo -e "  ${BOLD}${CYAN}▸ Cookie 管理面板${NC}"
-  echo -e "  ${BOLD}地址:${NC}       http://YOUR_IP:${COOKIE_MANAGER_PORT}"
-  echo -e "  ${BOLD}密码:${NC}       ${COOKIE_MANAGER_PASSWORD}"
-fi
-
+echo -e "  ${BOLD}面板密码:${NC}   ${COOKIE_MANAGER_PASSWORD}"
 echo ""
-echo -e "  ${YELLOW}下一步:${NC} 打开 Cookie 管理面板，填入你的 Gemini Cookie！"
+echo -e "  ${YELLOW}下一步:${NC} 打开 Gateway 面板 (http://YOUR_IP:${GATEWAY_PORT})，登录后填入 Gemini Cookie！"
 echo ""
 echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
 echo -e "${PINK}║${NC}  ${BOLD}Gemini API OneClick${NC} by WanWan                 ${PINK}║${NC}"
