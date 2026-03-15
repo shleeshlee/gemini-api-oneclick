@@ -130,6 +130,34 @@ body::before {
   font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem;
 }
 
+/* Modal */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--card); border-radius: var(--radius); padding: 1.5rem;
+  width: 90%; max-width: 420px; box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+}
+.modal h3 { font-family: 'Nunito', sans-serif; font-weight: 800; margin-bottom: 1rem; }
+.modal label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.3rem; color: var(--text-muted); }
+.modal input[type="text"] {
+  width: 100%; padding: 0.5rem 0.7rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.82rem; margin-bottom: 0.8rem;
+  outline: none; transition: border-color 0.15s;
+}
+.modal input[type="text"]:focus { border-color: var(--primary-light); }
+.modal-actions { display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.5rem; }
+.modal-btn {
+  padding: 0.45rem 1.2rem; border-radius: var(--radius-sm); border: 2px solid var(--border);
+  font-family: 'Outfit'; font-size: 0.85rem; cursor: pointer; transition: all 0.15s;
+  background: var(--bg);
+}
+.modal-btn:hover { background: var(--bg-warm); }
+.modal-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.modal-btn.primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+
 @media (max-width: 640px) {
   .topbar { flex-direction: column; text-align: center; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -169,16 +197,53 @@ body::before {
   </div>
 </div>
 
+<!-- Cookie 部署弹窗 -->
+<div class="modal-overlay" id="deployModal">
+  <div class="modal">
+    <h3>&#x1F36A; 部署 Cookie — <span id="modalTitle">#1</span></h3>
+    <label>SECURE_1PSID</label>
+    <input type="text" id="inputPsid" placeholder="粘贴 __Secure-1PSID 值">
+    <label>SECURE_1PSIDTS</label>
+    <input type="text" id="inputPsidts" placeholder="粘贴 __Secure-1PSIDTS 值（可选）">
+    <div class="modal-actions">
+      <button class="modal-btn" onclick="closeDeployModal()">取消</button>
+      <button class="modal-btn primary" id="deployBtn" onclick="doDeploy()">部署</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const GW = '';
 let autoRefresh = null;
+let authKey = '';
+let deployNum = null;
+
+// ── Auth key ──
+(function initAuth() {
+  const params = new URLSearchParams(location.search);
+  if (params.has('key')) {
+    authKey = params.get('key');
+  } else {
+    authKey = prompt('请输入 API 密钥（留空则不验证）：') || '';
+  }
+})();
+
+function apiUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return authKey ? `${GW}${path}${sep}key=${encodeURIComponent(authKey)}` : `${GW}${path}`;
+}
 
 async function loadStatus() {
   try {
     const [statusRes, logRes] = await Promise.all([
-      fetch(GW + '/gateway/status'),
-      fetch(GW + '/gateway/logs?limit=80'),
+      fetch(apiUrl('/gateway/status')),
+      fetch(apiUrl('/gateway/logs?limit=80')),
     ]);
+    if (statusRes.status === 401) {
+      document.getElementById('topSub').textContent = '密钥无效，请刷新重试';
+      clearInterval(autoRefresh);
+      return;
+    }
     const status = await statusRes.json();
     const logData = await logRes.json();
     renderContainers(status);
@@ -199,18 +264,18 @@ function renderContainers(status) {
     else { cls = 'unhealthy'; dot = 'red'; bad++; }
 
     const btn = c.enabled
-      ? `<button class="card-btn disable" onclick="toggleContainer(${c.num}, false)">禁用</button>`
-      : `<button class="card-btn enable" onclick="toggleContainer(${c.num}, true)">启用</button>`;
+      ? `<button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${c.num}, false)">禁用</button>`
+      : `<button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${c.num}, true)">启用</button>`;
 
     const nameDisplay = c.name ? esc(c.name) : '<i style="color:var(--text-light)">未命名</i>';
 
     return `
-      <div class="card ${cls}">
+      <div class="card ${cls}" onclick="openDeployModal(${c.num})" style="cursor:pointer" title="点击部署 Cookie">
         <div class="card-header">
           <span class="card-num">#${c.num}</span>
           <span class="card-dot ${dot}"></span>
         </div>
-        <div class="card-name" onclick="editName(${c.num}, this)" title="点击编辑账号名称">${nameDisplay}</div>
+        <div class="card-name" onclick="event.stopPropagation();editName(${c.num}, this)" title="点击编辑账号名称">${nameDisplay}</div>
         <div class="card-stats">${c.total_requests} 请求 / ${c.total_errors} 错误</div>
         ${c.last_error ? `<div class="card-error" title="${esc(c.last_error)}">${esc(c.last_error)}</div>` : ''}
         <div class="card-actions">${btn}</div>
@@ -237,7 +302,7 @@ async function editName(num, el) {
   const current = el.textContent.trim();
   const name = prompt(`容器 #${num} 的账号名称:`, current === '未命名' ? '' : current);
   if (name === null) return;
-  await fetch(`${GW}/gateway/name/${num}`, {
+  await fetch(apiUrl(`/gateway/name/${num}`), {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name})
   });
@@ -246,17 +311,65 @@ async function editName(num, el) {
 
 async function toggleContainer(num, enable) {
   const action = enable ? 'enable' : 'disable';
-  await fetch(`${GW}/gateway/${action}/${num}`, { method: 'POST' });
+  await fetch(apiUrl(`/gateway/${action}/${num}`), { method: 'POST' });
   loadStatus();
 }
 
 async function doRefresh() {
   const btn = document.getElementById('refreshBtn');
   btn.classList.add('spinning');
-  await fetch(GW + '/gateway/refresh', { method: 'POST' });
+  await fetch(apiUrl('/gateway/refresh'), { method: 'POST' });
   await loadStatus();
   btn.classList.remove('spinning');
 }
+
+// ── Cookie 部署弹窗 ──
+function openDeployModal(num) {
+  deployNum = num;
+  document.getElementById('modalTitle').textContent = `#${num}`;
+  document.getElementById('inputPsid').value = '';
+  document.getElementById('inputPsidts').value = '';
+  document.getElementById('deployModal').classList.add('show');
+}
+
+function closeDeployModal() {
+  document.getElementById('deployModal').classList.remove('show');
+  deployNum = null;
+}
+
+async function doDeploy() {
+  if (deployNum === null) return;
+  const psid = document.getElementById('inputPsid').value.trim();
+  const psidts = document.getElementById('inputPsidts').value.trim();
+  if (!psid) { alert('SECURE_1PSID 不能为空'); return; }
+
+  const btn = document.getElementById('deployBtn');
+  btn.textContent = '部署中...';
+  btn.disabled = true;
+  try {
+    const res = await fetch(apiUrl(`/gateway/deploy/${deployNum}`), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({psid, psidts})
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeDeployModal();
+      loadStatus();
+    } else {
+      alert('部署失败: ' + (data.detail || '未知错误'));
+    }
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.textContent = '部署';
+    btn.disabled = false;
+  }
+}
+
+// 点击弹窗外部关闭
+document.getElementById('deployModal').addEventListener('click', function(e) {
+  if (e.target === this) closeDeployModal();
+});
 
 function esc(s) {
   const d = document.createElement('div');

@@ -11,12 +11,13 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import time
 from collections import deque
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 import uvicorn
 
@@ -27,6 +28,33 @@ ENVS_DIR = ROOT_DIR / "envs"
 GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "9800"))
 GATEWAY_HTML = ROOT_DIR / "web" / "gateway.html"
 BASE_PORT = int(os.environ.get("BASE_PORT", "8001"))
+
+# ── Auth ─────────────────────────────────────────────────────────────
+def _load_api_key() -> str:
+    """Read API_KEY from .env file."""
+    env_file = ROOT_DIR / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("API_KEY=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip()
+    return ""
+
+API_KEY = _load_api_key()
+
+def verify_auth(request: Request):
+    """Dependency: check key query param or Authorization Bearer header."""
+    if not API_KEY:
+        return  # no key configured, allow all
+    # Check query param
+    key = request.query_params.get("key", "")
+    if key == API_KEY:
+        return
+    # Check Authorization header
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer ") and auth[7:].strip() == API_KEY:
+        return
+    raise HTTPException(status_code=401, detail="未授权：密钥无效")
 HEALTH_INTERVAL = 30  # seconds between health checks
 MAX_RETRIES = 5  # max containers to try per request
 ERROR_THRESHOLD = 3  # consecutive errors before auto-disable
@@ -73,6 +101,7 @@ logs: deque = deque(maxlen=MAX_LOG_ENTRIES)
 account_names: dict[int, str] = {}  # num -> display name, persisted to state/accounts.json
 
 ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
+GATEWAY_STATE_FILE = ROOT_DIR / "state" / "gateway-state.json"
 
 
 def load_account_names():
@@ -90,6 +119,27 @@ def save_account_names():
     ACCOUNTS_FILE.write_text(json.dumps(account_names, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_gateway_state():
+    """Load persisted disabled container list."""
+    try:
+        if GATEWAY_STATE_FILE.exists():
+            data = json.loads(GATEWAY_STATE_FILE.read_text(encoding="utf-8"))
+            return set(data.get("disabled", []))
+    except Exception:
+        pass
+    return set()
+
+
+def save_gateway_state():
+    """Persist disabled container list."""
+    disabled = [c.num for c in containers.values() if not c.enabled]
+    GATEWAY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GATEWAY_STATE_FILE.write_text(
+        json.dumps({"disabled": sorted(disabled)}, indent=2),
+        encoding="utf-8",
+    )
+
+
 def add_log(level: str, container_num: int | None, message: str):
     logs.appendleft({
         "time": time.strftime("%H:%M:%S"),
@@ -101,8 +151,9 @@ def add_log(level: str, container_num: int | None, message: str):
 
 
 def discover_containers():
-    """Discover containers from envs/ directory."""
+    """Discover containers from envs/ directory, apply persisted state."""
     global containers
+    disabled_nums = load_gateway_state()
     for env_file in ENVS_DIR.glob("account*.env"):
         m = re.match(r"account(\d+)$", env_file.stem)
         if not m:
@@ -111,6 +162,8 @@ def discover_containers():
         port = BASE_PORT + num - 1
         if num not in containers:
             containers[num] = Container(num, port)
+            if num in disabled_nums:
+                containers[num].enabled = False
     add_log("info", None, f"Discovered {len(containers)} containers")
 
 
@@ -269,6 +322,7 @@ async def proxy(request: Request, path: str):
                 c.healthy = False
                 if c.error_count >= ERROR_THRESHOLD:
                     c.enabled = False
+                    save_gateway_state()
                     add_log("error", c.num, f"Auto-disabled after {c.error_count} errors")
             continue
 
@@ -277,7 +331,7 @@ async def proxy(request: Request, path: str):
 
 # ── Management API ──────────────────────────────────────────────────────
 
-@app.get("/gateway/status")
+@app.get("/gateway/status", dependencies=[Depends(verify_auth)])
 async def gateway_status():
     """Return all container statuses."""
     return {
@@ -287,13 +341,13 @@ async def gateway_status():
     }
 
 
-@app.get("/gateway/logs")
+@app.get("/gateway/logs", dependencies=[Depends(verify_auth)])
 async def gateway_logs(limit: int = 50):
     """Return recent gateway logs."""
     return {"logs": list(logs)[:limit]}
 
 
-@app.post("/gateway/enable/{num}")
+@app.post("/gateway/enable/{num}", dependencies=[Depends(verify_auth)])
 async def enable_container(num: int):
     """Re-enable a disabled container."""
     if num not in containers:
@@ -301,22 +355,24 @@ async def enable_container(num: int):
     c = containers[num]
     c.enabled = True
     c.error_count = 0
+    save_gateway_state()
     add_log("info", num, "Manually re-enabled")
     return {"ok": True, "message": f"Container {num} re-enabled"}
 
 
-@app.post("/gateway/disable/{num}")
+@app.post("/gateway/disable/{num}", dependencies=[Depends(verify_auth)])
 async def disable_container(num: int):
     """Manually disable a container."""
     if num not in containers:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
     c = containers[num]
     c.enabled = False
+    save_gateway_state()
     add_log("info", num, "Manually disabled")
     return {"ok": True, "message": f"Container {num} disabled"}
 
 
-@app.post("/gateway/name/{num}")
+@app.post("/gateway/name/{num}", dependencies=[Depends(verify_auth)])
 async def set_container_name(num: int, request: Request):
     """Set display name for a container (persisted to disk)."""
     if num not in containers:
@@ -331,7 +387,7 @@ async def set_container_name(num: int, request: Request):
     return {"ok": True}
 
 
-@app.post("/gateway/refresh")
+@app.post("/gateway/refresh", dependencies=[Depends(verify_auth)])
 async def refresh_health():
     """Trigger immediate health check."""
     async with httpx.AsyncClient() as client:
@@ -339,6 +395,51 @@ async def refresh_health():
         await asyncio.gather(*tasks, return_exceptions=True)
     available = sum(1 for c in containers.values() if c.available)
     return {"ok": True, "available": available, "total": len(containers)}
+
+
+@app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_auth)])
+async def deploy_cookie(num: int, request: Request):
+    """Deploy cookies to a container: write env file and recreate container."""
+    body = await request.json()
+    psid = body.get("psid", "").strip()
+    psidts = body.get("psidts", "").strip()
+    if not psid:
+        raise HTTPException(status_code=400, detail="psid 不能为空")
+
+    # Write env file
+    env_file = ENVS_DIR / f"account{num}.env"
+    env_file.write_text(
+        f"API_KEY=\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
+        encoding="utf-8",
+    )
+    add_log("info", num, "Cookie 已更新，正在重建容器 ...")
+
+    # Recreate container via docker compose
+    compose_file = ROOT_DIR / "docker-compose.accounts.yml"
+    service_name = f"gemini-api-{num}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "compose", "-f", str(compose_file),
+            "up", "-d", "--force-recreate", service_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(ROOT_DIR),
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err = stderr.decode(errors="replace")[:200]
+            add_log("error", num, f"容器重建失败: {err}")
+            raise HTTPException(status_code=500, detail=f"容器重建失败: {err}")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="docker compose 命令未找到")
+
+    # Discover new container if it wasn't known
+    port = BASE_PORT + num - 1
+    if num not in containers:
+        containers[num] = Container(num, port)
+
+    add_log("info", num, "容器已重建")
+    return {"ok": True, "message": f"容器 #{num} Cookie 已部署并重建"}
 
 
 # ── Frontend ────────────────────────────────────────────────────────────
