@@ -38,8 +38,10 @@ from gemini_webapi.types.image import GeneratedImage, WebImage
 try:
     from curl_cffi import CurlHttpVersion
     from curl_cffi.requests import AsyncSession
+    from curl_cffi.requests import Cookies as CurlCookies
     USE_CURL_CFFI = True
 except ImportError:
+    CurlCookies = None
     USE_CURL_CFFI = False
 
 # Configure logging
@@ -115,8 +117,9 @@ async def try_restore_session() -> GeminiClient | None:
         age_hours = (time.time() - state.get("timestamp", 0)) / 3600
         logger.info(f"Found session dump (age: {age_hours:.1f}h, {len(state.get('cookies', []))} cookies)")
 
-        # Restore cookies from saved jar
-        cookies = Cookies()
+        # Restore cookies — must use curl_cffi Cookies if available
+        CookieClass = CurlCookies if USE_CURL_CFFI else Cookies
+        cookies = CookieClass()
         for c in state["cookies"]:
             cookies.set(c["name"], c["value"], domain=c["domain"], path=c.get("path", "/"))
 
