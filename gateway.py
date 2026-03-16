@@ -779,10 +779,16 @@ async def deploy_cookie(num: int, request: Request):
     if not psid:
         raise HTTPException(status_code=400, detail="psid 不能为空")
 
-    # Write env file
+    # Write env file, preserving existing API_KEY
     env_file = ENVS_DIR / f"account{num}.env"
+    existing_key = ""
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("API_KEY="):
+                existing_key = line.split("=", 1)[1]
+                break
     env_file.write_text(
-        f"API_KEY=\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
+        f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
         encoding="utf-8",
     )
     add_log("info", num, "Cookie 已更新，正在重建容器 ...")
