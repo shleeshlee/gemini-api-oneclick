@@ -652,11 +652,21 @@ body::before {
           <select id="imgModel" class="img-select" style="width:100%"><option value="gemini-3.0-flash">gemini-3.0-flash</option></select>
         </div>
       </div>
+      <!-- Reference image upload -->
+      <div style="margin-bottom:0.8rem">
+        <div class="studio-label">参考图片（可选，用于风格参考或图片编辑）</div>
+        <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted)" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
+          <span id="imgUploadText">拖拽或点击上传图片</span>
+          <div id="imgUploadPreview" style="display:none;margin-top:0.4rem"><img id="imgPreviewImg" style="max-height:80px;border-radius:6px"><button onclick="event.stopPropagation();clearUploadImage()" style="margin-left:0.5rem;border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.72rem;cursor:pointer">✕ 移除</button></div>
+        </div>
+        <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
+      </div>
       <!-- Action buttons -->
-      <div style="display:flex;gap:0.5rem">
-        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.85rem;font-weight:600">✨ 优化</button>
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:1;padding:0.7rem;font-size:0.95rem;font-weight:700">🎨 生成图片</button>
-        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.85rem;font-weight:600;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0.4rem">
+        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600">✨ 优化</button>
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:700">🎨 生图</button>
+        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
+        <button class="btn btn-primary" id="imgEditBtn" onclick="doImgEdit()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600;background:linear-gradient(135deg,#2D9CDB,#27AE60)">🖌️ 编辑</button>
       </div>
     </div>
 
@@ -1498,6 +1508,81 @@ async function doVidGen() {
     document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`;
   }
   btn.disabled = false; btn.innerHTML = '🎬 视频';
+}
+
+// ── Image Upload + Edit ───────────────────────────────────
+let uploadedImageB64 = null;
+
+function handleImageSelect(input) {
+  if (input.files && input.files[0]) readUploadFile(input.files[0]);
+}
+function handleImageDrop(e) {
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) readUploadFile(e.dataTransfer.files[0]);
+}
+function readUploadFile(file) {
+  if (!file.type.startsWith('image/')) { toast('请上传图片文件', 'err'); return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    uploadedImageB64 = e.target.result.split(',')[1]; // strip data:... prefix
+    document.getElementById('imgPreviewImg').src = e.target.result;
+    document.getElementById('imgUploadPreview').style.display = '';
+    document.getElementById('imgUploadText').textContent = file.name;
+  };
+  reader.readAsDataURL(file);
+}
+function clearUploadImage() {
+  uploadedImageB64 = null;
+  document.getElementById('imgUploadPreview').style.display = 'none';
+  document.getElementById('imgUploadText').textContent = '拖拽或点击上传图片';
+  document.getElementById('imgFileInput').value = '';
+}
+
+async function doImgEdit() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请输入编辑描述', 'err'); return; }
+  if (!uploadedImageB64) { toast('请先上传参考图片', 'err'); return; }
+
+  const model = document.getElementById('imgModel').value;
+  const btn = document.getElementById('imgEditBtn');
+  const zone = document.getElementById('imgTempZone');
+
+  btn.disabled = true; btn.innerHTML = '🖌️ 编辑中...';
+  zone.style.display = '';
+  document.getElementById('imgTempInfo').textContent = '正在编辑图片，预计 30-120 秒...';
+  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🖌️ 编辑中...</div>';
+
+  const start = Date.now();
+  try {
+    // Upload image as base64 in message, then ask to modify
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + uploadedImageB64 } },
+        { type: 'text', text: `Based on this image, generate a new version: ${prompt}` }
+      ]
+    }];
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, max_tokens: 4096 })
+    });
+    const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
+    const reply = data.choices?.[0]?.message?.content || '';
+
+    // Check if Gemini returned images in the response (via markdown or the response itself)
+    // For now, the edit goes through chat completions which returns text
+    // The actual image generation happens when Gemini decides to generate
+    document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · 编辑`;
+    document.getElementById('imgTempGrid').innerHTML = `<div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">
+      <div style="margin-bottom:0.5rem;color:var(--text-muted);font-size:0.78rem">AI 回复：</div>
+      ${esc(reply.slice(0, 500))}
+      <div style="margin-top:0.5rem;color:var(--text-muted);font-size:0.75rem">提示：图片编辑通过对话实现。如果没有直接生成修改后的图片，可以尝试更明确的指令如"重新生成这张图片，把背景改成..."</div>
+    </div>`;
+  } catch(e) {
+    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">编辑失败: ${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.innerHTML = '🖌️ 编辑';
 }
 
 // ── Gallery ───────────────────────────────────────────────
