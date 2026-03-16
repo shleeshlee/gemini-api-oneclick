@@ -755,7 +755,7 @@ function doLogout() {
 
 // 自动填充已保存的密码
 if (window.PasswordCredential) {
-  navigator.credentials.get({password: true}).then(cred => {
+  navigator.credentials.get({password: true, mediation: 'silent'}).then(cred => {
     if (cred && cred.password) {
       document.getElementById('loginPwd').value = cred.password;
     }
