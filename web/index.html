@@ -654,11 +654,7 @@ body::before {
       </details>
       <!-- Style: presets (scrollable single row) -->
       <div style="margin-bottom:0.6rem">
-        <div class="studio-label" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.3rem">
-          风格
-          <span class="img-chip active" data-stype="img" onclick="switchStyleType('img')" id="styleTypeImg" style="font-size:0.65rem;padding:0.1rem 0.4rem">图片</span>
-          <span class="img-chip" data-stype="vid" onclick="switchStyleType('vid')" id="styleTypeVid" style="font-size:0.65rem;padding:0.1rem 0.4rem">视频</span>
-        </div>
+        <div class="studio-label" style="margin-bottom:0.3rem">风格</div>
         <div id="imgStyles" style="display:flex;gap:0.3rem;overflow-x:auto;padding-bottom:0.3rem;scrollbar-width:thin"></div>
       </div>
       <!-- Custom templates (compact inline) -->
@@ -687,7 +683,6 @@ body::before {
       <div style="display:flex;gap:0.4rem;align-items:stretch;margin-bottom:0.6rem">
         <select id="imgModel" class="img-select" style="flex:1 1 0;min-width:0;font-size:0.78rem"></select>
         <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:0 0 auto;padding:0.5rem 1rem;font-size:0.85rem;font-weight:700;white-space:nowrap">🎨 生图</button>
-        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 0 auto;padding:0.5rem 1rem;font-size:0.85rem;font-weight:600;white-space:nowrap;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
       </div>
       <!-- Reference image upload -->
       <div>
@@ -1277,17 +1272,6 @@ const IMG_STYLES = [
   {id:'Watercolor',label:'水彩',icon:'🎨'},{id:'Pixel Art',label:'像素',icon:'👾'},
   {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},
 ];
-const VID_STYLES = [
-  {id:'none',label:'无风格',icon:'🎯'},
-  {id:'Civilization',label:'文明',icon:'🏛️'},{id:'Metallic',label:'金属',icon:'🔩'},
-  {id:'Memo',label:'备忘',icon:'🐵'},{id:'Glam',label:'魅力',icon:'✨'},
-  {id:'Crochet',label:'钩针',icon:'🧶'},{id:'Cyberpunk',label:'赛博朋克',icon:'🌃'},
-  {id:'Video Game',label:'电子游戏',icon:'🎮'},{id:'Cosmos',label:'宇宙',icon:'🌌'},
-  {id:'Action Hero',label:'动作英雄',icon:'🦸'},{id:'Stardust',label:'星尘',icon:'⭐'},
-  {id:'Jellytoon',label:'果冻卡通',icon:'🫧'},{id:'Racetrack',label:'赛道',icon:'🏎️'},
-  {id:'ASMR Apple',label:'ASMR',icon:'🍎'},{id:'Red Carpet',label:'红毯',icon:'🎭'},
-  {id:'Popcorn',label:'爆米花',icon:'🍿'},
-];
 const IMG_RATIOS = [
   {id:'1024x1024',label:'1:1',icon:'□'},
   {id:'1280x720',label:'16:9',icon:'▭'},
@@ -1296,7 +1280,6 @@ const IMG_RATIOS = [
   {id:'1024x1792',label:'2:3',icon:'▮'},
 ];
 let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
-let currentStyleType = 'img'; // 'img' or 'vid'
 const NEG_PRESETS = [
   {id:'blurry',label:'模糊'},{id:'low quality',label:'低质量'},{id:'text, watermark',label:'文字水印'},
   {id:'extra limbs, deformed',label:'畸形'},{id:'bad anatomy',label:'解剖错误'},
@@ -1304,23 +1287,14 @@ const NEG_PRESETS = [
 ];
 let negSelected = new Set();
 let tempImages = []; // {b64, prompt, style, size, quality, channel}
-let tempVideos = []; // {url, thumbnail_url, prompt, style, channel}
 let galleryImages = [];
 let galleryOffset = 0;
 const GALLERY_PAGE = 24;
 
-function switchStyleType(type) {
-  currentStyleType = type;
-  imgSelectedStyle = 'none';
-  document.getElementById('styleTypeImg').classList.toggle('active', type === 'img');
-  document.getElementById('styleTypeVid').classList.toggle('active', type === 'vid');
-  renderStyleChips();
-}
-
 function renderStyleChips() {
   const stylesEl = document.getElementById('imgStyles');
   if (!stylesEl) return;
-  const styles = currentStyleType === 'vid' ? VID_STYLES : IMG_STYLES;
+  const styles = IMG_STYLES;
   stylesEl.innerHTML = styles.map(s =>
     `<button class="img-chip${s.id===imgSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectImgStyle('${s.id}')">${s.icon} ${s.label}</button>`
   ).join('');
@@ -1528,69 +1502,6 @@ async function saveAllTemp() {
 
 function downloadAllTemp() {
   document.querySelectorAll('#imgTempGrid a.img-action-btn.dl').forEach(a => a.click());
-}
-
-async function doVidGen() {
-  const prompt = document.getElementById('imgPrompt').value.trim();
-  if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  const quality = document.getElementById('imgQuality').value;
-  const neg = getNegativePrompt();
-  const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
-  const model = document.getElementById('imgModel').value;
-  const btn = document.getElementById('vidGenBtn');
-  const zone = document.getElementById('imgTempZone');
-
-  btn.disabled = true; btn.innerHTML = '🎬 生成中...';
-  zone.style.display = '';
-  document.getElementById('imgTempInfo').innerHTML = '正在生成视频，Veo 需要 <b>3-6 分钟</b>，请勿刷新页面...';
-  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
-
-  const start = Date.now();
-  const dimsPrompt = getActiveDimsPrompt();
-  const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
-  const body = { prompt: finalPrompt, model, quality };
-  if (style) body.style = style;
-  if (neg) body.negative_prompt = neg;
-
-  try {
-    const resp = await fetch('/v1/videos/generations', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    const sec = ((Date.now() - start) / 1000).toFixed(1);
-
-    if (data.data && data.data.length > 0) {
-      const item = data.data[0];
-      if (item.type === 'video' && item.url) {
-        document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · 视频`;
-        document.getElementById('imgTempGrid').innerHTML = `<div class="img-card" style="grid-column:1/-1">
-          <video controls autoplay loop style="width:100%;border-radius:var(--radius-sm)" src="${esc(item.url)}"></video>
-          <div class="img-card-actions" style="opacity:1">
-            <a class="img-action-btn dl" href="${esc(item.url)}" download="gemini-video-${Date.now()}.mp4" onclick="event.stopPropagation()">⬇ 下载视频</a>
-          </div>
-        </div>`;
-        tempVideos = [{ url: item.url, thumbnail_url: item.thumbnail_url || '', prompt, style: imgSelectedStyle, channel: model }];
-      } else if (item.type === 'image' && item.b64_json) {
-        // Gemini returned image instead of video
-        document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · Gemini 生成了图片（非视频）`;
-        const src = 'data:image/png;base64,' + item.b64_json;
-        document.getElementById('imgTempGrid').innerHTML = `<div class="img-card" style="grid-column:1/-1">
-          <img src="${src}" onclick="window.open(this.src)">
-          <div class="img-card-actions">
-            <a class="img-action-btn dl" href="${src}" download="gemini-${Date.now()}.png" onclick="event.stopPropagation()">⬇ 下载</a>
-          </div>
-        </div>`;
-      }
-    } else {
-      const errMsg = data.detail || data.error?.message || '未生成视频';
-      document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">${esc(errMsg)}</div>`;
-    }
-  } catch(e) {
-    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`;
-  }
-  btn.disabled = false; btn.innerHTML = '🎬 视频';
 }
 
 // ── Image Upload + Edit ───────────────────────────────────
