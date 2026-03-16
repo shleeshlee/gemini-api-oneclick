@@ -496,18 +496,21 @@ body::before {
   </div>
   <div class="grid" id="grid"></div>
 
-  <!-- Image Generation Test -->
+  <!-- Image Generation -->
   <div class="log-panel">
     <div class="log-toggle" onclick="toggleImgGen()">
-      <div class="log-header">🍪 图片生成测试</div>
+      <div class="log-header">🍪 图片生成</div>
       <span class="log-arrow" id="imgGenArrow">&#x25BC;</span>
     </div>
-    <div id="imgGenBody" style="padding:1rem">
-      <div style="display:flex;gap:0.5rem;margin-bottom:0.8rem">
-        <input type="text" id="imgPrompt" placeholder="输入提示词，如：画一只可爱的小猫" style="flex:1;padding:0.5rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.85rem">
+    <div id="imgGenBody" style="padding:1.2rem">
+      <div style="display:flex;gap:0.5rem;align-items:stretch;margin-bottom:0.8rem">
+        <select id="imgGroup" style="padding:0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem;background:var(--bg);min-width:90px">
+          <option value="">默认分组</option>
+        </select>
+        <input type="text" id="imgPrompt" placeholder="输入提示词，如：画一只可爱的小猫" style="flex:1;padding:0.5rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.85rem" onkeydown="if(event.key==='Enter')doImgGen()">
         <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.5rem 1.2rem;font-size:0.85rem;white-space:nowrap">生成</button>
       </div>
-      <div id="imgResult" style="text-align:center;min-height:40px"></div>
+      <div id="imgResult" style="text-align:center;min-height:60px;border-radius:var(--radius-sm);position:relative"></div>
     </div>
   </div>
 
@@ -797,6 +800,7 @@ async function loadAll() {
       renderLogs(logData.logs || []);
     }
     renderGrid();
+    updateImgGroupSelect();
   } catch(e) {
     toast('加载失败: ' + e.message, 'err');
   }
@@ -1038,29 +1042,49 @@ function toggleImgGen() {
   arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
 }
 
+function updateImgGroupSelect() {
+  const sel = document.getElementById('imgGroup');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">默认分组</option>';
+  fetch('/gateway/groups', {headers: authHeaders()}).then(r=>r.json()).then(data => {
+    (data.defs||[]).forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g; opt.textContent = g;
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  }).catch(()=>{});
+}
+
 async function doImgGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
+  const group = document.getElementById('imgGroup').value;
   const btn = document.getElementById('imgGenBtn');
   const result = document.getElementById('imgResult');
+  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
   btn.disabled = true; btn.textContent = '生成中...';
-  result.innerHTML = '<div style="color:var(--text-muted);padding:1rem">正在生成图片，请等待 30-60 秒...</div>';
+  result.innerHTML = '<div style="color:var(--text-muted);padding:2rem 1rem;background:var(--bg);border-radius:var(--radius-sm)">🍪 正在生成图片，请等待 30-60 秒...</div>';
+  const start = Date.now();
   try {
     const resp = await fetch('/v1/images/generations', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, n: 1 })
+      body: JSON.stringify({ prompt, model, n: 1 })
     });
     const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
-      result.innerHTML = `<img src="data:image/png;base64,${data.data[0].b64_json}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);margin-top:0.5rem">`;
+      result.innerHTML = `<div style="margin-bottom:0.5rem;font-size:0.78rem;color:var(--text-muted)">${sec}s · ${group||'默认'}</div><img src="data:image/png;base64,${data.data[0].b64_json}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)">`;
+    } else if (data.detail) {
+      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">${esc(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))}</div>`;
     } else if (data.error) {
-      result.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.error.message || data.detail || JSON.stringify(data.error))}</div>`;
+      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">${esc(data.error.message || JSON.stringify(data.error))}</div>`;
     } else {
-      result.innerHTML = '<div style="color:var(--danger);padding:0.5rem">未生成图片</div>';
+      result.innerHTML = '<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">未生成图片（Cookie 可能需要更新）</div>';
     }
   } catch(e) {
-    result.innerHTML = `<div style="color:var(--danger);padding:0.5rem">请求失败: ${esc(e.message)}</div>`;
+    result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
   }
   btn.disabled = false; btn.textContent = '生成';
 }
