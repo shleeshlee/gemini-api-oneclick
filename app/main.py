@@ -10,6 +10,7 @@
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
@@ -554,6 +555,7 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
         kwargs = {}
         if model:
             kwargs["model"] = model
+
         response = await client.generate_content(prompt, **kwargs)
 
         # Log what we got back for debugging

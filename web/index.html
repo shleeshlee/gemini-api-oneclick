@@ -638,9 +638,8 @@ body::before {
   <div class="tab-content" id="tabContentStudio">
     <!-- Zone 1: Tool Area -->
     <div class="studio-section">
-      <div class="studio-section-title" style="justify-content:space-between;align-items:center">
+      <div class="studio-section-title">
         <span>✨ 生成设置</span>
-        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.3rem 0.8rem;font-size:0.78rem;font-weight:600;margin:0">✨ 优化提示词</button>
       </div>
       <!-- Prompt -->
       <div style="margin-bottom:0.8rem">
@@ -655,7 +654,7 @@ body::before {
       <!-- Style: presets (scrollable single row) -->
       <div style="margin-bottom:0.6rem">
         <div class="studio-label" style="margin-bottom:0.3rem">风格</div>
-        <div id="imgStyles" style="display:flex;gap:0.3rem;overflow-x:auto;padding-bottom:0.3rem;scrollbar-width:thin"></div>
+        <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.3rem;padding-bottom:0.3rem"></div>
       </div>
       <!-- Custom templates (compact inline) -->
       <div id="styleTemplateZone" style="margin-bottom:0.6rem;display:none">
@@ -666,43 +665,51 @@ body::before {
         <div id="styleTemplates" style="display:flex;gap:0.4rem;overflow-x:auto;padding-bottom:0.2rem"></div>
         <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin-top:0.3rem"></div>
       </div>
-      <!-- Controls: all in two compact rows -->
-      <div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:0.4rem 0.6rem;align-items:center;margin-bottom:0.6rem">
-        <div class="studio-label" style="margin:0">比例</div>
+      <!-- Row 1: 比例 + 模型 -->
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.6rem">
+        <div class="studio-label" style="margin:0;flex-shrink:0">比例</div>
         <div id="imgRatios" style="display:flex;gap:0.25rem"></div>
-        <div style="display:flex;align-items:center;gap:0.3rem">
-          <span style="font-size:0.75rem;color:var(--text-muted)">质量</span>
-          <select id="imgQuality" class="img-select" style="padding:0.3rem 0.4rem;font-size:0.78rem"><option value="standard">标准</option><option value="hd">HD</option></select>
-        </div>
-        <div style="display:flex;align-items:center;gap:0.3rem">
-          <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
-          <select id="imgCount" class="img-select" style="padding:0.3rem 0.4rem;font-size:0.78rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:0.4rem;flex-shrink:0">
+          <span style="font-size:0.72rem;color:var(--text-muted)">提示词</span>
+          <select id="imgOptModel" class="img-select" style="width:20ch;font-size:0.76rem"></select>
+          <span style="font-size:0.72rem;color:var(--text-muted)">生图</span>
+          <select id="imgModel" class="img-select" style="width:20ch;font-size:0.76rem"></select>
+          <select id="imgQuality" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.76rem;flex-shrink:0"><option value="standard">标准</option><option value="hd">HD</option></select>
+          <div style="display:flex;align-items:center;gap:0.2rem;flex-shrink:0">
+            <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
+            <select id="imgCount" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.76rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
+          </div>
         </div>
       </div>
-      <!-- Model + action buttons (balanced) -->
-      <div style="display:flex;gap:0.4rem;align-items:stretch;margin-bottom:0.6rem">
-        <select id="imgModel" class="img-select" style="flex:1 1 0;min-width:0;font-size:0.78rem"></select>
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:0 0 auto;padding:0.5rem 1rem;font-size:0.85rem;font-weight:700;white-space:nowrap">🎨 生图</button>
-      </div>
-      <!-- Reference image upload -->
+      <!-- Row 3: Reference image left + buttons right -->
       <div>
-        <div class="studio-label">参考图片（可选，用于风格参考）</div>
-        <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted)" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
-          <div id="imgUploadEmpty" style="text-align:center;padding:0.3rem">拖拽或点击上传图片</div>
-          <div id="imgUploadPreview" style="display:none">
-            <div style="display:flex;gap:0.8rem;align-items:start">
-              <img id="imgPreviewImg" style="max-height:120px;max-width:200px;border-radius:6px;object-fit:contain">
-              <div style="flex:1;min-width:0">
-                <div id="imgFileInfo" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem"></div>
-                <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
-                  <button onclick="event.stopPropagation();analyzeStyle()" style="border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
-                  <button onclick="event.stopPropagation();clearUploadImage()" style="border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
+        <div class="studio-label">参考图片（可选，用于风格解析）</div>
+        <div style="display:flex;gap:3rem;align-items:stretch">
+          <!-- Left: Reference image -->
+          <div style="flex:1 1 0;min-width:0">
+            <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted);min-height:7rem;display:flex;align-items:center;justify-content:center" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
+              <div id="imgUploadEmpty" style="text-align:center;padding:0.3rem">拖拽或点击上传图片</div>
+              <div id="imgUploadPreview" style="display:none">
+                <div style="display:flex;gap:0.8rem;align-items:start">
+                  <img id="imgPreviewImg" style="max-height:120px;max-width:200px;border-radius:6px;object-fit:contain">
+                  <div style="flex:1;min-width:0">
+                    <div id="imgFileInfo" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem"></div>
+                    <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
+                      <button onclick="event.stopPropagation();analyzeStyle()" style="border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
+                      <button onclick="event.stopPropagation();clearUploadImage()" style="border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
+            <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
+          </div>
+          <!-- Right: Action buttons, top/bottom aligned with upload box -->
+          <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;gap:1.2rem;min-width:140px">
+            <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.6rem 1rem;font-size:0.8rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap">✨ 优化提示词</button>
+            <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.6rem 1rem;font-size:0.85rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm)">🎨 生成图片</button>
           </div>
         </div>
-        <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
       </div>
     </div>
 
@@ -1331,19 +1338,31 @@ function getNegativePrompt() {
 let _modelListLoaded = false;
 async function loadModelSelect() {
   const sel = document.getElementById('imgModel');
+  const optSel = document.getElementById('imgOptModel');
   if (!sel) return;
   const current = sel.value;
+  const optCurrent = optSel ? optSel.value : '';
   try {
     const resp = await fetch('/v1/models', {headers: authHeaders()});
     const data = await resp.json();
     const models = (data.data || []).map(m => m.id).filter(id => id !== 'unspecified');
-    sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    const opts = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    sel.innerHTML = opts;
+    if (optSel) optSel.innerHTML = opts;
     // Restore previous selection, or default to first flash model on first load
     if (current && models.includes(current)) {
       sel.value = current;
     } else if (!_modelListLoaded) {
       const flash = models.find(m => m.includes('flash'));
       if (flash) sel.value = flash;
+    }
+    if (optSel) {
+      if (optCurrent && models.includes(optCurrent)) {
+        optSel.value = optCurrent;
+      } else if (!_modelListLoaded) {
+        const flash = models.find(m => m.includes('flash'));
+        if (flash) optSel.value = flash;
+      }
     }
     _modelListLoaded = true;
   } catch(e) { console.error('Failed to load models:', e); }
@@ -1367,22 +1386,29 @@ async function optimizePrompt() {
   const style = imgSelectedStyle !== 'none' ? (IMG_STYLES.find(s=>s.id===imgSelectedStyle)?.label||imgSelectedStyle) : '';
   const ratio = IMG_RATIOS.find(r=>r.id===imgSelectedRatio)?.label || '';
   const quality = document.getElementById('imgQuality').value;
-  const model = document.getElementById('imgModel').value;
+  const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('imgOptBtn');
 
   btn.disabled = true; btn.textContent = '✨ 优化中...';
 
   const sysPrompt = `You are an expert image prompt engineer for Google Gemini's ImageFX generator. Your job is to expand a user's brief description into a detailed, vivid image generation prompt in English.
 
+Your job is ONLY to enrich the CONTENT — the subject, scene, action, pose, expression, clothing, environment, spatial relationships. Make the scene vivid and specific.
+
 Rules:
 - Output ONLY the optimized prompt, nothing else
 - Use natural descriptive language (NOT Stable Diffusion tags)
-- Add specific visual details: lighting, composition, mood, colors, textures
+- Expand the scene: who/what is there, what they are doing, where they are, spatial arrangement
+- Add sensory details: textures, materials, weather, time of day, background elements
+- Do NOT specify art style, rendering technique, or medium (e.g. no "digital illustration", "oil painting", "anime style")
+- Do NOT specify camera or lens (e.g. no "Canon 5D", "85mm lens", "f/1.4")
+- Do NOT specify lighting technique (e.g. no "Rembrandt lighting", "rim light", "volumetric")
+- Do NOT specify color palette or color grading (e.g. no "warm tones", "cool palette", "desaturated")
+- Do NOT add quality boosters (e.g. no "masterpiece", "4k", "ultra detailed", "film grain")
+- These are controlled separately by the user's style settings
 - Keep the user's core intent, don't change the subject
-- 150 words max
-${style ? `- Style requested: ${style}` : ''}
-${ratio ? `- Aspect ratio: ${ratio}` : ''}
-${quality === 'hd' ? '- High quality, ultra detailed' : ''}`;
+- 100 words max
+${ratio ? `- Aspect ratio: ${ratio}` : ''}`;
 
   try {
     const resp = await fetch('/v1/chat/completions', {
@@ -1428,7 +1454,7 @@ async function doImgGen() {
   const start = Date.now();
   // Append active dimension descriptors to prompt
   const dimsPrompt = getActiveDimsPrompt();
-  const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
+  const finalPrompt = dimsPrompt ? dimsPrompt + '. ' + prompt + '. ' + dimsPrompt : prompt;
   const body = { prompt: finalPrompt, model, n, size, quality };
   if (style) body.style = style;
   if (neg) body.negative_prompt = neg;
@@ -1539,7 +1565,7 @@ function clearUploadImage() {
 }
 
 // ── Style Templates ────────────────────────────────────────
-const DIM_LABELS = {style:'🎨 画风',palette:'🎨 色调',composition:'📐 构图',mood:'💫 氛围',lighting:'💡 光影',detail:'✨ 细节'};
+const DIM_LABELS = {style:'🎨 画风',palette:'🎨 色调',composition:'📐 构图',mood:'💫 氛围',lighting:'💡 光影',detail:'✨ 细节',combined:'🎭 综合'};
 let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
@@ -1549,22 +1575,24 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You are an art style analyst. Extract ONLY the reusable artistic style from this image — NOT the content, subjects, poses, or actions.
+  const sysPrompt = `You are an expert art style analyst for Google Gemini image generation. Analyze this image and extract its artistic rendering style — the techniques that make it look the way it does.
 
-The goal is to create a style template that can be applied to ANY different subject. For example, if the image shows "a girl leaning against a wall", do NOT mention the girl or the wall. Instead describe the artistic rendering technique that could be applied to any scene.
-
-Return a JSON object with exactly these 6 keys. Each value must be a concise English style descriptor (under 25 words) that works as a reusable prompt fragment for generating completely different subjects.
+Return a JSON object with these 7 keys. For the first 6 keys, write a concise English descriptor (under 30 words). The 7th key "combined" is the most important — it must be a single fluent English sentence (40-60 words) that naturally weaves together the most distinctive rendering characteristics into a Gemini-compatible style instruction.
 
 {
-  "style": "(ONLY the rendering technique: e.g. digital anime illustration, thick lineart with soft cel-shading, semi-realistic proportions)",
-  "palette": "(ONLY the color scheme: e.g. cool blue-purple dominant palette, desaturated with neon accent highlights, high contrast)",
-  "composition": "(ONLY the framing technique: e.g. close-up portrait framing, shallow depth of field, dutch angle — NOT what is in the scene)",
-  "mood": "(ONLY the emotional atmosphere: e.g. melancholic tension, intimate and dramatic, cinematic gravity)",
-  "lighting": "(ONLY the lighting technique: e.g. strong backlight with cool blue rim light, dramatic chiaroscuro, volumetric glow)",
-  "detail": "(ONLY the rendering quality: e.g. highly detailed hair strands, fabric folds with realistic shading, particle effects, lens flare)"
+  "style": "(rendering technique and art medium: e.g. digital anime illustration with thick outlines and soft cel-shading, semi-realistic body proportions with stylized facial features)",
+  "palette": "(dominant color scheme and contrast: e.g. deep teal and muted gold palette with desaturated midtones and selective neon purple accents, high value contrast)",
+  "composition": "(camera angle and framing: e.g. full-body centered composition with strong vertical symmetry, low eye-level perspective, architectural depth framing the subject)",
+  "mood": "(emotional atmosphere conveyed by the art: e.g. solemn gothic elegance with quiet tension, intimate gravity)",
+  "lighting": "(light source, direction, quality: e.g. cool ambient top-light with warm backlight rim, volumetric haze, dramatic chiaroscuro on the figure)",
+  "detail": "(rendering fidelity and texture work: e.g. intricate fabric fold rendering, individual hair strand detail, particle effects, reflective floor surface)",
+  "combined": "(A short comma-separated style description for Gemini image generation, 20-35 words max. Combine the most distinctive visual traits into a format like: [medium] style, [key technique], [palette], [lighting], [standout detail]. Example: high-fidelity digital anime illustration, soft cel-shading with thick lineart, deep teal-and-gold palette, dramatic volumetric top-lighting, intricate hair and fabric detail)"
 }
 
-CRITICAL: Do NOT describe what the characters are doing, wearing, or where they are. Only describe HOW it is drawn/rendered.
+IMPORTANT:
+- Do NOT describe the subject, characters, poses, clothing, or scene content — only HOW the image is rendered.
+- The "combined" field will be appended directly to a user's image prompt, so it must read naturally as a style suffix.
+- Write for Gemini's image generator which prefers natural descriptive language over comma-separated tags.
 Return ONLY the JSON.`;
 
   try {
@@ -1677,9 +1705,15 @@ function renderActiveDims() {
 }
 
 function getActiveDimsPrompt() {
-  const vals = Object.values(activeDims);
-  if (!vals.length) return '';
-  return vals.join('. ') + '.';
+  const entries = Object.entries(activeDims);
+  if (!entries.length) return '';
+  // Prefer combined field if any template has it active
+  const combinedEntries = entries.filter(([k]) => k.endsWith(':combined'));
+  if (combinedEntries.length) {
+    return combinedEntries.map(([, v]) => v).join('. ');
+  }
+  // Fallback: join individual dimension values
+  return entries.map(([, v]) => v).join('. ') + '.';
 }
 
 async function deleteStyleTemplate(id) {

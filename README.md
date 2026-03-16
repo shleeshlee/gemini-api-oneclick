@@ -94,10 +94,34 @@ bash scripts/install.sh
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | 聊天（OpenAI 兼容，支持流式） |
+| `POST /v1/images/generations` | 图片生成（Gemini ImageFX） |
 | `GET /v1/models` | 可用模型列表 |
 | `GET /` | 管理面板 |
 
 兼容 OpenAI 格式，可直接接入 SillyTavern、NextChat、NewAPI 等。
+
+## 图片生成
+
+Gateway 内置图片生成工作室，在管理面板中即可使用：
+
+- **智能提示词扩写** — 简短描述自动扩展为 Gemini 友好的场景叙述（只扩展内容，不干预风格）
+- **26+ 内置风格** — Gemini 官方风格 + 常用艺术风格，一键切换
+- **风格解析** — 上传参考图，AI 分析 7 维度画技特征（画风/色调/构图/氛围/光影/细节/综合），保存为可复用模板
+- **U 型风格包夹** — 风格描述前后包裹内容提示词，提升 Gemini 风格遵从度
+- **双模型选择** — 提示词优化和图片生成可选择不同模型
+- **批量生成** — 一次生成 1/2/4 张，支持标准和 HD 质量
+- **负面提示词** — 预设排除项 + 自定义排除
+- **图库管理** — 生成结果保存、浏览、下载
+
+### SillyTavern 集成
+
+如果你使用 SillyTavern，可以安装配套的图片生成扩展，实现对话自动配图：
+
+1. 在 SillyTavern 中打开 **Extensions** > **Install Extension**
+2. 粘贴地址：`https://github.com/shleeshlee/gemini-image`
+3. 填入 Gateway 地址和 API 密钥即可使用
+
+详见 [gemini-image 扩展文档](https://github.com/shleeshlee/gemini-image#readme)。
 
 ## 管理面板
 
