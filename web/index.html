@@ -1075,7 +1075,10 @@ async function doImgGen() {
     const data = await resp.json();
     const sec = ((Date.now() - start) / 1000).toFixed(1);
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
-      result.innerHTML = `<div style="margin-bottom:0.5rem;font-size:0.78rem;color:var(--text-muted)">${sec}s · ${group||'默认'}</div><img src="data:image/png;base64,${data.data[0].b64_json}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)">`;
+      const b64 = data.data[0].b64_json;
+      const imgSrc = 'data:image/png;base64,' + b64;
+      result.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><span style="font-size:0.78rem;color:var(--text-muted)">${sec}s · ${group||'默认'}</span><a id="imgDownload" download="gemini-${Date.now()}.png" style="font-size:0.78rem;color:var(--primary);cursor:pointer;text-decoration:none">下载图片</a></div><img src="${imgSrc}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)">`;
+      document.getElementById('imgDownload').href = imgSrc;
     } else if (data.detail) {
       result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">${esc(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))}</div>`;
     } else if (data.error) {
