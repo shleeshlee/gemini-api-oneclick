@@ -27,9 +27,11 @@ import time
 import uuid
 import logging
 
+from pathlib import Path
+
 from httpx import AsyncClient, Cookies
 from gemini_webapi import GeminiClient, set_log_level
-from gemini_webapi.constants import Model
+from gemini_webapi.constants import Headers, Model
 from gemini_webapi.types.image import GeneratedImage, WebImage
 
 # Configure logging
@@ -55,6 +57,7 @@ client_lock = asyncio.Lock()
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
+COOKIE_CACHE_PATH = Path(os.environ.get("GEMINI_COOKIE_PATH", "/app/cookie-cache"))
 
 # Startup debug
 logger.info("----------- COOKIE DEBUG -----------")
@@ -63,12 +66,96 @@ logger.info(f"SECURE_1PSIDTS: {'SET' if SECURE_1PSIDTS else 'EMPTY'} (len={len(S
 logger.info("------------------------------------")
 
 
+def dump_session(client: GeminiClient):
+    """Dump GeminiClient session state to disk for restart recovery."""
+    try:
+        cookie_list = []
+        for cookie in client.client.cookies.jar:
+            cookie_list.append({
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path,
+            })
+
+        state = {
+            "access_token": client.access_token,
+            "build_label": client.build_label,
+            "session_id": client.session_id,
+            "reqid": client._reqid,
+            "cookies": cookie_list,
+            "timestamp": time.time(),
+        }
+
+        session_file = COOKIE_CACHE_PATH / "session.json"
+        session_file.parent.mkdir(parents=True, exist_ok=True)
+        session_file.write_text(json.dumps(state), encoding="utf-8")
+        logger.info(f"Session dumped to {session_file} ({len(cookie_list)} cookies)")
+    except Exception as e:
+        logger.error(f"Failed to dump session: {e}")
+
+
+async def try_restore_session() -> GeminiClient | None:
+    """Try to restore GeminiClient from dumped session file. Returns client or None."""
+    session_file = COOKIE_CACHE_PATH / "session.json"
+    if not session_file.exists():
+        logger.info("No session dump found, will init fresh")
+        return None
+
+    try:
+        state = json.loads(session_file.read_text(encoding="utf-8"))
+        age_hours = (time.time() - state.get("timestamp", 0)) / 3600
+        logger.info(f"Found session dump (age: {age_hours:.1f}h, {len(state.get('cookies', []))} cookies)")
+
+        # Restore cookies from saved jar
+        cookies = Cookies()
+        for c in state["cookies"]:
+            cookies.set(c["name"], c["value"], domain=c["domain"], path=c.get("path", "/"))
+
+        proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
+
+        # Create client WITHOUT calling init() — skip the Google roundtrip
+        client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
+        client.cookies = cookies
+        client.access_token = state["access_token"]
+        client.build_label = state["build_label"]
+        client.session_id = state["session_id"]
+        client._reqid = state.get("reqid", random.randint(10000, 99999))
+        client.timeout = 600
+        client.watchdog_timeout = 120
+        client.auto_refresh = False
+        client.verbose = True
+        client._running = True
+
+        # Reconstruct the httpx AsyncClient with restored cookies
+        client.client = AsyncClient(
+            http2=True,
+            timeout=600,
+            proxy=proxy,
+            follow_redirects=True,
+            headers=Headers.GEMINI.value,
+            cookies=cookies,
+        )
+
+        logger.info("Session restored from dump — skipping init()")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to restore session: {e}")
+        return None
+
+
 async def get_or_create_client():
     """Get or create Gemini client with auto-reconnect."""
     global gemini_client
 
     async with client_lock:
         if gemini_client is None:
+            # Try restoring from session dump first (survives restart)
+            restored = await try_restore_session()
+            if restored:
+                gemini_client = restored
+                return gemini_client
+
             if not SECURE_1PSID or not SECURE_1PSIDTS:
                 logger.error("Cannot initialize: credentials not set.")
                 raise HTTPException(status_code=503, detail="Gemini credentials not configured")
@@ -79,6 +166,8 @@ async def get_or_create_client():
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
                 await gemini_client.init(timeout=600, watchdog_timeout=120, auto_refresh=False)
                 logger.info("Gemini client initialized successfully.")
+                # Dump session for restart recovery
+                dump_session(gemini_client)
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
                 gemini_client = None
@@ -88,10 +177,15 @@ async def get_or_create_client():
 
 
 async def reset_client():
-    """Reset client for error recovery."""
+    """Reset client for error recovery. Also removes session dump."""
     global gemini_client
     async with client_lock:
         gemini_client = None
+        # Remove stale session dump so next init is fresh
+        session_file = COOKIE_CACHE_PATH / "session.json"
+        if session_file.exists():
+            session_file.unlink(missing_ok=True)
+            logger.warning("Removed stale session dump")
         logger.warning("Gemini client has been reset.")
 
 

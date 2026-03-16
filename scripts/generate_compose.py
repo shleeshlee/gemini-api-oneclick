@@ -64,6 +64,7 @@ def main() -> int:
                 "      - GEMINI_COOKIE_PATH=/app/cookie-cache",
                 "    volumes:",
                 f"      - ./cookie-cache/account{account_id}:/app/cookie-cache",
+                "      - ./app/main.py:/app/main.py:ro",
                 "    ports:",
                 f"      - \"{port}:8000\"",
                 "    restart: unless-stopped",
