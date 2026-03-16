@@ -196,7 +196,14 @@ if [[ -f .env ]]; then
       docker compose -f docker-compose.accounts.yml up -d --build
 
       # 安装 Gateway 依赖
-      pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败"
+      if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
+        info "安装 Gateway 依赖 ..."
+        pip3 install -q fastapi uvicorn httpx 2>&1 \
+          || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
+          || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+      fi
 
       # 重启或安装 Gateway 服务
       if command -v systemctl >/dev/null 2>&1; then
@@ -493,7 +500,14 @@ CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署智能轮询网关 (端口 ${GATEWAY_PORT}) ..."
 
 # 安装 gateway 依赖
-pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败，请手动安装: pip3 install fastapi uvicorn httpx"
+if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
+  info "安装 Gateway 依赖 ..."
+  pip3 install -q fastapi uvicorn httpx 2>&1 \
+    || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
+    || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+fi
 
 if command -v systemctl >/dev/null 2>&1; then
   PYTHON_BIN=$(command -v python3)
