@@ -170,25 +170,37 @@ if [[ -f .env ]]; then
       fi
       GATEWAY_PORT="${GATEWAY_PORT:-9880}"
 
+      # 确保 COOKIE_MANAGER_PASSWORD 写入 .env（老用户可能没有）
+      if ! grep -q '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null; then
+        NEW_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+        echo "" >> .env
+        echo "# Cookie Manager / Gateway 面板密码" >> .env
+        echo "COOKIE_MANAGER_PASSWORD=${NEW_PASSWORD}" >> .env
+        info "已生成面板密码: ${NEW_PASSWORD}"
+        warn "请记住此密码，登录 Gateway 面板时需要！"
+      fi
+
+      # 确保 COOKIE_MANAGER_PORT 写入 .env
+      if ! grep -q '^COOKIE_MANAGER_PORT=' .env 2>/dev/null; then
+        echo "COOKIE_MANAGER_PORT=${GATEWAY_PORT}" >> .env
+      fi
+
       info "重新生成 compose ..."
       python3 scripts/generate_compose.py
 
       info "重建并重启容器 ..."
       docker compose -f docker-compose.accounts.yml up -d --build
 
+      # 安装 Gateway 依赖
+      pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败"
+
       # 重启或安装 Gateway 服务
       if command -v systemctl >/dev/null 2>&1; then
-        if systemctl is-active gemini-gateway >/dev/null 2>&1; then
-          sudo systemctl restart gemini-gateway
-          info "Gateway 已重启"
-        elif [[ ! -f /etc/systemd/system/gemini-gateway.service ]]; then
-          # 老用户没有 Gateway 服务，补装
-          info "检测到缺少 Gateway 服务，正在安装 ..."
-          pip3 install -q fastapi uvicorn httpx 2>/dev/null || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>/dev/null || warn "Gateway 依赖安装失败"
+        PYTHON_BIN=$(command -v python3)
+        SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
-          PYTHON_BIN=$(command -v python3)
-          SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
-          sudo tee "$SERVICE_FILE" > /dev/null <<GWEOF
+        # 始终写入最新的 service 文件（更新配置路径等）
+        sudo tee "$SERVICE_FILE" > /dev/null <<GWEOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
 After=network.target docker.service
@@ -199,19 +211,16 @@ WorkingDirectory=${ROOT_DIR}
 ExecStart=${PYTHON_BIN} ${ROOT_DIR}/gateway.py
 Restart=on-failure
 RestartSec=5
-Environment=GATEWAY_PORT=${GATEWAY_PORT}
-Environment=BASE_PORT=${START_PORT:-3001}
 EnvironmentFile=${ROOT_DIR}/.env
 
 [Install]
 WantedBy=multi-user.target
 GWEOF
 
-          sudo systemctl daemon-reload
-          sudo systemctl enable gemini-gateway
-          sudo systemctl start gemini-gateway
-          info "Gateway 已安装为系统服务（端口 ${GATEWAY_PORT}）"
-        fi
+        sudo systemctl daemon-reload
+        sudo systemctl enable gemini-gateway
+        sudo systemctl restart gemini-gateway
+        info "Gateway 已安装/更新为系统服务（端口 ${GATEWAY_PORT}）"
       fi
 
       echo ""
@@ -497,8 +506,6 @@ WorkingDirectory=${ROOT_DIR}
 ExecStart=${PYTHON_BIN} ${ROOT_DIR}/gateway.py
 Restart=on-failure
 RestartSec=5
-Environment=GATEWAY_PORT=${GATEWAY_PORT}
-Environment=BASE_PORT=${START_PORT}
 EnvironmentFile=${ROOT_DIR}/.env
 
 [Install]

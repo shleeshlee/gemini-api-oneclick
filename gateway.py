@@ -27,9 +27,9 @@ import uvicorn
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENVS_DIR = ROOT_DIR / "envs"
-GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "9880"))
+GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT") or _dotenv.get("GATEWAY_PORT") or "9880")
 GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
-BASE_PORT = int(os.environ.get("BASE_PORT", "8001"))
+BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 
 # ── Auth ─────────────────────────────────────────────────────────────
 def _read_dotenv() -> dict:
