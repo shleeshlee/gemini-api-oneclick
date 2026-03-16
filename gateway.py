@@ -489,6 +489,9 @@ async def proxy(request: Request, path: str):
     body = await request.body()
     headers = dict(request.headers)
     headers.pop("host", None)
+    # Replace auth header with API_KEY for container authentication
+    if API_KEY:
+        headers["authorization"] = f"Bearer {API_KEY}"
 
     # Parse model and detect group prefix
     target_group = None
