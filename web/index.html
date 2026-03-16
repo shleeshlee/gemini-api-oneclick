@@ -1145,7 +1145,14 @@ function renderTags(containerId, items, type) {
   items.forEach((val, i) => {
     const tag = document.createElement('span');
     tag.className = 'tag ' + type;
-    tag.innerHTML = esc(val) + ' <span class="tag-remove" onclick="removeTag(\'' + containerId + '\',' + i + ')">&times;</span>';
+    const remove = document.createElement('span');
+    remove.className = 'tag-remove';
+    remove.textContent = '\u00d7';
+    remove.dataset.container = containerId;
+    remove.dataset.index = i;
+    remove.onclick = function() { removeTag(this.dataset.container, +this.dataset.index); };
+    tag.textContent = val + ' ';
+    tag.appendChild(remove);
     area.insertBefore(tag, input);
   });
 }

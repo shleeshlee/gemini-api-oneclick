@@ -5,7 +5,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
-RUN uv sync --frozen || uv sync
+RUN uv sync
 
 COPY app/main.py ./main.py
 

@@ -392,15 +392,17 @@ async def health_loop():
 
 # ── FastAPI App ─────────────────────────────────────────────────────────
 
-app = FastAPI(title="Gemini API Gateway")
+from contextlib import asynccontextmanager
 
-
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app):
     load_account_names()
     load_groups()
     discover_containers()
     asyncio.create_task(health_loop())
+    yield
+
+app = FastAPI(title="Gemini API Gateway", lifespan=lifespan)
 
 
 # ── Proxy ───────────────────────────────────────────────────────────────

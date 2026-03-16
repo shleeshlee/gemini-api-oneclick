@@ -218,7 +218,7 @@ async def verify_api_key(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     try:
-        scheme, token = authorization.split()
+        scheme, token = authorization.split(None, 1)
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid authentication scheme. Use Bearer token")
         if token != API_KEY:
@@ -266,12 +266,18 @@ async def list_models():
 
 def map_model_name(openai_model_name: str) -> Model:
     """Map OpenAI model name to Gemini Model enum."""
-    all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
-    logger.info(f"Available models: {all_models}")
+    name_lower = openai_model_name.lower()
 
+    # Exact match first
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if openai_model_name.lower() in model_name.lower():
+        if name_lower == model_name.lower():
+            return m
+
+    # Substring match fallback
+    for m in Model:
+        model_name = m.model_name if hasattr(m, "model_name") else str(m)
+        if name_lower in model_name.lower():
             return m
 
     return next(iter(Model))
