@@ -45,7 +45,6 @@ bash scripts/install.sh
 - 🍪 **Cookie 管理** — 面板内直接部署 Cookie，一键重启单个容器
 - 🔖 **账号标识** — 给容器命名（如"工作号""备用号"），服务端存储
 - 🔒 **安全加固** — 速率限制、timing-safe 认证、防暴力破解
-- 🖼️ **图片生成** — 支持 DALL-E 兼容格式调用 Gemini ImageFX（实验性）
 - ➕ **弹性扩容** — 随时通过 `manage.sh` 新增/删除容器
 - 🔄 **一键更新** — 已安装的环境重新跑 `install.sh` 选"更新"即可
 
@@ -95,7 +94,6 @@ bash scripts/install.sh
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | 聊天（OpenAI 兼容，支持流式） |
-| `POST /v1/images/generations` | 图片生成（DALL-E 兼容，实验性） |
 | `GET /v1/models` | 可用模型列表 |
 | `GET /` | 管理面板 |
 
