@@ -610,6 +610,22 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
         logger.info(f"Response videos: {videos}")
         logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
 
+        # If no videos but text indicates pending (Chinese or English), try manual polling
+        if not videos and response.text:
+            text = response.text
+            is_pending = any(kw in text for kw in [
+                '正在生成视频', '生成视频', 'generating your video', 'video_gen_chip',
+            ])
+            if is_pending:
+                cid = response.metadata[0] if response.metadata else None
+                logger.info(f"Video generation pending, cid={cid}")
+                if cid and hasattr(client, '_poll_video_generation'):
+                    logger.info("Starting manual video poll (up to 5 min)...")
+                    polled = await client._poll_video_generation(cid, verbose=True)
+                    if polled:
+                        videos = polled
+                        logger.info(f"Poll returned {len(videos)} video(s)")
+
         if not videos:
             # Also check for images in case Gemini generated an image instead
             images = response.images

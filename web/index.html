@@ -1267,17 +1267,24 @@ function getNegativePrompt() {
   return [presets, custom].filter(Boolean).join(', ');
 }
 
+let _modelListLoaded = false;
 async function loadModelSelect() {
   const sel = document.getElementById('imgModel');
   if (!sel) return;
+  const current = sel.value;
   try {
     const resp = await fetch('/v1/models', {headers: authHeaders()});
     const data = await resp.json();
     const models = (data.data || []).map(m => m.id).filter(id => id !== 'unspecified');
     sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
-    // Default to first flash model
-    const flash = models.find(m => m.includes('flash'));
-    if (flash) sel.value = flash;
+    // Restore previous selection, or default to first flash model on first load
+    if (current && models.includes(current)) {
+      sel.value = current;
+    } else if (!_modelListLoaded) {
+      const flash = models.find(m => m.includes('flash'));
+      if (flash) sel.value = flash;
+    }
+    _modelListLoaded = true;
   } catch(e) { console.error('Failed to load models:', e); }
 }
 function selectImgStyle(id) {
@@ -1444,7 +1451,7 @@ async function doVidGen() {
 
   btn.disabled = true; btn.innerHTML = '🎬 生成中...';
   zone.style.display = '';
-  document.getElementById('imgTempInfo').textContent = '正在生成视频，Veo 模型可能需要 60-180 秒...';
+  document.getElementById('imgTempInfo').textContent = '正在生成视频，Veo 需要 2-5 分钟，请耐心等待...';
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
 
   const start = Date.now();
