@@ -531,7 +531,7 @@ async def proxy(request: Request, path: str):
         c.total_requests += 1
 
         try:
-            client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0))
+            client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
                 resp = await client.send(req, stream=True)
