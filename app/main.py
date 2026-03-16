@@ -9,43 +9,33 @@
 # 7. Image generation - download generated images, return as base64 in content
 
 import asyncio
-import json
-from datetime import datetime, timezone
-import os
 import base64
+import json
+import logging
+import os
+import random
 import re
 import tempfile
-import random
-
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Union
 import time
 import uuid
-import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Union
 
-from httpx import AsyncClient, Cookies
+from fastapi import Depends, FastAPI, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from httpx import AsyncClient
+from pydantic import BaseModel
+
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
-from gemini_webapi.types.image import GeneratedImage, WebImage
+from gemini_webapi.types.image import GeneratedImage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 set_log_level("INFO")
-
-app = FastAPI(title="Gemini API OneClick")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Global client and lock
 gemini_client = None
@@ -95,36 +85,32 @@ async def reset_client():
         logger.warning("Gemini client has been reset.")
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app):
     """Warm up client on startup with random delay to avoid simultaneous logins."""
-    global gemini_client
-
-    if not SECURE_1PSID or not SECURE_1PSIDTS:
-        logger.error("Cannot initialize: credentials (SECURE_1PSID, SECURE_1PSIDTS) are not set.")
-        return
-
-    # Random delay: each container waits 5-60s to simulate human login
-    delay = random.randint(5, 60)
-    logger.info(f"Waiting {delay}s before initializing (staggered startup)...")
-    await asyncio.sleep(delay)
-
-    try:
-        await get_or_create_client()
-        logger.info("Gemini client is warmed up and ready.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Gemini client during startup: {e}")
+    if SECURE_1PSID and SECURE_1PSIDTS:
+        delay = random.randint(5, 60)
+        logger.info(f"Waiting {delay}s before initializing (staggered startup)...")
+        await asyncio.sleep(delay)
+        try:
+            await get_or_create_client()
+            logger.info("Gemini client is warmed up and ready.")
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini client during startup: {e}")
+    else:
+        logger.error("Credentials (SECURE_1PSID, SECURE_1PSIDTS) are not set.")
+    yield
 
 
-if not SECURE_1PSID or not SECURE_1PSIDTS:
-    logger.warning("Gemini API credentials are not set or empty!")
-else:
-    logger.info("Credentials found: SECURE_1PSID and SECURE_1PSIDTS are set.")
+app = FastAPI(title="Gemini API OneClick", lifespan=lifespan)
 
-if not API_KEY:
-    logger.warning("API_KEY is not set or empty! API authentication will not work.")
-else:
-    logger.info("API_KEY found.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def correct_markdown(md_text: str) -> str:
@@ -175,39 +161,6 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0
     frequency_penalty: Optional[float] = 0
     user: Optional[str] = None
-
-
-class Choice(BaseModel):
-    index: int
-    message: Message
-    finish_reason: str
-
-
-class Usage(BaseModel):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-
-
-class ChatCompletionResponse(BaseModel):
-    id: str
-    object: str = "chat.completion"
-    created: int
-    model: str
-    choices: List[Choice]
-    usage: Usage
-
-
-class ModelData(BaseModel):
-    id: str
-    object: str = "model"
-    created: int
-    owned_by: str = "google"
-
-
-class ModelList(BaseModel):
-    object: str = "list"
-    data: List[ModelData]
 
 
 async def verify_api_key(authorization: str = Header(None)):
