@@ -1495,7 +1495,7 @@ async function doVidGen() {
 
   btn.disabled = true; btn.innerHTML = '🎬 生成中...';
   zone.style.display = '';
-  document.getElementById('imgTempInfo').textContent = '正在生成视频，Veo 需要 2-5 分钟，请耐心等待...';
+  document.getElementById('imgTempInfo').innerHTML = '正在生成视频，Veo 需要 <b>3-6 分钟</b>，请勿刷新页面...';
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
 
   const start = Date.now();
