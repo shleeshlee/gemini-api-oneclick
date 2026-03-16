@@ -58,8 +58,8 @@ API_KEY = os.environ.get("API_KEY", "")
 
 # Startup debug
 logger.info("----------- COOKIE DEBUG -----------")
-logger.info(f"SECURE_1PSID: '{SECURE_1PSID[:20] if SECURE_1PSID else 'EMPTY'}...' (len={len(SECURE_1PSID)})")
-logger.info(f"SECURE_1PSIDTS: '{SECURE_1PSIDTS[:20] if SECURE_1PSIDTS else 'EMPTY'}...' (len={len(SECURE_1PSIDTS)})")
+logger.info(f"SECURE_1PSID: {'SET' if SECURE_1PSID else 'EMPTY'} (len={len(SECURE_1PSID)})")
+logger.info(f"SECURE_1PSIDTS: {'SET' if SECURE_1PSIDTS else 'EMPTY'} (len={len(SECURE_1PSIDTS)})")
 logger.info("------------------------------------")
 
 
@@ -119,13 +119,12 @@ async def startup_event():
 if not SECURE_1PSID or not SECURE_1PSIDTS:
     logger.warning("Gemini API credentials are not set or empty!")
 else:
-    logger.info(f"Credentials found. SECURE_1PSID starts with: {SECURE_1PSID[:5]}...")
-    logger.info(f"Credentials found. SECURE_1PSIDTS starts with: {SECURE_1PSIDTS[:5]}...")
+    logger.info("Credentials found: SECURE_1PSID and SECURE_1PSIDTS are set.")
 
 if not API_KEY:
     logger.warning("API_KEY is not set or empty! API authentication will not work.")
 else:
-    logger.info(f"API_KEY found. Starts with: {API_KEY[:5]}...")
+    logger.info("API_KEY found.")
 
 
 def correct_markdown(md_text: str) -> str:

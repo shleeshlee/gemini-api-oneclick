@@ -9,6 +9,7 @@ Port: 9880 (configurable via GATEWAY_PORT env)
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -27,11 +28,9 @@ import uvicorn
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENVS_DIR = ROOT_DIR / "envs"
-GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT") or _dotenv.get("GATEWAY_PORT") or "9880")
 GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
-BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 
-# ── Auth ─────────────────────────────────────────────────────────────
+
 def _read_dotenv() -> dict:
     """Read all key=value pairs from .env file."""
     result = {}
@@ -45,7 +44,10 @@ def _read_dotenv() -> dict:
             result[k.strip()] = v.strip()
     return result
 
+
 _dotenv = _read_dotenv()
+GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT") or _dotenv.get("GATEWAY_PORT") or "9880")
+BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 API_KEY = _dotenv.get("API_KEY", "")
 COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
 
@@ -356,7 +358,7 @@ async def sample_container_logs():
                 text = line.split(" ", 1)[-1].strip()[:150] if " " in line else line.strip()[:150]
                 if not text:
                     continue
-                h = hash(text)
+                h = hashlib.md5(text.encode()).hexdigest()
                 if h in seen:
                     continue
                 seen.add(h)
