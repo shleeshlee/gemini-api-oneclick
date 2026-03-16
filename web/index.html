@@ -502,7 +502,7 @@ body::before {
       <div class="log-header">🍪 图片生成测试</div>
       <span class="log-arrow" id="imgGenArrow">&#x25BC;</span>
     </div>
-    <div class="log-body" id="imgGenBody" style="display:block;padding:1rem">
+    <div id="imgGenBody" style="padding:1rem">
       <div style="display:flex;gap:0.5rem;margin-bottom:0.8rem">
         <input type="text" id="imgPrompt" placeholder="输入提示词，如：画一只可爱的小猫" style="flex:1;padding:0.5rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.85rem">
         <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.5rem 1.2rem;font-size:0.85rem;white-space:nowrap">生成</button>
@@ -1033,9 +1033,9 @@ function renderLogs(logEntries) {
 function toggleImgGen() {
   const body = document.getElementById('imgGenBody');
   const arrow = document.getElementById('imgGenArrow');
-  const open = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.innerHTML = open ? '&#x25BC;' : '&#x25B6;';
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
 }
 
 async function doImgGen() {
