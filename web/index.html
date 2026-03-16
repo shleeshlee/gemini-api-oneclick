@@ -358,13 +358,15 @@ body::before {
 
 .model-chips {
   display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.5rem 0;
+  max-height: 4.2rem; overflow: hidden; transition: max-height 0.3s ease;
+  position: relative;
 }
+.model-chips.expanded { max-height: none; }
 .model-chip {
   display: inline-flex; align-items: center; gap: 0.3rem;
   padding: 0.25rem 0.65rem; border-radius: 999px; font-size: 0.78rem;
   background: var(--card-bg); border: 1.5px solid var(--border);
   color: var(--text); font-family: 'Outfit', sans-serif;
-  transition: all 0.15s;
 }
 .model-chip::before {
   content: '🍪'; font-size: 0.7rem;
@@ -372,6 +374,13 @@ body::before {
 .model-chip-empty {
   font-size: 0.8rem; color: var(--text-muted); padding: 0.3rem 0;
 }
+.model-toggle {
+  display: none; width: 100%; text-align: center; padding: 0.2rem 0;
+  font-size: 0.75rem; color: var(--primary); cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+}
+.model-toggle:hover { text-decoration: underline; }
+.model-toggle.visible { display: block; }
 
 .guard-hint {
   font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.4;
@@ -596,6 +605,7 @@ body::before {
       <div class="model-chips" id="modelChips">
         <span class="model-chip-empty">点击刷新获取模型列表</span>
       </div>
+      <div class="model-toggle" id="modelToggle" onclick="toggleModelChips()">展开全部</div>
     </div>
 
     <div class="modal-actions">
@@ -979,8 +989,21 @@ async function refreshModels() {
 }
 function renderModelChips(models) {
   const box = document.getElementById('modelChips');
-  if (!models.length) { box.innerHTML = '<span class="model-chip-empty">暂无模型</span>'; return; }
+  const toggle = document.getElementById('modelToggle');
+  box.classList.remove('expanded');
+  toggle.textContent = '展开全部';
+  if (!models.length) { box.innerHTML = '<span class="model-chip-empty">暂无模型</span>'; toggle.classList.remove('visible'); return; }
   box.innerHTML = models.map(m => `<span class="model-chip">${esc(m)}</span>`).join('');
+  // check if overflow
+  requestAnimationFrame(() => {
+    toggle.classList.toggle('visible', box.scrollHeight > box.clientHeight + 2);
+  });
+}
+function toggleModelChips() {
+  const box = document.getElementById('modelChips');
+  const toggle = document.getElementById('modelToggle');
+  const expanded = box.classList.toggle('expanded');
+  toggle.textContent = expanded ? '收起' : '展开全部';
 }
 
 // ── Logs ───────────────────────────────────────────────────
