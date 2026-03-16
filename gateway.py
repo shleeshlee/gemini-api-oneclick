@@ -14,16 +14,16 @@ import hmac
 import json
 import os
 import re
-import subprocess
 import time
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -391,8 +391,6 @@ async def health_loop():
 
 
 # ── FastAPI App ─────────────────────────────────────────────────────────
-
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
