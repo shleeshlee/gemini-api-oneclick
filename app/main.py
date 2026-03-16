@@ -458,8 +458,54 @@ SIZE_TO_ASPECT = {
     "1024x1024": "",
 }
 
-# Style is passed directly to Gemini as its own built-in style name
-# No need to translate — Gemini recognizes its own style keywords
+# Style descriptions — Gemini's API may not trigger the web app's hidden style templates,
+# so we provide detailed descriptions as guidance. Style name + description for best results.
+STYLE_PROMPTS = {
+    # Gemini official image styles
+    "Monochrome": "Monochrome style, black and white with dramatic contrast, deep shadows and bright highlights, film noir aesthetic",
+    "Color Block": "Color Block style, bold flat areas of saturated color, graphic design inspired, strong geometric shapes",
+    "Runway": "Fashion runway style, high-fashion editorial look, dramatic poses, luxury aesthetic, magazine quality",
+    "Screen Print": "Screen print style, Andy Warhol inspired, halftone dots, limited color palette, pop art aesthetic",
+    "Colorful": "Extremely colorful and vibrant, rainbow palette, maximum saturation, joyful and energetic",
+    "Gothic Clay": "Gothic claymation style, stop-motion clay figures, dark and eerie, Tim Burton inspired, textured surfaces",
+    "Explosive": "Explosive action style, dramatic impact, debris and particles, high-energy dynamic composition, Michael Bay aesthetic",
+    "Salon": "Salon portrait style, elegant and refined, soft glamour lighting, classic beauty photography",
+    "Sketch": "Detailed pencil sketch on paper, graphite shading, fine crosshatch linework, hand-drawn feel",
+    "Cinematic": "Cinematic style, movie still aesthetic, Rembrandt lighting, dramatic composition, anamorphic lens feel, film grain",
+    "Steampunk": "Steampunk style, Victorian-era machinery, brass gears and pipes, industrial revolution meets fantasy",
+    "Sunrise": "Golden sunrise style, warm golden hour light, long shadows, atmospheric haze, serene and hopeful mood",
+    "Myth Fighter": "Epic mythological warrior style, ancient Greek/Norse aesthetic, dramatic battle poses, ornate armor, heroic composition",
+    "Surreal": "Surrealist style, Salvador Dali inspired, impossible geometry, dreamlike distortions, melting forms",
+    "Dark": "Dark moody style, deep shadows, minimal lighting, noir atmosphere, mysterious and brooding",
+    "Enamel Pin": "Enamel pin style, flat vector illustration, bold outlines, limited colors, cute collectible aesthetic",
+    "Cyborg": "Cyborg style, human-machine hybrid, visible circuitry and metal parts, bioluminescent elements, sci-fi realism",
+    "Soft Portrait": "Soft portrait style, gentle diffused lighting, shallow depth of field, warm skin tones, intimate and dreamy",
+    "Retro Cartoon": "1930s retro cartoon style, rubber hose animation, black and white with halftone, Fleischer Studios inspired",
+    "Oil Painting": "Oil painting style, rich impasto brushstrokes, Rembrandt-style golden lighting, classical composition, museum quality, visible canvas texture",
+    # Extra common styles
+    "Anime": "Anime style, vibrant colors, clean cel-shading lineart, expressive eyes, Japanese animation aesthetic",
+    "Photorealistic": "Photorealistic, ultra detailed like a DSLR photograph, natural lighting, sharp focus, 85mm lens",
+    "Watercolor": "Watercolor painting, soft translucent washes, visible paper texture, gentle color bleeding, delicate brushwork",
+    "Pixel Art": "Pixel art style, retro 16-bit video game aesthetic, clean pixel boundaries, limited palette, nostalgic",
+    "Kawaii": "Kawaii style, adorable chibi proportions, pastel colors, round soft shapes, sparkles and hearts",
+    "Ghibli": "Studio Ghibli animation style, lush hand-painted nature, warm soft lighting, whimsical and magical atmosphere",
+    # Gemini official video styles
+    "Civilization": "Ancient civilization epic style, grand architecture, marble and gold, historical drama aesthetic",
+    "Metallic": "Metallic chrome style, reflective surfaces, liquid metal, futuristic industrial aesthetic",
+    "Memo": "Memo style, playful and expressive, close-up character study, natural and candid feel",
+    "Glam": "Glamorous style, sparkle and shine, luxury fashion, dramatic beauty lighting, editorial elegance",
+    "Crochet": "Crochet knitted style, soft yarn textures, handcrafted warmth, cozy stop-motion aesthetic",
+    "Cyberpunk": "Cyberpunk style, neon-lit streets, holographic signs, rain reflections, futuristic dystopia",
+    "Video Game": "Retro video game style, pixel art animation, 8-bit/16-bit aesthetic, arcade feel",
+    "Cosmos": "Cosmic space style, nebulae and stars, infinite depth, astronomical wonder, sci-fi grandeur",
+    "Action Hero": "Action hero blockbuster style, intense close-ups, dramatic slow motion, gritty and cinematic",
+    "Stardust": "Stardust fairy tale style, magical sparkles, enchanted garden, soft dreamy atmosphere, romantic fantasy",
+    "Jellytoon": "Jellytoon style, 3D animated character, soft rounded forms, vibrant Pixar-like aesthetic, cute and expressive",
+    "Racetrack": "Racetrack style, miniature tilt-shift effect, toy-like world, bright saturated colors, playful perspective",
+    "ASMR Apple": "ASMR macro style, extreme close-up detail, satisfying textures, crisp focus, sensory-rich",
+    "Red Carpet": "Red carpet documentary style, paparazzi flash, celebrity glamour, dramatic entrances",
+    "Popcorn": "Popcorn fun style, playful stop-motion, whimsical food art, creative and surprising compositions",
+}
 
 QUALITY_PROMPTS = {
     "hd": "Make it extremely detailed and high quality, with 4K resolution clarity and sharp focus throughout.",
@@ -473,9 +519,10 @@ def build_image_prompt(request: ImageGenerationRequest) -> str:
     # User prompt first — the core intent
     parts.append(request.prompt)
 
-    # Style — pass Gemini's own style name directly
+    # Style — use detailed description if available, fall back to style name
     if request.style:
-        parts.append(f"Use {request.style} style.")
+        desc = STYLE_PROMPTS.get(request.style, f"{request.style} style")
+        parts.append(desc)
 
     # Quality enhancement
     if request.quality and request.quality in QUALITY_PROMPTS:
@@ -581,7 +628,8 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
         parts = ["Generate a short video:"]
         parts.append(request.prompt)
         if request.style:
-            parts.append(f"Use {request.style} style.")
+            desc = STYLE_PROMPTS.get(request.style, f"{request.style} style")
+            parts.append(desc)
         if request.quality and request.quality in QUALITY_PROMPTS:
             parts.append(QUALITY_PROMPTS[request.quality])
         if request.negative_prompt:
