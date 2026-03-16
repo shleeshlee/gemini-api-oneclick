@@ -335,13 +335,14 @@ body::before {
 
 /* Image Studio chips */
 .img-chip {
-  padding: 0.3rem 0.6rem; border: 2px solid var(--border); border-radius: 20px;
-  background: var(--bg); font-family: 'Outfit', sans-serif; font-size: 0.75rem;
-  cursor: pointer; transition: all 0.2s; white-space: nowrap; color: var(--text-muted);
+  padding: 0.22rem 0.5rem; border: 1.5px solid var(--border); border-radius: 14px;
+  background: var(--bg); font-family: 'Outfit', sans-serif; font-size: 0.72rem;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap; color: var(--text-muted);
+  flex-shrink: 0;
 }
 .img-chip:hover { border-color: var(--primary-light); background: var(--card); }
 .img-chip.active { border-color: var(--primary); background: var(--primary); color: #fff; }
-.img-chip.ratio { min-width: 50px; text-align: center; }
+.img-chip.ratio { min-width: 42px; text-align: center; font-size: 0.7rem; }
 .img-select {
   padding: 0.35rem 0.5rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
   font-family: 'Outfit', sans-serif; font-size: 0.8rem; background: var(--bg); color: var(--text);
@@ -356,14 +357,16 @@ body::before {
 .dim-chip.active { border-color: var(--accent); background: var(--accent-light); color: #92610E; }
 .dim-chip .dim-label { font-weight: 600; }
 .style-tpl-card {
-  padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem; border-radius: 10px; flex-shrink: 0;
   background: var(--bg); border: 1.5px solid var(--border); transition: all 0.15s;
+  min-width: 110px; max-width: 160px;
 }
+.style-tpl-card:hover { border-color: var(--primary-light); }
 .style-tpl-header {
   display: flex; align-items: center; justify-content: space-between; cursor: pointer;
-  font-size: 0.82rem; font-weight: 600; font-family: 'Nunito', sans-serif;
+  font-size: 0.75rem; font-weight: 600; font-family: 'Nunito', sans-serif;
 }
-.style-tpl-dims { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.4rem; }
+.style-tpl-dims { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.3rem; }
 .img-history-item {
   padding: 0.5rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm);
   cursor: pointer; transition: background 0.15s;
@@ -649,44 +652,42 @@ body::before {
         <div id="negPresets" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
         <input type="text" id="imgNeg" placeholder="自定义排除内容" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
-      <!-- Style: presets -->
-      <div style="margin-bottom:0.8rem">
-        <div class="studio-label" style="display:flex;gap:0.6rem;align-items:center">
-          风格预设
-          <span class="img-chip active" data-stype="img" onclick="switchStyleType('img')" id="styleTypeImg" style="font-size:0.68rem;padding:0.15rem 0.5rem">🖼️ 图片</span>
-          <span class="img-chip" data-stype="vid" onclick="switchStyleType('vid')" id="styleTypeVid" style="font-size:0.68rem;padding:0.15rem 0.5rem">🎬 视频</span>
+      <!-- Style: presets (scrollable single row) -->
+      <div style="margin-bottom:0.6rem">
+        <div class="studio-label" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.3rem">
+          风格
+          <span class="img-chip active" data-stype="img" onclick="switchStyleType('img')" id="styleTypeImg" style="font-size:0.65rem;padding:0.1rem 0.4rem">图片</span>
+          <span class="img-chip" data-stype="vid" onclick="switchStyleType('vid')" id="styleTypeVid" style="font-size:0.65rem;padding:0.1rem 0.4rem">视频</span>
         </div>
-        <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
+        <div id="imgStyles" style="display:flex;gap:0.3rem;overflow-x:auto;padding-bottom:0.3rem;scrollbar-width:thin"></div>
       </div>
-      <!-- Custom style templates — drawer cards -->
-      <div style="margin-bottom:0.8rem">
-        <div class="studio-label" style="display:flex;justify-content:space-between;align-items:center">
-          <span>🎭 自定义风格模板</span>
-          <span id="styleTemplateCount" style="font-size:0.72rem;color:var(--text-light)"></span>
+      <!-- Custom templates (compact inline) -->
+      <div id="styleTemplateZone" style="margin-bottom:0.6rem;display:none">
+        <div class="studio-label" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">
+          <span>🎭 模板</span>
+          <span id="styleTemplateCount" style="font-size:0.68rem;color:var(--text-light)"></span>
         </div>
-        <div id="styleTemplates" style="display:flex;flex-wrap:wrap;gap:0.4rem"></div>
-        <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
+        <div id="styleTemplates" style="display:flex;gap:0.4rem;overflow-x:auto;padding-bottom:0.2rem"></div>
+        <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin-top:0.3rem"></div>
       </div>
-      <!-- Controls row: ratio, quality, count -->
-      <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
-        <div style="flex:1;min-width:120px">
-          <div class="studio-label">比例</div>
-          <div id="imgRatios" style="display:flex;gap:0.3rem"></div>
+      <!-- Controls: all in two compact rows -->
+      <div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:0.4rem 0.6rem;align-items:center;margin-bottom:0.6rem">
+        <div class="studio-label" style="margin:0">比例</div>
+        <div id="imgRatios" style="display:flex;gap:0.25rem"></div>
+        <div style="display:flex;align-items:center;gap:0.3rem">
+          <span style="font-size:0.75rem;color:var(--text-muted)">质量</span>
+          <select id="imgQuality" class="img-select" style="padding:0.3rem 0.4rem;font-size:0.78rem"><option value="standard">标准</option><option value="hd">HD</option></select>
         </div>
-        <div style="min-width:80px">
-          <div class="studio-label">质量</div>
-          <select id="imgQuality" class="img-select"><option value="standard">标准</option><option value="hd">高清 HD</option></select>
-        </div>
-        <div style="min-width:60px">
-          <div class="studio-label">数量</div>
-          <select id="imgCount" class="img-select"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
+        <div style="display:flex;align-items:center;gap:0.3rem">
+          <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
+          <select id="imgCount" class="img-select" style="padding:0.3rem 0.4rem;font-size:0.78rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
         </div>
       </div>
-      <!-- Model + generate buttons row -->
-      <div style="display:flex;gap:0.4rem;align-items:stretch;margin-bottom:0.8rem">
-        <select id="imgModel" class="img-select" style="flex:1 1 30ch;min-width:0"><option value="gemini-3.0-flash">gemini-3.0-flash</option></select>
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:0 1 auto;padding:0.55rem 1.2rem;font-size:0.85rem;font-weight:700;white-space:nowrap">🎨 生图</button>
-        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 1 auto;padding:0.55rem 1.2rem;font-size:0.85rem;font-weight:600;white-space:nowrap;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
+      <!-- Model + action buttons (balanced) -->
+      <div style="display:flex;gap:0.4rem;align-items:stretch;margin-bottom:0.6rem">
+        <select id="imgModel" class="img-select" style="flex:1 1 0;min-width:0;font-size:0.78rem"></select>
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:0 0 auto;padding:0.5rem 1rem;font-size:0.85rem;font-weight:700;white-space:nowrap">🎨 生图</button>
+        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 0 auto;padding:0.5rem 1rem;font-size:0.85rem;font-weight:600;white-space:nowrap;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
       </div>
       <!-- Reference image upload -->
       <div>
@@ -1706,12 +1707,15 @@ async function loadStyleTemplates() {
 function renderStyleTemplates() {
   const el = document.getElementById('styleTemplates');
   const countEl = document.getElementById('styleTemplateCount');
+  const zone = document.getElementById('styleTemplateZone');
   if (!savedStyles.length) {
-    el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-light);padding:0.3rem 0">上传图片后点击 🔍 解析风格 创建模板</div>';
+    el.innerHTML = '';
     countEl.textContent = '';
+    if (zone) zone.style.display = 'none';
     return;
   }
-  countEl.textContent = `${savedStyles.length} 个模板`;
+  if (zone) zone.style.display = '';
+  countEl.textContent = `${savedStyles.length} 个`;
   el.innerHTML = savedStyles.map(s => {
     const dims = s.dimensions || {};
     const dimCount = Object.keys(dims).length;
