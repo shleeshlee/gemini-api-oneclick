@@ -635,7 +635,10 @@ body::before {
   <div class="tab-content" id="tabContentStudio">
     <!-- Zone 1: Tool Area -->
     <div class="studio-section">
-      <div class="studio-section-title">✨ 生成设置</div>
+      <div class="studio-section-title" style="justify-content:space-between;align-items:center">
+        <span>✨ 生成设置</span>
+        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.3rem 0.8rem;font-size:0.78rem;font-weight:600;margin:0">✨ 优化提示词</button>
+      </div>
       <!-- Prompt -->
       <div style="margin-bottom:0.8rem">
         <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的画面，如：一只橘猫趴在窗台上晒太阳，窗外是樱花&#10;&#10;Shift+Enter 换行，Enter 生成" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
@@ -646,7 +649,7 @@ body::before {
         <div id="negPresets" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
         <input type="text" id="imgNeg" placeholder="自定义排除内容" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
-      <!-- Style: presets + custom templates -->
+      <!-- Style: presets -->
       <div style="margin-bottom:0.8rem">
         <div class="studio-label" style="display:flex;gap:0.6rem;align-items:center">
           风格预设
@@ -655,15 +658,16 @@ body::before {
         </div>
         <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
       </div>
+      <!-- Custom style templates — drawer cards -->
       <div style="margin-bottom:0.8rem">
         <div class="studio-label" style="display:flex;justify-content:space-between;align-items:center">
           <span>🎭 自定义风格模板</span>
           <span id="styleTemplateCount" style="font-size:0.72rem;color:var(--text-light)"></span>
         </div>
-        <div id="styleTemplates"></div>
+        <div id="styleTemplates" style="display:flex;flex-wrap:wrap;gap:0.4rem"></div>
         <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
       </div>
-      <!-- Controls row -->
+      <!-- Controls row: ratio, quality, count -->
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
         <div style="flex:1;min-width:120px">
           <div class="studio-label">比例</div>
@@ -677,30 +681,33 @@ body::before {
           <div class="studio-label">数量</div>
           <select id="imgCount" class="img-select"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
         </div>
-        <div style="flex:1;min-width:140px">
-          <div class="studio-label">模型</div>
-          <select id="imgModel" class="img-select" style="width:100%"><option value="gemini-3.0-flash">gemini-3.0-flash</option></select>
-        </div>
+      </div>
+      <!-- Model + generate buttons row -->
+      <div style="display:flex;gap:0.4rem;align-items:stretch;margin-bottom:0.8rem">
+        <select id="imgModel" class="img-select" style="flex:1 1 30ch;min-width:0"><option value="gemini-3.0-flash">gemini-3.0-flash</option></select>
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:0 1 auto;padding:0.55rem 1.2rem;font-size:0.85rem;font-weight:700;white-space:nowrap">🎨 生图</button>
+        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 1 auto;padding:0.55rem 1.2rem;font-size:0.85rem;font-weight:600;white-space:nowrap;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
       </div>
       <!-- Reference image upload -->
-      <div style="margin-bottom:0.8rem">
-        <div class="studio-label">参考图片（可选，用于风格参考或图片编辑）</div>
-        <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted)" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
-          <span id="imgUploadText">拖拽或点击上传图片</span>
-          <div id="imgUploadPreview" style="display:none;margin-top:0.4rem">
-          <img id="imgPreviewImg" style="max-height:80px;border-radius:6px">
-          <button onclick="event.stopPropagation();analyzeStyle()" style="margin-left:0.4rem;border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.15rem 0.5rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
-          <button onclick="event.stopPropagation();clearUploadImage()" style="margin-left:0.3rem;border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
-        </div>
+      <div>
+        <div class="studio-label">参考图片（可选，用于风格参考）</div>
+        <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted)" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
+          <div id="imgUploadEmpty" style="text-align:center;padding:0.3rem">拖拽或点击上传图片</div>
+          <div id="imgUploadPreview" style="display:none">
+            <div style="display:flex;gap:0.8rem;align-items:start">
+              <img id="imgPreviewImg" style="max-height:120px;max-width:200px;border-radius:6px;object-fit:contain">
+              <div style="flex:1;min-width:0">
+                <div id="imgFileInfo" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem"></div>
+                <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
+                  <button onclick="event.stopPropagation();analyzeStyle()" style="border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
+                  <button onclick="event.stopPropagation();doImgEdit()" style="border:none;background:#E0F0FF;color:#2D6DB5;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✏️ 编辑</button>
+                  <button onclick="event.stopPropagation();clearUploadImage()" style="border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
-      </div>
-      <!-- Action buttons -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0.4rem">
-        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600">✨ 优化</button>
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:700">🎨 生图</button>
-        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
-        <button class="btn btn-primary" id="imgEditBtn" onclick="doImgEdit()" style="padding:0.6rem 0.3rem;font-size:0.82rem;font-weight:600;background:linear-gradient(135deg,#2D9CDB,#27AE60)">🖌️ 编辑</button>
       </div>
     </div>
 
@@ -1598,17 +1605,25 @@ function readUploadFile(file) {
   if (!file.type.startsWith('image/')) { toast('请上传图片文件', 'err'); return; }
   const reader = new FileReader();
   reader.onload = (e) => {
-    uploadedImageB64 = e.target.result.split(',')[1]; // strip data:... prefix
-    document.getElementById('imgPreviewImg').src = e.target.result;
+    uploadedImageB64 = e.target.result.split(',')[1];
+    const img = document.getElementById('imgPreviewImg');
+    img.src = e.target.result;
     document.getElementById('imgUploadPreview').style.display = '';
-    document.getElementById('imgUploadText').textContent = file.name;
+    document.getElementById('imgUploadEmpty').style.display = 'none';
+    // Show original file info
+    const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+    const tmpImg = new Image();
+    tmpImg.onload = () => {
+      document.getElementById('imgFileInfo').innerHTML = `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB · ${file.type}`;
+    };
+    tmpImg.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
 function clearUploadImage() {
   uploadedImageB64 = null;
   document.getElementById('imgUploadPreview').style.display = 'none';
-  document.getElementById('imgUploadText').textContent = '拖拽或点击上传图片';
+  document.getElementById('imgUploadEmpty').style.display = '';
   document.getElementById('imgFileInput').value = '';
 }
 
@@ -1694,19 +1709,18 @@ function renderStyleTemplates() {
   countEl.textContent = `${savedStyles.length} 个模板`;
   el.innerHTML = savedStyles.map(s => {
     const dims = s.dimensions || {};
-    return `<div class="style-tpl-card">
-      <div class="style-tpl-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
-        <span>🎭 ${esc(s.name)}</span>
-        <div style="display:flex;gap:0.3rem;align-items:center">
-          <span style="font-size:0.7rem;color:var(--text-light)">${Object.keys(dims).length} 维度</span>
-          <button onclick="event.stopPropagation();deleteStyleTemplate('${s.id}')" style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:0.7rem;padding:0.1rem 0.3rem">🗑</button>
-        </div>
+    const dimCount = Object.keys(dims).length;
+    return `<div class="style-tpl-card" style="flex:0 0 auto;min-width:140px;max-width:200px">
+      <div class="style-tpl-header" onclick="this.parentElement.querySelector('.style-tpl-dims').style.display=this.parentElement.querySelector('.style-tpl-dims').style.display==='none'?'flex':'none'">
+        <span style="font-size:0.8rem">🎭 ${esc(s.name)}</span>
+        <button onclick="event.stopPropagation();deleteStyleTemplate('${s.id}')" style="border:none;background:none;color:var(--text-light);cursor:pointer;font-size:0.65rem;padding:0">🗑</button>
       </div>
-      <div class="style-tpl-dims" style="display:none">
+      <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.15rem">${dimCount} 维度 · 点击展开</div>
+      <div class="style-tpl-dims" style="display:none;margin-top:0.3rem">
         ${Object.entries(dims).map(([k,v]) => {
           const key = s.id + ':' + k;
           const isActive = activeDims[key] !== undefined;
-          return `<button class="dim-chip${isActive?' active':''}" onclick="toggleDim('${s.id}','${k}',this)" title="${esc(v)}">
+          return `<button class="dim-chip${isActive?' active':''}" onclick="event.stopPropagation();toggleDim('${s.id}','${k}',this)" title="${esc(v)}">
             <span class="dim-label">${DIM_LABELS[k]||k}</span>
           </button>`;
         }).join('')}
@@ -1837,12 +1851,34 @@ function renderGallery() {
     return `<div class="img-card">
       <img src="${src}" loading="lazy" onclick="window.open('${src}')" title="${esc(img.prompt || '')}">
       <div class="img-card-actions">
+        <button class="img-action-btn dl" onclick="event.stopPropagation();editGalleryImage('${src}')" style="background:rgba(45,109,219,0.85)">✏️</button>
         <a class="img-action-btn dl" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteGalleryImage('${img.id}')">🗑</button>
       </div>
       <div class="gallery-meta">${esc((img.prompt||'').slice(0,40))}${img.style&&img.style!=='none'?' · '+img.style:''}</div>
     </div>`;
   }).join('');
+}
+
+async function editGalleryImage(src) {
+  // Load gallery image into upload area for editing
+  try {
+    const resp = await fetch(src);
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      uploadedImageB64 = e.target.result.split(',')[1];
+      document.getElementById('imgPreviewImg').src = e.target.result;
+      document.getElementById('imgUploadPreview').style.display = '';
+      document.getElementById('imgUploadEmpty').style.display = 'none';
+      const sizeMB = (blob.size / 1024 / 1024).toFixed(2);
+      document.getElementById('imgFileInfo').innerHTML = `<b>图库图片</b><br>${sizeMB} MB · ${blob.type}`;
+      // Scroll to top
+      document.getElementById('tabContentStudio').scrollIntoView({behavior:'smooth'});
+      toast('图片已加载到编辑区，输入修改描述后点击 ✏️ 编辑', 'ok');
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) { toast('加载失败: ' + e.message, 'err'); }
 }
 
 async function deleteGalleryImage(id) {
