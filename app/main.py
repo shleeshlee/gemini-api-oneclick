@@ -34,6 +34,14 @@ from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Headers, Model
 from gemini_webapi.types.image import GeneratedImage, WebImage
 
+# xob0t fork uses curl_cffi AsyncSession; upstream uses httpx AsyncClient
+try:
+    from curl_cffi import CurlHttpVersion
+    from curl_cffi.requests import AsyncSession
+    USE_CURL_CFFI = True
+except ImportError:
+    USE_CURL_CFFI = False
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -127,15 +135,29 @@ async def try_restore_session() -> GeminiClient | None:
         client.verbose = True
         client._running = True
 
-        # Reconstruct the httpx AsyncClient with restored cookies
-        client.client = AsyncClient(
-            http2=True,
-            timeout=600,
-            proxy=proxy,
-            follow_redirects=True,
-            headers=Headers.GEMINI.value,
-            cookies=cookies,
-        )
+        # Reconstruct the HTTP client with restored cookies
+        # xob0t fork uses curl_cffi AsyncSession; upstream uses httpx AsyncClient
+        if USE_CURL_CFFI:
+            client.client = AsyncSession(
+                timeout=600,
+                proxy=proxy,
+                allow_redirects=True,
+                http_version=CurlHttpVersion.V2_0,
+                impersonate="chrome",
+            )
+            client.client.headers.update(Headers.GEMINI.value)
+            client.client.cookies = cookies
+            if hasattr(client, 'session_kwargs'):
+                client.session_kwargs = {}
+        else:
+            client.client = AsyncClient(
+                http2=True,
+                timeout=600,
+                proxy=proxy,
+                follow_redirects=True,
+                headers=Headers.GEMINI.value,
+                cookies=cookies,
+            )
 
         logger.info("Session restored from dump — skipping init()")
         return client
