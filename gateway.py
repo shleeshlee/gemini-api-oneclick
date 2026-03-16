@@ -309,7 +309,7 @@ async def count_container_requests():
         cname = f"gemini_api_account_{c.num}"
         try:
             proc = await asyncio.create_subprocess_exec(
-                "docker", "logs", "--tail", "200", cname,
+                "docker", "logs", "--tail", "500", cname,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -317,10 +317,9 @@ async def count_container_requests():
             reqs = 0
             errs = 0
             for line in stdout.decode(errors="replace").splitlines():
-                if "POST /v1/" not in line:
-                    continue
-                reqs += 1
-                if "200 OK" not in line:
+                if "Sending request to Gemini" in line:
+                    reqs += 1
+                elif "Error generating completion" in line:
                     errs += 1
             c.total_requests = reqs
             c.total_errors = errs
