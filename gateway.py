@@ -1140,6 +1140,66 @@ async def serve_image(filename: str):
     return FileResponse(filepath, media_type="image/png")
 
 
+# ── Style Templates ────────────────────────────────────────────────────
+
+STYLES_DIR = ROOT_DIR / "data" / "styles"
+STYLES_META = STYLES_DIR / "meta.json"
+
+
+def _load_styles() -> list[dict]:
+    try:
+        if STYLES_META.exists():
+            return json.loads(STYLES_META.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _save_styles(styles: list[dict]):
+    STYLES_DIR.mkdir(parents=True, exist_ok=True)
+    STYLES_META.write_text(json.dumps(styles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.post("/gateway/styles/save", dependencies=[Depends(verify_auth)])
+async def save_style(request: Request):
+    """Save a style template with multi-dimension descriptors."""
+    body = await request.json()
+    name = body.get("name", "").strip()
+    dimensions = body.get("dimensions", {})
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if not dimensions:
+        raise HTTPException(status_code=400, detail="dimensions required")
+
+    style_id = _uuid.uuid4().hex[:8]
+    entry = {
+        "id": style_id,
+        "name": name,
+        "dimensions": dimensions,
+        "created": int(time.time()),
+    }
+
+    styles = _load_styles()
+    styles.insert(0, entry)
+    _save_styles(styles)
+    return {"ok": True, "id": style_id}
+
+
+@app.get("/gateway/styles", dependencies=[Depends(verify_auth)])
+async def list_styles():
+    """List saved style templates."""
+    return {"styles": _load_styles()}
+
+
+@app.delete("/gateway/styles/{style_id}", dependencies=[Depends(verify_auth)])
+async def delete_style(style_id: str):
+    """Delete a style template."""
+    styles = _load_styles()
+    styles = [s for s in styles if s["id"] != style_id]
+    _save_styles(styles)
+    return {"ok": True}
+
+
 # ── Frontend ────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)

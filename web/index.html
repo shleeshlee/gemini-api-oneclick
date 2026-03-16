@@ -346,6 +346,24 @@ body::before {
   padding: 0.35rem 0.5rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
   font-family: 'Outfit', sans-serif; font-size: 0.8rem; background: var(--bg); color: var(--text);
 }
+.dim-chip {
+  padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem;
+  border: 1.5px solid var(--border); background: var(--bg); cursor: pointer;
+  transition: all 0.15s; font-family: 'Outfit', sans-serif; color: var(--text-muted);
+  display: inline-flex; align-items: center; gap: 0.2rem;
+}
+.dim-chip:hover { border-color: var(--accent); background: var(--card); }
+.dim-chip.active { border-color: var(--accent); background: var(--accent-light); color: #92610E; }
+.dim-chip .dim-label { font-weight: 600; }
+.style-tpl-card {
+  padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; border-radius: var(--radius-sm);
+  background: var(--bg); border: 1.5px solid var(--border); transition: all 0.15s;
+}
+.style-tpl-header {
+  display: flex; align-items: center; justify-content: space-between; cursor: pointer;
+  font-size: 0.82rem; font-weight: 600; font-family: 'Nunito', sans-serif;
+}
+.style-tpl-dims { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.4rem; }
 .img-history-item {
   padding: 0.5rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm);
   cursor: pointer; transition: background 0.15s;
@@ -628,10 +646,18 @@ body::before {
         <div id="negPresets" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
         <input type="text" id="imgNeg" placeholder="自定义排除内容" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
-      <!-- Style -->
+      <!-- Style: presets + custom templates -->
       <div style="margin-bottom:0.8rem">
-        <div class="studio-label">风格</div>
+        <div class="studio-label">风格预设</div>
         <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
+      </div>
+      <div style="margin-bottom:0.8rem">
+        <div class="studio-label" style="display:flex;justify-content:space-between;align-items:center">
+          <span>🎭 自定义风格模板</span>
+          <span id="styleTemplateCount" style="font-size:0.72rem;color:var(--text-light)"></span>
+        </div>
+        <div id="styleTemplates"></div>
+        <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
       </div>
       <!-- Controls row -->
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
@@ -657,7 +683,11 @@ body::before {
         <div class="studio-label">参考图片（可选，用于风格参考或图片编辑）</div>
         <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted)" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
           <span id="imgUploadText">拖拽或点击上传图片</span>
-          <div id="imgUploadPreview" style="display:none;margin-top:0.4rem"><img id="imgPreviewImg" style="max-height:80px;border-radius:6px"><button onclick="event.stopPropagation();clearUploadImage()" style="margin-left:0.5rem;border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.72rem;cursor:pointer">✕ 移除</button></div>
+          <div id="imgUploadPreview" style="display:none;margin-top:0.4rem">
+          <img id="imgPreviewImg" style="max-height:80px;border-radius:6px">
+          <button onclick="event.stopPropagation();analyzeStyle()" style="margin-left:0.4rem;border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.15rem 0.5rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
+          <button onclick="event.stopPropagation();clearUploadImage()" style="margin-left:0.3rem;border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
+        </div>
         </div>
         <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
       </div>
@@ -1262,8 +1292,9 @@ function initImgStudio() {
       `<button class="img-chip" data-neg="${p.id}" onclick="toggleNegPreset(this,'${p.id}')">${p.label}</button>`
     ).join('');
   }
-  // Load model list
+  // Load model list + style templates
   loadModelSelect();
+  loadStyleTemplates();
 }
 
 function toggleNegPreset(el, id) {
@@ -1375,7 +1406,10 @@ async function doImgGen() {
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
 
   const start = Date.now();
-  const body = { prompt, model, n, size, quality };
+  // Append active dimension descriptors to prompt
+  const dimsPrompt = getActiveDimsPrompt();
+  const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
+  const body = { prompt: finalPrompt, model, n, size, quality };
   if (style) body.style = style;
   if (neg) body.negative_prompt = neg;
 
@@ -1465,7 +1499,9 @@ async function doVidGen() {
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
 
   const start = Date.now();
-  const body = { prompt, model, quality };
+  const dimsPrompt = getActiveDimsPrompt();
+  const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
+  const body = { prompt: finalPrompt, model, quality };
   if (style) body.style = style;
   if (neg) body.negative_prompt = neg;
 
@@ -1535,6 +1571,156 @@ function clearUploadImage() {
   document.getElementById('imgUploadPreview').style.display = 'none';
   document.getElementById('imgUploadText').textContent = '拖拽或点击上传图片';
   document.getElementById('imgFileInput').value = '';
+}
+
+// ── Style Templates ────────────────────────────────────────
+const DIM_LABELS = {style:'🎨 画风',palette:'🎨 色调',composition:'📐 构图',mood:'💫 氛围',lighting:'💡 光影',detail:'✨ 细节'};
+let savedStyles = [];
+let activeDims = {}; // key: "templateId:dimKey" → value string
+
+async function analyzeStyle() {
+  if (!uploadedImageB64) { toast('请先上传图片', 'err'); return; }
+  const model = document.getElementById('imgModel').value;
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = true; btn.textContent = '🔍 解析中...';
+
+  const sysPrompt = `Analyze this image's visual style and return a JSON object with exactly these 6 keys. Each value should be a concise English description (under 30 words) suitable for image generation prompts.
+
+{
+  "style": "(drawing technique, art medium, rendering style)",
+  "palette": "(dominant colors, color temperature, saturation)",
+  "composition": "(camera angle, framing, perspective, layout)",
+  "mood": "(emotional tone, atmosphere, feeling)",
+  "lighting": "(light source, direction, quality, shadows)",
+  "detail": "(texture, patterns, level of detail, special elements)"
+}
+
+Return ONLY the JSON, no other text.`;
+
+  try {
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: [
+        { role: 'system', content: sysPrompt },
+        { role: 'user', content: [
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,' + uploadedImageB64 } },
+          { type: 'text', text: 'Analyze this image.' }
+        ]}
+      ], max_tokens: 500, temperature: 0.3 })
+    });
+    const data = await resp.json();
+    let reply = data.choices?.[0]?.message?.content || '';
+    reply = reply.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    // Extract JSON from reply
+    const jsonMatch = reply.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) { toast('解析失败：AI 未返回有效 JSON', 'err'); btn.disabled = false; btn.textContent = '🔍 解析风格'; return; }
+    const dims = JSON.parse(jsonMatch[0]);
+
+    // Show save dialog
+    const name = prompt('给这个风格模板起个名字：', '自定义风格');
+    if (!name) { btn.disabled = false; btn.textContent = '🔍 解析风格'; return; }
+
+    const saveResp = await fetch('/gateway/styles/save', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ name, dimensions: dims })
+    });
+    const saveData = await saveResp.json();
+    if (saveData.ok) {
+      toast(`风格模板"${name}"已保存`, 'ok');
+      loadStyleTemplates();
+    } else { toast(saveData.detail || '保存失败', 'err'); }
+  } catch(e) {
+    toast('解析失败: ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = '🔍 解析风格';
+}
+
+async function loadStyleTemplates() {
+  try {
+    const resp = await fetch('/gateway/styles', { headers: authHeaders() });
+    const data = await resp.json();
+    savedStyles = data.styles || [];
+    renderStyleTemplates();
+  } catch(e) { console.error('Load styles failed:', e); }
+}
+
+function renderStyleTemplates() {
+  const el = document.getElementById('styleTemplates');
+  const countEl = document.getElementById('styleTemplateCount');
+  if (!savedStyles.length) {
+    el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-light);padding:0.3rem 0">上传图片后点击 🔍 解析风格 创建模板</div>';
+    countEl.textContent = '';
+    return;
+  }
+  countEl.textContent = `${savedStyles.length} 个模板`;
+  el.innerHTML = savedStyles.map(s => {
+    const dims = s.dimensions || {};
+    return `<div class="style-tpl-card">
+      <div class="style-tpl-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+        <span>🎭 ${esc(s.name)}</span>
+        <div style="display:flex;gap:0.3rem;align-items:center">
+          <span style="font-size:0.7rem;color:var(--text-light)">${Object.keys(dims).length} 维度</span>
+          <button onclick="event.stopPropagation();deleteStyleTemplate('${s.id}')" style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:0.7rem;padding:0.1rem 0.3rem">🗑</button>
+        </div>
+      </div>
+      <div class="style-tpl-dims" style="display:none">
+        ${Object.entries(dims).map(([k,v]) => {
+          const key = s.id + ':' + k;
+          const isActive = activeDims[key] !== undefined;
+          return `<button class="dim-chip${isActive?' active':''}" onclick="toggleDim('${s.id}','${k}',this)" title="${esc(v)}">
+            <span class="dim-label">${DIM_LABELS[k]||k}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+  renderActiveDims();
+}
+
+function toggleDim(tplId, dimKey, el) {
+  const key = tplId + ':' + dimKey;
+  const tpl = savedStyles.find(s => s.id === tplId);
+  if (!tpl) return;
+  if (activeDims[key] !== undefined) {
+    delete activeDims[key];
+    el.classList.remove('active');
+  } else {
+    activeDims[key] = tpl.dimensions[dimKey];
+    el.classList.add('active');
+  }
+  renderActiveDims();
+}
+
+function renderActiveDims() {
+  const el = document.getElementById('styleDimActive');
+  const entries = Object.entries(activeDims);
+  if (!entries.length) { el.innerHTML = ''; return; }
+  el.innerHTML = entries.map(([key, val]) => {
+    const [tplId, dimKey] = key.split(':');
+    const tpl = savedStyles.find(s => s.id === tplId);
+    return `<span class="dim-chip active" onclick="delete activeDims['${key}'];renderStyleTemplates()" title="${esc(val)}">
+      <span class="dim-label">${DIM_LABELS[dimKey]||dimKey}</span> ${tpl?esc(tpl.name):''}
+    </span>`;
+  }).join('');
+}
+
+function getActiveDimsPrompt() {
+  const vals = Object.values(activeDims);
+  if (!vals.length) return '';
+  return vals.join('. ') + '.';
+}
+
+async function deleteStyleTemplate(id) {
+  if (!confirm('删除这个风格模板？')) return;
+  // Remove active dims from this template
+  for (const key of Object.keys(activeDims)) {
+    if (key.startsWith(id + ':')) delete activeDims[key];
+  }
+  try {
+    await fetch(`/gateway/styles/${id}`, { method: 'DELETE', headers: authHeaders() });
+    toast('已删除', 'ok');
+    loadStyleTemplates();
+  } catch(e) { toast('删除失败', 'err'); }
 }
 
 async function doImgEdit() {
