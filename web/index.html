@@ -1638,18 +1638,23 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `Analyze this image's visual style and return a JSON object with exactly these 6 keys. Each value should be a concise English description (under 30 words) suitable for image generation prompts.
+  const sysPrompt = `You are an art style analyst. Extract ONLY the reusable artistic style from this image — NOT the content, subjects, poses, or actions.
+
+The goal is to create a style template that can be applied to ANY different subject. For example, if the image shows "a girl leaning against a wall", do NOT mention the girl or the wall. Instead describe the artistic rendering technique that could be applied to any scene.
+
+Return a JSON object with exactly these 6 keys. Each value must be a concise English style descriptor (under 25 words) that works as a reusable prompt fragment for generating completely different subjects.
 
 {
-  "style": "(drawing technique, art medium, rendering style)",
-  "palette": "(dominant colors, color temperature, saturation)",
-  "composition": "(camera angle, framing, perspective, layout)",
-  "mood": "(emotional tone, atmosphere, feeling)",
-  "lighting": "(light source, direction, quality, shadows)",
-  "detail": "(texture, patterns, level of detail, special elements)"
+  "style": "(ONLY the rendering technique: e.g. digital anime illustration, thick lineart with soft cel-shading, semi-realistic proportions)",
+  "palette": "(ONLY the color scheme: e.g. cool blue-purple dominant palette, desaturated with neon accent highlights, high contrast)",
+  "composition": "(ONLY the framing technique: e.g. close-up portrait framing, shallow depth of field, dutch angle — NOT what is in the scene)",
+  "mood": "(ONLY the emotional atmosphere: e.g. melancholic tension, intimate and dramatic, cinematic gravity)",
+  "lighting": "(ONLY the lighting technique: e.g. strong backlight with cool blue rim light, dramatic chiaroscuro, volumetric glow)",
+  "detail": "(ONLY the rendering quality: e.g. highly detailed hair strands, fabric folds with realistic shading, particle effects, lens flare)"
 }
 
-Return ONLY the JSON, no other text.`;
+CRITICAL: Do NOT describe what the characters are doing, wearing, or where they are. Only describe HOW it is drawn/rendered.
+Return ONLY the JSON.`;
 
   try {
     const resp = await fetch('/v1/chat/completions', {
