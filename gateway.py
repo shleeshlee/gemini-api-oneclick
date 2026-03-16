@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 import uvicorn
 
@@ -402,6 +403,14 @@ async def lifespan(app):
     yield
 
 app = FastAPI(title="Gemini API Gateway", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Proxy ───────────────────────────────────────────────────────────────
