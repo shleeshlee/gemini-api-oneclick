@@ -254,6 +254,21 @@ body::before {
 .modal-msg.err { color: var(--danger); }
 
 /* --- LOG PANEL --- */
+/* Image Studio chips */
+.img-chip {
+  padding: 0.3rem 0.6rem; border: 2px solid var(--border); border-radius: 20px;
+  background: var(--bg); font-family: 'Outfit', sans-serif; font-size: 0.75rem;
+  cursor: pointer; transition: all 0.2s; white-space: nowrap; color: var(--text-muted);
+}
+.img-chip:hover { border-color: var(--primary-light); background: var(--card); }
+.img-chip.active { border-color: var(--primary); background: var(--primary); color: #fff; }
+.img-chip.ratio { min-width: 50px; text-align: center; }
+.img-history-item {
+  padding: 0.5rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background 0.15s;
+}
+.img-history-item:hover { background: var(--bg-warm); }
+
 .log-panel {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
   overflow: hidden; margin-bottom: 1.5rem;
@@ -496,21 +511,61 @@ body::before {
   </div>
   <div class="grid" id="grid"></div>
 
-  <!-- Image Generation -->
-  <div class="log-panel">
+  <!-- Image Generation Studio -->
+  <div class="log-panel" id="imgStudio">
     <div class="log-toggle" onclick="toggleImgGen()">
-      <div class="log-header">🍪 图片生成</div>
+      <div class="log-header">🎨 图片生成</div>
       <span class="log-arrow" id="imgGenArrow">&#x25BC;</span>
     </div>
     <div id="imgGenBody" style="padding:1.2rem">
-      <div style="display:flex;gap:0.5rem;align-items:stretch;margin-bottom:0.8rem">
-        <select id="imgGroup" style="padding:0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem;background:var(--bg);min-width:90px">
-          <option value="">默认分组</option>
-        </select>
-        <input type="text" id="imgPrompt" placeholder="输入提示词，如：画一只可爱的小猫" style="flex:1;padding:0.5rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.85rem" onkeydown="if(event.key==='Enter')doImgGen()">
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.5rem 1.2rem;font-size:0.85rem;white-space:nowrap">生成</button>
+      <!-- Prompt -->
+      <div style="margin-bottom:0.8rem">
+        <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的图片，如：一只橘猫趴在窗台上晒太阳，窗外是樱花" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
       </div>
-      <div id="imgResult" style="text-align:center;min-height:60px;border-radius:var(--radius-sm);position:relative"></div>
+      <!-- Negative prompt (collapsible) -->
+      <details style="margin-bottom:0.8rem">
+        <summary style="cursor:pointer;font-size:0.8rem;color:var(--text-muted);user-select:none">排除内容（负面提示词）</summary>
+        <input type="text" id="imgNeg" placeholder="如：blurry, low quality, text, watermark" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
+      </details>
+      <!-- Style chips -->
+      <div style="margin-bottom:0.8rem">
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem">风格</div>
+        <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
+      </div>
+      <!-- Aspect ratio + Quality + Count -->
+      <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
+        <div style="flex:1;min-width:120px">
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">比例</div>
+          <div id="imgRatios" style="display:flex;gap:0.3rem"></div>
+        </div>
+        <div style="min-width:80px">
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">质量</div>
+          <select id="imgQuality" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
+            <option value="standard">标准</option>
+            <option value="hd">高清 HD</option>
+          </select>
+        </div>
+        <div style="min-width:60px">
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">数量</div>
+          <select id="imgCount" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+          </select>
+        </div>
+        <div style="min-width:80px">
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">分组</div>
+          <select id="imgGroup" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
+            <option value="">默认</option>
+          </select>
+        </div>
+      </div>
+      <!-- Generate button -->
+      <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.65rem;font-size:0.95rem;font-weight:600;letter-spacing:0.5px">🎨 生成图片</button>
+      <!-- Result area -->
+      <div id="imgResult" style="margin-top:0.8rem;min-height:0"></div>
+      <!-- History -->
+      <div id="imgHistory" style="margin-top:0.8rem"></div>
     </div>
   </div>
 
@@ -801,6 +856,7 @@ async function loadAll() {
     }
     renderGrid();
     updateImgGroupSelect();
+    initImgStudio();
   } catch(e) {
     toast('加载失败: ' + e.message, 'err');
   }
@@ -1034,6 +1090,51 @@ function renderLogs(logEntries) {
   document.getElementById('logList').innerHTML = html || '<div class="log-entry info">暂无日志</div>';
 }
 
+// ── Image Studio ──────────────────────────────────────────
+const IMG_STYLES = [
+  {id:'none',label:'无风格',icon:'🎯'},
+  {id:'anime',label:'动漫',icon:'🌸'},{id:'realistic',label:'写实',icon:'📷'},
+  {id:'watercolor',label:'水彩',icon:'🎨'},{id:'oil',label:'油画',icon:'🖼️'},
+  {id:'pixel',label:'像素',icon:'👾'},{id:'sketch',label:'素描',icon:'✏️'},
+  {id:'gothic',label:'哥特',icon:'🦇'},{id:'cute',label:'可爱',icon:'🧸'},
+  {id:'cyberpunk',label:'赛博',icon:'🌃'},{id:'ghibli',label:'吉卜力',icon:'🍃'},
+];
+const IMG_RATIOS = [
+  {id:'1024x1024',label:'1:1',icon:'□'},
+  {id:'1280x720',label:'16:9',icon:'▭'},
+  {id:'720x1280',label:'9:16',icon:'▯'},
+  {id:'1792x1024',label:'3:2',icon:'▬'},
+  {id:'1024x1792',label:'2:3',icon:'▮'},
+];
+let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
+const imgHistoryList = [];
+
+function initImgStudio() {
+  // Render style chips
+  const stylesEl = document.getElementById('imgStyles');
+  stylesEl.innerHTML = IMG_STYLES.map(s =>
+    `<button class="img-chip${s.id===imgSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectImgStyle('${s.id}')">${s.icon} ${s.label}</button>`
+  ).join('');
+  // Render ratio chips
+  const ratiosEl = document.getElementById('imgRatios');
+  ratiosEl.innerHTML = IMG_RATIOS.map(r =>
+    `<button class="img-chip ratio${r.id===imgSelectedRatio?' active':''}" data-ratio="${r.id}" onclick="selectImgRatio('${r.id}')">${r.icon} ${r.label}</button>`
+  ).join('');
+}
+
+function selectImgStyle(id) {
+  imgSelectedStyle = id;
+  document.querySelectorAll('#imgStyles .img-chip').forEach(el => {
+    el.classList.toggle('active', el.dataset.style === id);
+  });
+}
+function selectImgRatio(id) {
+  imgSelectedRatio = id;
+  document.querySelectorAll('#imgRatios .img-chip').forEach(el => {
+    el.classList.toggle('active', el.dataset.ratio === id);
+  });
+}
+
 function toggleImgGen() {
   const body = document.getElementById('imgGenBody');
   const arrow = document.getElementById('imgGenArrow');
@@ -1045,7 +1146,7 @@ function toggleImgGen() {
 function updateImgGroupSelect() {
   const sel = document.getElementById('imgGroup');
   const current = sel.value;
-  sel.innerHTML = '<option value="">默认分组</option>';
+  sel.innerHTML = '<option value="">默认</option>';
   fetch('/gateway/groups', {headers: authHeaders()}).then(r=>r.json()).then(data => {
     (data.defs||[]).forEach(g => {
       const opt = document.createElement('option');
@@ -1056,40 +1157,85 @@ function updateImgGroupSelect() {
   }).catch(()=>{});
 }
 
+function addImgHistory(prompt, style, ratio, images, sec) {
+  imgHistoryList.unshift({ prompt, style, ratio, images, sec, time: new Date().toLocaleTimeString() });
+  if (imgHistoryList.length > 20) imgHistoryList.pop();
+  renderImgHistory();
+}
+
+function renderImgHistory() {
+  const el = document.getElementById('imgHistory');
+  if (!imgHistoryList.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem;border-top:1px solid var(--border);padding-top:0.6rem">历史记录</div>' +
+    imgHistoryList.map((h, i) => `<div class="img-history-item" onclick="document.getElementById('imgPrompt').value='${esc(h.prompt).replace(/'/g,"\\'")}'" title="点击复用提示词">
+      <div style="display:flex;gap:0.4rem;overflow-x:auto">${h.images.map(src => `<img src="${src}" style="height:48px;border-radius:6px">`).join('')}</div>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem">${esc(h.prompt.slice(0,60))}${h.prompt.length>60?'...':''} · ${h.style!=='none'?h.style+' · ':''}${h.sec}s</div>
+    </div>`).join('');
+}
+
 async function doImgGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
   const group = document.getElementById('imgGroup').value;
+  const quality = document.getElementById('imgQuality').value;
+  const n = parseInt(document.getElementById('imgCount').value) || 1;
+  const neg = (document.getElementById('imgNeg')?.value || '').trim();
+  const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
+  const size = imgSelectedRatio;
+  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
   const btn = document.getElementById('imgGenBtn');
   const result = document.getElementById('imgResult');
-  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
-  btn.disabled = true; btn.textContent = '生成中...';
-  result.innerHTML = '<div style="color:var(--text-muted);padding:2rem 1rem;background:var(--bg);border-radius:var(--radius-sm)">🍪 正在生成图片，请等待 30-60 秒...</div>';
+
+  btn.disabled = true; btn.innerHTML = '🍪 生成中...';
+  result.innerHTML = `<div style="color:var(--text-muted);padding:1.5rem;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+    <div style="font-size:1.5rem;margin-bottom:0.3rem">🎨</div>
+    <div>正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...</div>
+    ${style?`<div style="font-size:0.78rem;margin-top:0.3rem">风格: ${IMG_STYLES.find(s=>s.id===style)?.label||style}</div>`:''}
+  </div>`;
+
   const start = Date.now();
+  const body = { prompt, model, n, size, quality };
+  if (style) body.style = style;
+  if (neg) body.negative_prompt = neg;
+
   try {
     const resp = await fetch('/v1/images/generations', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, model, n: 1 })
+      body: JSON.stringify(body)
     });
     const data = await resp.json();
     const sec = ((Date.now() - start) / 1000).toFixed(1);
+
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
-      const b64 = data.data[0].b64_json;
-      const imgSrc = 'data:image/png;base64,' + b64;
-      result.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><span style="font-size:0.78rem;color:var(--text-muted)">${sec}s · ${group||'默认'}</span><a id="imgDownload" download="gemini-${Date.now()}.png" style="font-size:0.78rem;color:var(--primary);cursor:pointer;text-decoration:none">下载图片</a></div><img src="${imgSrc}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)">`;
-      document.getElementById('imgDownload').href = imgSrc;
+      const images = data.data.map(d => 'data:image/png;base64,' + d.b64_json);
+      const cols = images.length >= 4 ? 2 : images.length;
+      result.innerHTML = `<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem;display:flex;justify-content:space-between">
+          <span>${sec}s · ${group||'默认'}${style?' · '+(IMG_STYLES.find(s=>s.id===style)?.label||style):''}</span>
+          <span style="color:var(--primary);cursor:pointer" onclick="downloadAllImages()">下载全部</span>
+        </div>
+        <div id="imgGrid" style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:0.5rem">
+          ${images.map((src, i) => `<div style="position:relative;border-radius:var(--radius-sm);overflow:hidden;box-shadow:var(--shadow-sm)">
+            <img src="${src}" style="width:100%;display:block;cursor:pointer" onclick="window.open(this.src)" title="点击查看大图">
+            <a download="gemini-${Date.now()}-${i+1}.png" href="${src}" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.5);color:#fff;border-radius:6px;padding:2px 8px;font-size:0.7rem;text-decoration:none">⬇</a>
+          </div>`).join('')}
+        </div>`;
+      addImgHistory(prompt, imgSelectedStyle, imgSelectedRatio, images, sec);
     } else if (data.detail) {
-      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">${esc(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))}</div>`;
+      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem">${esc(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))}</div>`;
     } else if (data.error) {
-      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">${esc(data.error.message || JSON.stringify(data.error))}</div>`;
+      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem">${esc(data.error.message || JSON.stringify(data.error))}</div>`;
     } else {
-      result.innerHTML = '<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">未生成图片（Cookie 可能需要更新）</div>';
+      result.innerHTML = '<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">未生成图片（Cookie 可能需要更新）</div>';
     }
   } catch(e) {
-    result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
+    result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
   }
-  btn.disabled = false; btn.textContent = '生成';
+  btn.disabled = false; btn.innerHTML = '🎨 生成图片';
+}
+
+function downloadAllImages() {
+  document.querySelectorAll('#imgGrid a[download]').forEach(a => a.click());
 }
 
 function toggleLogs() {

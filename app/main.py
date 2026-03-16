@@ -446,7 +446,54 @@ class ImageGenerationRequest(BaseModel):
     size: Optional[str] = "1024x1024"
     quality: Optional[str] = "standard"
     style: Optional[str] = None
+    negative_prompt: Optional[str] = None
     response_format: Optional[str] = "b64_json"
+
+
+SIZE_TO_ASPECT = {
+    "1280x720": "16:9", "720x1280": "9:16",
+    "1792x1024": "3:2", "1024x1792": "2:3",
+    "1024x1024": "1:1",
+}
+
+STYLE_PROMPTS = {
+    "anime": "anime style, cel shading, vibrant colors, clean lineart",
+    "realistic": "photorealistic, ultra detailed, natural lighting, DSLR photo",
+    "watercolor": "watercolor painting style, soft edges, translucent colors, paper texture",
+    "oil": "oil painting style, rich colors, visible brushstrokes, classical art",
+    "pixel": "pixel art style, retro game aesthetic, 16-bit, clean pixels",
+    "sketch": "pencil sketch style, detailed linework, graphite on paper, monochrome",
+    "gothic": "gothic dark fantasy style, dramatic lighting, ornate details, dark atmosphere",
+    "cute": "cute kawaii style, chibi, pastel colors, round shapes, adorable",
+    "cyberpunk": "cyberpunk style, neon lights, futuristic cityscape, high-tech, rain-soaked streets",
+    "ghibli": "Studio Ghibli style, whimsical, lush nature, soft lighting, hand-drawn animation",
+}
+
+QUALITY_PROMPTS = {
+    "hd": "masterpiece, best quality, highly detailed, 8k resolution, sharp focus",
+}
+
+
+def build_image_prompt(request: ImageGenerationRequest) -> str:
+    """Build optimized prompt from user input + style/quality/size parameters."""
+    parts = []
+
+    if request.quality and request.quality in QUALITY_PROMPTS:
+        parts.append(QUALITY_PROMPTS[request.quality])
+
+    if request.style and request.style in STYLE_PROMPTS:
+        parts.append(STYLE_PROMPTS[request.style])
+
+    parts.append(request.prompt)
+
+    if request.negative_prompt:
+        parts.append(f"Do not include: {request.negative_prompt}")
+
+    aspect = SIZE_TO_ASPECT.get(request.size or "", "")
+    if aspect and aspect != "1:1":
+        parts.append(f"aspect ratio {aspect}")
+
+    return "Generate an image: " + ", ".join(parts)
 
 
 @app.post("/v1/images/generations")
@@ -454,11 +501,11 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
     """DALL-E compatible image generation endpoint using Gemini ImageFX."""
     try:
         client = await get_or_create_client()
-        logger.info(f"Image generation request: '{request.prompt[:100]}'")
+        logger.info(f"Image generation request: '{request.prompt[:100]}' style={request.style} quality={request.quality} size={request.size}")
 
         model = map_model_name(request.model) if request.model else None
-        prompt = f"Generate an image: {request.prompt}"
-        logger.info(f"Sending to Gemini: '{prompt[:150]}' model={model}")
+        prompt = build_image_prompt(request)
+        logger.info(f"Final prompt: '{prompt[:200]}' model={model}")
 
         kwargs = {}
         if model:
