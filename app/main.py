@@ -458,19 +458,8 @@ SIZE_TO_ASPECT = {
     "1024x1024": "",
 }
 
-# Natural language style descriptions for Gemini (not SD tags)
-STYLE_PROMPTS = {
-    "anime": "Draw this in anime style with vibrant colors, clean lineart, and cel shading.",
-    "realistic": "Create a photorealistic image, like a high-end DSLR photograph with natural lighting and sharp details.",
-    "watercolor": "Paint this in watercolor style with soft translucent washes, visible paper texture, and gentle color bleeding.",
-    "oil": "Render this as an oil painting with rich impasto brushstrokes, deep colors, and classical composition.",
-    "pixel": "Create this in pixel art style, like a retro 16-bit video game, with clean pixel boundaries.",
-    "sketch": "Draw this as a detailed pencil sketch on paper, with graphite shading and fine linework.",
-    "gothic": "Create this in dark gothic fantasy style with dramatic chiaroscuro lighting, ornate details, and moody atmosphere.",
-    "cute": "Draw this in an adorable kawaii style with chibi proportions, pastel colors, and round soft shapes.",
-    "cyberpunk": "Create this in cyberpunk aesthetic with neon-lit streets, holographic signs, rain reflections, and futuristic technology.",
-    "ghibli": "Draw this in Studio Ghibli animation style with lush nature, warm soft lighting, and whimsical hand-painted feel.",
-}
+# Style is passed directly to Gemini as its own built-in style name
+# No need to translate — Gemini recognizes its own style keywords
 
 QUALITY_PROMPTS = {
     "hd": "Make it extremely detailed and high quality, with 4K resolution clarity and sharp focus throughout.",
@@ -484,9 +473,9 @@ def build_image_prompt(request: ImageGenerationRequest) -> str:
     # User prompt first — the core intent
     parts.append(request.prompt)
 
-    # Style as natural language instruction
-    if request.style and request.style in STYLE_PROMPTS:
-        parts.append(STYLE_PROMPTS[request.style])
+    # Style — pass Gemini's own style name directly
+    if request.style:
+        parts.append(f"Use {request.style} style.")
 
     # Quality enhancement
     if request.quality and request.quality in QUALITY_PROMPTS:
@@ -591,8 +580,8 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
 
         parts = ["Generate a short video:"]
         parts.append(request.prompt)
-        if request.style and request.style in STYLE_PROMPTS:
-            parts.append(STYLE_PROMPTS[request.style])
+        if request.style:
+            parts.append(f"Use {request.style} style.")
         if request.quality and request.quality in QUALITY_PROMPTS:
             parts.append(QUALITY_PROMPTS[request.quality])
         if request.negative_prompt:

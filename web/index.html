@@ -648,7 +648,11 @@ body::before {
       </details>
       <!-- Style: presets + custom templates -->
       <div style="margin-bottom:0.8rem">
-        <div class="studio-label">风格预设</div>
+        <div class="studio-label" style="display:flex;gap:0.6rem;align-items:center">
+          风格预设
+          <span class="img-chip active" data-stype="img" onclick="switchStyleType('img')" id="styleTypeImg" style="font-size:0.68rem;padding:0.15rem 0.5rem">🖼️ 图片</span>
+          <span class="img-chip" data-stype="vid" onclick="switchStyleType('vid')" id="styleTypeVid" style="font-size:0.68rem;padding:0.15rem 0.5rem">🎬 视频</span>
+        </div>
         <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
       </div>
       <div style="margin-bottom:0.8rem">
@@ -1249,11 +1253,32 @@ function switchTab(tab) {
 // ── Image Studio ──────────────────────────────────────────
 const IMG_STYLES = [
   {id:'none',label:'无风格',icon:'🎯'},
-  {id:'anime',label:'动漫',icon:'🌸'},{id:'realistic',label:'写实',icon:'📷'},
-  {id:'watercolor',label:'水彩',icon:'🎨'},{id:'oil',label:'油画',icon:'🖼️'},
-  {id:'pixel',label:'像素',icon:'👾'},{id:'sketch',label:'素描',icon:'✏️'},
-  {id:'gothic',label:'哥特',icon:'🦇'},{id:'cute',label:'可爱',icon:'🧸'},
-  {id:'cyberpunk',label:'赛博',icon:'🌃'},{id:'ghibli',label:'吉卜力',icon:'🍃'},
+  // Gemini 官方图片风格
+  {id:'Monochrome',label:'单色',icon:'⬛'},{id:'Color Block',label:'色块',icon:'🟧'},
+  {id:'Runway',label:'跑道',icon:'👗'},{id:'Screen Print',label:'孔版印刷',icon:'🖨️'},
+  {id:'Colorful',label:'绚彩',icon:'🌈'},{id:'Gothic Clay',label:'哥特黏土',icon:'🧟'},
+  {id:'Explosive',label:'轰动',icon:'💥'},{id:'Salon',label:'沙龙',icon:'💇'},
+  {id:'Sketch',label:'素描',icon:'✏️'},{id:'Cinematic',label:'电影效果',icon:'🎬'},
+  {id:'Steampunk',label:'蒸汽朋克',icon:'⚙️'},{id:'Sunrise',label:'日出',icon:'🌅'},
+  {id:'Myth Fighter',label:'神话斗士',icon:'⚔️'},{id:'Surreal',label:'超现实',icon:'🌀'},
+  {id:'Dark',label:'幽暗',icon:'🌑'},{id:'Enamel Pin',label:'珐琅胸针',icon:'📌'},
+  {id:'Cyborg',label:'赛博格',icon:'🤖'},{id:'Soft Portrait',label:'柔美人像',icon:'🧑‍🎨'},
+  {id:'Retro Cartoon',label:'怀旧卡通',icon:'📺'},{id:'Oil Painting',label:'油画',icon:'🖼️'},
+  // 额外常用
+  {id:'Anime',label:'动漫',icon:'🌸'},{id:'Photorealistic',label:'写实',icon:'📷'},
+  {id:'Watercolor',label:'水彩',icon:'🎨'},{id:'Pixel Art',label:'像素',icon:'👾'},
+  {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},
+];
+const VID_STYLES = [
+  {id:'none',label:'无风格',icon:'🎯'},
+  {id:'Civilization',label:'文明',icon:'🏛️'},{id:'Metallic',label:'金属',icon:'🔩'},
+  {id:'Memo',label:'备忘',icon:'🐵'},{id:'Glam',label:'魅力',icon:'✨'},
+  {id:'Crochet',label:'钩针',icon:'🧶'},{id:'Cyberpunk',label:'赛博朋克',icon:'🌃'},
+  {id:'Video Game',label:'电子游戏',icon:'🎮'},{id:'Cosmos',label:'宇宙',icon:'🌌'},
+  {id:'Action Hero',label:'动作英雄',icon:'🦸'},{id:'Stardust',label:'星尘',icon:'⭐'},
+  {id:'Jellytoon',label:'果冻卡通',icon:'🫧'},{id:'Racetrack',label:'赛道',icon:'🏎️'},
+  {id:'ASMR Apple',label:'ASMR',icon:'🍎'},{id:'Red Carpet',label:'红毯',icon:'🎭'},
+  {id:'Popcorn',label:'爆米花',icon:'🍿'},
 ];
 const IMG_RATIOS = [
   {id:'1024x1024',label:'1:1',icon:'□'},
@@ -1263,6 +1288,7 @@ const IMG_RATIOS = [
   {id:'1024x1792',label:'2:3',icon:'▮'},
 ];
 let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
+let currentStyleType = 'img'; // 'img' or 'vid'
 const NEG_PRESETS = [
   {id:'blurry',label:'模糊'},{id:'low quality',label:'低质量'},{id:'text, watermark',label:'文字水印'},
   {id:'extra limbs, deformed',label:'畸形'},{id:'bad anatomy',label:'解剖错误'},
@@ -1275,12 +1301,25 @@ let galleryImages = [];
 let galleryOffset = 0;
 const GALLERY_PAGE = 24;
 
-function initImgStudio() {
+function switchStyleType(type) {
+  currentStyleType = type;
+  imgSelectedStyle = 'none';
+  document.getElementById('styleTypeImg').classList.toggle('active', type === 'img');
+  document.getElementById('styleTypeVid').classList.toggle('active', type === 'vid');
+  renderStyleChips();
+}
+
+function renderStyleChips() {
   const stylesEl = document.getElementById('imgStyles');
   if (!stylesEl) return;
-  stylesEl.innerHTML = IMG_STYLES.map(s =>
+  const styles = currentStyleType === 'vid' ? VID_STYLES : IMG_STYLES;
+  stylesEl.innerHTML = styles.map(s =>
     `<button class="img-chip${s.id===imgSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectImgStyle('${s.id}')">${s.icon} ${s.label}</button>`
   ).join('');
+}
+
+function initImgStudio() {
+  renderStyleChips();
   const ratiosEl = document.getElementById('imgRatios');
   ratiosEl.innerHTML = IMG_RATIOS.map(r =>
     `<button class="img-chip ratio${r.id===imgSelectedRatio?' active':''}" data-ratio="${r.id}" onclick="selectImgRatio('${r.id}')">${r.icon} ${r.label}</button>`
