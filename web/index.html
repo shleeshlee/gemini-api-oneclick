@@ -496,6 +496,21 @@ body::before {
   </div>
   <div class="grid" id="grid"></div>
 
+  <!-- Image Generation Test -->
+  <div class="log-panel">
+    <div class="log-toggle" onclick="toggleImgGen()">
+      <div class="log-header">🍪 图片生成测试</div>
+      <span class="log-arrow" id="imgGenArrow">&#x25B6;</span>
+    </div>
+    <div class="log-body" id="imgGenBody" style="display:none;padding:1rem">
+      <div style="display:flex;gap:0.5rem;margin-bottom:0.8rem">
+        <input type="text" id="imgPrompt" placeholder="输入提示词，如：画一只可爱的小猫" style="flex:1;padding:0.5rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.85rem">
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.5rem 1.2rem;font-size:0.85rem;white-space:nowrap">生成</button>
+      </div>
+      <div id="imgResult" style="text-align:center;min-height:40px"></div>
+    </div>
+  </div>
+
   <!-- Log Panel (collapsible) -->
   <div class="log-panel">
     <div class="log-toggle" onclick="toggleLogs()">
@@ -1013,6 +1028,41 @@ function renderLogs(logEntries) {
     return `<div class="log-entry ${l.level}"><span class="time">${esc(l.time)}</span>${cn}${esc(l.message)}</div>`;
   }).join('');
   document.getElementById('logList').innerHTML = html || '<div class="log-entry info">暂无日志</div>';
+}
+
+function toggleImgGen() {
+  const body = document.getElementById('imgGenBody');
+  const arrow = document.getElementById('imgGenArrow');
+  const open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.innerHTML = open ? '&#x25BC;' : '&#x25B6;';
+}
+
+async function doImgGen() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) return;
+  const btn = document.getElementById('imgGenBtn');
+  const result = document.getElementById('imgResult');
+  btn.disabled = true; btn.textContent = '生成中...';
+  result.innerHTML = '<div style="color:var(--text-muted);padding:1rem">正在生成图片，请等待 30-60 秒...</div>';
+  try {
+    const resp = await fetch('/v1/images/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, n: 1 })
+    });
+    const data = await resp.json();
+    if (data.data && data.data.length > 0 && data.data[0].b64_json) {
+      result.innerHTML = `<img src="data:image/png;base64,${data.data[0].b64_json}" style="max-width:100%;max-height:500px;border-radius:var(--radius-sm);margin-top:0.5rem">`;
+    } else if (data.error) {
+      result.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.error.message || data.detail || JSON.stringify(data.error))}</div>`;
+    } else {
+      result.innerHTML = '<div style="color:var(--danger);padding:0.5rem">未生成图片</div>';
+    }
+  } catch(e) {
+    result.innerHTML = `<div style="color:var(--danger);padding:0.5rem">请求失败: ${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.textContent = '生成';
 }
 
 function toggleLogs() {
