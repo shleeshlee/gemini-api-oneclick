@@ -596,7 +596,7 @@ body::before {
   <!-- Tab Bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('manage')" id="tabManage">🍪 容器管理</button>
-    <button class="tab-btn" onclick="switchTab('studio')" id="tabStudio">🎨 图片工作室</button>
+    <button class="tab-btn" onclick="switchTab('studio')" id="tabStudio">🎨 影像工作室</button>
   </div>
 
   <!-- Tab 1: Container Management -->
@@ -618,17 +618,22 @@ body::before {
     <!-- Zone 1: Tool Area -->
     <div class="studio-section">
       <div class="studio-section-title">✨ 生成设置</div>
+      <!-- Prompt -->
       <div style="margin-bottom:0.8rem">
-        <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的图片，如：一只橘猫趴在窗台上晒太阳，窗外是樱花&#10;&#10;Shift+Enter 换行，Enter 生成" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
+        <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的画面，如：一只橘猫趴在窗台上晒太阳，窗外是樱花&#10;&#10;Shift+Enter 换行，Enter 生成" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
       </div>
+      <!-- Negative prompt with presets -->
       <details style="margin-bottom:0.8rem">
         <summary style="cursor:pointer;font-size:0.8rem;color:var(--text-muted);user-select:none">排除内容（负面提示词）</summary>
-        <input type="text" id="imgNeg" placeholder="如：blurry, low quality, text, watermark" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
+        <div id="negPresets" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
+        <input type="text" id="imgNeg" placeholder="自定义排除内容" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
+      <!-- Style -->
       <div style="margin-bottom:0.8rem">
         <div class="studio-label">风格</div>
         <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
       </div>
+      <!-- Controls row -->
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
         <div style="flex:1;min-width:120px">
           <div class="studio-label">比例</div>
@@ -642,14 +647,16 @@ body::before {
           <div class="studio-label">数量</div>
           <select id="imgCount" class="img-select"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
         </div>
-        <div style="min-width:90px">
-          <div class="studio-label">渠道</div>
-          <select id="imgGroup" class="img-select"><option value="">默认</option></select>
+        <div style="flex:1;min-width:140px">
+          <div class="studio-label">模型</div>
+          <select id="imgModel" class="img-select" style="width:100%"><option value="gemini-3.0-flash">gemini-3.0-flash</option></select>
         </div>
       </div>
+      <!-- Action buttons -->
       <div style="display:flex;gap:0.5rem">
-        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.88rem;font-weight:600">✨ 优化提示词</button>
-        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:1;padding:0.7rem;font-size:1rem;font-weight:700;letter-spacing:0.5px">🎨 生成图片</button>
+        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.85rem;font-weight:600">✨ 优化</button>
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:1;padding:0.7rem;font-size:0.95rem;font-weight:700">🎨 生成图片</button>
+        <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.85rem;font-weight:600;background:linear-gradient(135deg,#7C5CFC,#9B51E0)">🎬 视频</button>
       </div>
     </div>
 
@@ -1216,7 +1223,14 @@ const IMG_RATIOS = [
   {id:'1024x1792',label:'2:3',icon:'▮'},
 ];
 let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
+const NEG_PRESETS = [
+  {id:'blurry',label:'模糊'},{id:'low quality',label:'低质量'},{id:'text, watermark',label:'文字水印'},
+  {id:'extra limbs, deformed',label:'畸形'},{id:'bad anatomy',label:'解剖错误'},
+  {id:'ugly, disfigured',label:'丑陋变形'},{id:'cropped, out of frame',label:'裁切出框'},
+];
+let negSelected = new Set();
 let tempImages = []; // {b64, prompt, style, size, quality, channel}
+let tempVideos = []; // {url, thumbnail_url, prompt, style, channel}
 let galleryImages = [];
 let galleryOffset = 0;
 const GALLERY_PAGE = 24;
@@ -1231,6 +1245,40 @@ function initImgStudio() {
   ratiosEl.innerHTML = IMG_RATIOS.map(r =>
     `<button class="img-chip ratio${r.id===imgSelectedRatio?' active':''}" data-ratio="${r.id}" onclick="selectImgRatio('${r.id}')">${r.icon} ${r.label}</button>`
   ).join('');
+  // Negative presets
+  const negEl = document.getElementById('negPresets');
+  if (negEl) {
+    negEl.innerHTML = NEG_PRESETS.map(p =>
+      `<button class="img-chip" data-neg="${p.id}" onclick="toggleNegPreset(this,'${p.id}')">${p.label}</button>`
+    ).join('');
+  }
+  // Load model list
+  loadModelSelect();
+}
+
+function toggleNegPreset(el, id) {
+  if (negSelected.has(id)) { negSelected.delete(id); el.classList.remove('active'); }
+  else { negSelected.add(id); el.classList.add('active'); }
+}
+
+function getNegativePrompt() {
+  const custom = (document.getElementById('imgNeg')?.value || '').trim();
+  const presets = Array.from(negSelected).join(', ');
+  return [presets, custom].filter(Boolean).join(', ');
+}
+
+async function loadModelSelect() {
+  const sel = document.getElementById('imgModel');
+  if (!sel) return;
+  try {
+    const resp = await fetch('/v1/models', {headers: authHeaders()});
+    const data = await resp.json();
+    const models = (data.data || []).map(m => m.id).filter(id => id !== 'unspecified');
+    sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    // Default to first flash model
+    const flash = models.find(m => m.includes('flash'));
+    if (flash) sel.value = flash;
+  } catch(e) { console.error('Failed to load models:', e); }
 }
 function selectImgStyle(id) {
   imgSelectedStyle = id;
@@ -1242,24 +1290,16 @@ function selectImgRatio(id) {
 }
 
 function updateImgGroupSelect() {
-  const sel = document.getElementById('imgGroup');
-  if (!sel) return;
-  const current = sel.value;
-  sel.innerHTML = '<option value="">默认</option>';
-  fetch('/gateway/groups', {headers: authHeaders()}).then(r=>r.json()).then(data => {
-    (data.defs||[]).forEach(g => { const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o); });
-    sel.value = current;
-  }).catch(()=>{});
+  // Legacy — now using model selector instead
 }
 
 async function optimizePrompt() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  const group = document.getElementById('imgGroup').value;
   const style = imgSelectedStyle !== 'none' ? (IMG_STYLES.find(s=>s.id===imgSelectedStyle)?.label||imgSelectedStyle) : '';
   const ratio = IMG_RATIOS.find(r=>r.id===imgSelectedRatio)?.label || '';
   const quality = document.getElementById('imgQuality').value;
-  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
+  const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('imgOptBtn');
 
   btn.disabled = true; btn.textContent = '✨ 优化中...';
@@ -1303,13 +1343,12 @@ ${quality === 'hd' ? '- High quality, ultra detailed' : ''}`;
 async function doImgGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
-  const group = document.getElementById('imgGroup').value;
   const quality = document.getElementById('imgQuality').value;
   const n = parseInt(document.getElementById('imgCount').value) || 1;
-  const neg = (document.getElementById('imgNeg')?.value || '').trim();
+  const neg = getNegativePrompt();
   const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
   const size = imgSelectedRatio;
-  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
+  const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('imgGenBtn');
   const zone = document.getElementById('imgTempZone');
 
@@ -1334,10 +1373,10 @@ async function doImgGen() {
 
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
       tempImages = data.data.map((d, i) => ({
-        b64: d.b64_json, prompt, style: imgSelectedStyle, size, quality, channel: group || '默认', index: i
+        b64: d.b64_json, prompt, style: imgSelectedStyle, size, quality, channel: model, index: i
       }));
       const styleName = style ? (IMG_STYLES.find(s=>s.id===style)?.label||style) : '';
-      document.getElementById('imgTempInfo').textContent = `${sec}s · ${group||'默认'}${styleName?' · '+styleName:''} · ${tempImages.length} 张`;
+      document.getElementById('imgTempInfo').textContent = `${sec}s · ${model}${styleName?' · '+styleName:''} · ${tempImages.length} 张`;
       renderTempGrid();
     } else {
       const errMsg = data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
@@ -1391,6 +1430,67 @@ async function saveAllTemp() {
 
 function downloadAllTemp() {
   document.querySelectorAll('#imgTempGrid a.img-action-btn.dl').forEach(a => a.click());
+}
+
+async function doVidGen() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请先输入提示词', 'err'); return; }
+  const quality = document.getElementById('imgQuality').value;
+  const neg = getNegativePrompt();
+  const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
+  const model = document.getElementById('imgModel').value;
+  const btn = document.getElementById('vidGenBtn');
+  const zone = document.getElementById('imgTempZone');
+
+  btn.disabled = true; btn.innerHTML = '🎬 生成中...';
+  zone.style.display = '';
+  document.getElementById('imgTempInfo').textContent = '正在生成视频，Veo 模型可能需要 60-180 秒...';
+  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
+
+  const start = Date.now();
+  const body = { prompt, model, quality };
+  if (style) body.style = style;
+  if (neg) body.negative_prompt = neg;
+
+  try {
+    const resp = await fetch('/v1/videos/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
+
+    if (data.data && data.data.length > 0) {
+      const item = data.data[0];
+      if (item.type === 'video' && item.url) {
+        document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · 视频`;
+        document.getElementById('imgTempGrid').innerHTML = `<div class="img-card" style="grid-column:1/-1">
+          <video controls autoplay loop style="width:100%;border-radius:var(--radius-sm)" src="${esc(item.url)}"></video>
+          <div class="img-card-actions" style="opacity:1">
+            <a class="img-action-btn dl" href="${esc(item.url)}" download="gemini-video-${Date.now()}.mp4" onclick="event.stopPropagation()">⬇ 下载视频</a>
+          </div>
+        </div>`;
+        tempVideos = [{ url: item.url, thumbnail_url: item.thumbnail_url || '', prompt, style: imgSelectedStyle, channel: model }];
+      } else if (item.type === 'image' && item.b64_json) {
+        // Gemini returned image instead of video
+        document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · Gemini 生成了图片（非视频）`;
+        const src = 'data:image/png;base64,' + item.b64_json;
+        document.getElementById('imgTempGrid').innerHTML = `<div class="img-card" style="grid-column:1/-1">
+          <img src="${src}" onclick="window.open(this.src)">
+          <div class="img-card-actions">
+            <a class="img-action-btn dl" href="${src}" download="gemini-${Date.now()}.png" onclick="event.stopPropagation()">⬇ 下载</a>
+          </div>
+        </div>`;
+      }
+    } else {
+      const errMsg = data.detail || data.error?.message || '未生成视频';
+      document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">${esc(errMsg)}</div>`;
+    }
+  } catch(e) {
+    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.innerHTML = '🎬 视频';
 }
 
 // ── Gallery ───────────────────────────────────────────────
