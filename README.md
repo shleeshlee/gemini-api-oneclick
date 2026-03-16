@@ -163,6 +163,18 @@ make manage
 | `make logs` | 实时查看日志 |
 | `make generate` | 重新生成 docker-compose |
 
+## Cookie 保活指南
+
+Cookie 部署后可以长期使用，**重启容器、重启服务器都不会导致 Cookie 失效**。
+
+**保持 Cookie 有效的唯一要求：**
+- 获取 Cookie 的那个 Google 账号，在浏览器里**保持登录状态**
+- **不要退出登录、不要修改密码**——这两个操作会让 Google 服务端销毁 session，所有已部署的 Cookie 立即失效
+
+**Cookie 失效了怎么办：**
+- 如果容器突然不能生图或报错，大概率是 Cookie 的 Google session 被踢了（退出登录、改密码、Google 安全事件触发等）
+- 解决方法：用同一个账号重新登录浏览器，获取新的 Cookie，在面板里重新部署即可
+
 ## 安全提醒
 
 - Gateway 面板登录有速率限制（每 IP 60 秒内 5 次）
