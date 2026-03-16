@@ -355,6 +355,23 @@ body::before {
 }
 .tag-new-input::placeholder { color: var(--text-light); }
 
+.model-chips {
+  display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.5rem 0;
+}
+.model-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.25rem 0.65rem; border-radius: 999px; font-size: 0.78rem;
+  background: var(--card-bg); border: 1.5px solid var(--border);
+  color: var(--text); font-family: 'Outfit', sans-serif;
+  transition: all 0.15s;
+}
+.model-chip::before {
+  content: '🍪'; font-size: 0.7rem;
+}
+.model-chip-empty {
+  font-size: 0.8rem; color: var(--text-muted); padding: 0.3rem 0;
+}
+
 .guard-hint {
   font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.4;
 }
@@ -571,13 +588,12 @@ body::before {
     </div>
 
     <div class="guard-section">
-      <div class="guard-section-title">模型列表</div>
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label" id="modelInfo">从容器获取可用模型</div>
-          <div class="toggle-desc">更新 /v1/models 返回的模型列表</div>
-        </div>
-        <button class="btn btn-primary" onclick="refreshModels()" style="padding:0.4rem 1rem;font-size:0.82rem">刷新模型</button>
+      <div class="guard-section-title" style="justify-content:space-between">
+        模型列表
+        <button class="btn btn-primary" onclick="refreshModels()" style="padding:0.25rem 0.8rem;font-size:0.78rem">刷新</button>
+      </div>
+      <div class="model-chips" id="modelChips">
+        <span class="model-chip-empty">点击刷新获取模型列表</span>
       </div>
     </div>
 
@@ -951,14 +967,19 @@ async function refreshModels() {
     const resp = await fetch('/gateway/refresh-models', { method: 'POST', headers: authHeaders() });
     const data = await resp.json();
     if (resp.ok) {
-      const names = (data.models || []).map(m => m.id).join(', ');
-      toast(`模型已刷新: ${names}`, 'ok');
+      renderModelChips((data.models || []).map(m => m.id));
+      toast('模型已刷新', 'ok');
     } else {
       toast(data.detail || '刷新失败', 'err');
     }
   } catch(e) {
     toast('刷新失败: ' + e.message, 'err');
   }
+}
+function renderModelChips(models) {
+  const box = document.getElementById('modelChips');
+  if (!models.length) { box.innerHTML = '<span class="model-chip-empty">暂无模型</span>'; return; }
+  box.innerHTML = models.map(m => `<span class="model-chip">${esc(m)}</span>`).join('');
 }
 
 // ── Logs ───────────────────────────────────────────────────
@@ -1166,6 +1187,12 @@ function openGuardSettings() {
 
       document.getElementById('guardSaveBtn').disabled = false;
       document.getElementById('guardSaveBtn').textContent = '保存';
+
+      // load model chips
+      fetch('/v1/models', {headers: authHeaders()}).then(r=>r.json()).then(d => {
+        const ids = (d.data||[]).map(m=>m.id).filter(id=>id!=='unspecified');
+        renderModelChips(ids);
+      }).catch(()=>{});
     })
     .catch(e => {
       document.getElementById('guardMsg').className = 'modal-msg err';
