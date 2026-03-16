@@ -254,6 +254,85 @@ body::before {
 .modal-msg.err { color: var(--danger); }
 
 /* --- LOG PANEL --- */
+/* --- TABS --- */
+.tab-bar {
+  display: flex; gap: 0; margin-bottom: 1.5rem;
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.tab-btn {
+  flex: 1; padding: 0.85rem 1rem; border: none; background: transparent;
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.95rem;
+  color: var(--text-muted); cursor: pointer; transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  position: relative;
+}
+.tab-btn:hover { background: var(--bg-warm); color: var(--text); }
+.tab-btn.active { color: var(--primary-dark); background: var(--bg-warm); }
+.tab-btn.active::after {
+  content: ''; position: absolute; bottom: 0; left: 10%; right: 10%; height: 3px;
+  background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 3px 3px 0 0;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; animation: fadeUp 0.3s ease; }
+
+/* --- IMAGE STUDIO --- */
+.studio-section {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  padding: 1.2rem; margin-bottom: 1rem;
+}
+.studio-section-title {
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.9rem;
+  color: var(--text); margin-bottom: 0.8rem; display: flex; align-items: center; gap: 0.5rem;
+}
+.studio-label {
+  font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 500;
+}
+.img-grid {
+  display: grid; gap: 0.6rem;
+}
+.img-grid.cols-1 { grid-template-columns: 1fr; }
+.img-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.img-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.img-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.img-card {
+  position: relative; border-radius: var(--radius-sm); overflow: hidden;
+  box-shadow: var(--shadow-sm); background: var(--bg); transition: transform 0.15s;
+}
+.img-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.img-card img { width: 100%; display: block; cursor: pointer; }
+.img-card-actions {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.6));
+  padding: 1.5rem 0.5rem 0.5rem; display: flex; gap: 0.3rem; justify-content: flex-end;
+  opacity: 0; transition: opacity 0.2s;
+}
+.img-card:hover .img-card-actions { opacity: 1; }
+.img-action-btn {
+  padding: 0.25rem 0.55rem; border-radius: 6px; border: none;
+  font-size: 0.72rem; cursor: pointer; font-family: 'Outfit', sans-serif;
+  transition: all 0.15s; backdrop-filter: blur(4px);
+}
+.img-action-btn.save { background: rgba(110,200,155,0.85); color: #fff; }
+.img-action-btn.save:hover { background: var(--success); }
+.img-action-btn.dl { background: rgba(255,255,255,0.85); color: var(--text); }
+.img-action-btn.dl:hover { background: #fff; }
+.img-action-btn.del { background: rgba(255,123,123,0.85); color: #fff; }
+.img-action-btn.del:hover { background: var(--danger); }
+
+.gallery-empty {
+  text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.88rem;
+}
+.gallery-meta {
+  font-size: 0.7rem; color: var(--text-muted); padding: 0.3rem 0.5rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.batch-bar {
+  display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+  padding: 0.5rem 0; font-size: 0.82rem;
+}
+.batch-bar .info { color: var(--text-muted); flex: 1; }
+
 /* Image Studio chips */
 .img-chip {
   padding: 0.3rem 0.6rem; border: 2px solid var(--border); border-radius: 20px;
@@ -263,6 +342,10 @@ body::before {
 .img-chip:hover { border-color: var(--primary-light); background: var(--card); }
 .img-chip.active { border-color: var(--primary); background: var(--primary); color: #fff; }
 .img-chip.ratio { min-width: 50px; text-align: center; }
+.img-select {
+  padding: 0.35rem 0.5rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
+  font-family: 'Outfit', sans-serif; font-size: 0.8rem; background: var(--bg); color: var(--text);
+}
 .img-history-item {
   padding: 0.5rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm);
   cursor: pointer; transition: background 0.15s;
@@ -509,74 +592,88 @@ body::before {
       <button class="btn-topbar" onclick="doLogout()"><span class="icon">&#x2192;</span> 退出</button>
     </div>
   </div>
-  <div class="grid" id="grid"></div>
 
-  <!-- Image Generation Studio -->
-  <div class="log-panel" id="imgStudio">
-    <div class="log-toggle" onclick="toggleImgGen()">
-      <div class="log-header">🎨 图片生成</div>
-      <span class="log-arrow" id="imgGenArrow">&#x25BC;</span>
-    </div>
-    <div id="imgGenBody" style="padding:1.2rem">
-      <!-- Prompt -->
-      <div style="margin-bottom:0.8rem">
-        <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的图片，如：一只橘猫趴在窗台上晒太阳，窗外是樱花" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('manage')" id="tabManage">🍪 容器管理</button>
+    <button class="tab-btn" onclick="switchTab('studio')" id="tabStudio">🎨 图片工作室</button>
+  </div>
+
+  <!-- Tab 1: Container Management -->
+  <div class="tab-content active" id="tabContentManage">
+    <div class="grid" id="grid"></div>
+    <div class="log-panel">
+      <div class="log-toggle" onclick="toggleLogs()">
+        <div class="log-header">&#x1F4CB; 网关日志</div>
+        <span class="log-arrow" id="logArrow">&#x25BC;</span>
       </div>
-      <!-- Negative prompt (collapsible) -->
+      <div class="log-body" id="logBody">
+        <div class="log-list" id="logList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: Image Studio -->
+  <div class="tab-content" id="tabContentStudio">
+    <!-- Zone 1: Tool Area -->
+    <div class="studio-section">
+      <div class="studio-section-title">✨ 生成设置</div>
+      <div style="margin-bottom:0.8rem">
+        <textarea id="imgPrompt" rows="3" placeholder="描述你想生成的图片，如：一只橘猫趴在窗台上晒太阳，窗外是樱花&#10;&#10;Shift+Enter 换行，Enter 生成" style="width:100%;padding:0.6rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.5" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doImgGen()}"></textarea>
+      </div>
       <details style="margin-bottom:0.8rem">
         <summary style="cursor:pointer;font-size:0.8rem;color:var(--text-muted);user-select:none">排除内容（负面提示词）</summary>
         <input type="text" id="imgNeg" placeholder="如：blurry, low quality, text, watermark" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
-      <!-- Style chips -->
       <div style="margin-bottom:0.8rem">
-        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem">风格</div>
+        <div class="studio-label">风格</div>
         <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.35rem"></div>
       </div>
-      <!-- Aspect ratio + Quality + Count -->
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:end">
         <div style="flex:1;min-width:120px">
-          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">比例</div>
+          <div class="studio-label">比例</div>
           <div id="imgRatios" style="display:flex;gap:0.3rem"></div>
         </div>
         <div style="min-width:80px">
-          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">质量</div>
-          <select id="imgQuality" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
-            <option value="standard">标准</option>
-            <option value="hd">高清 HD</option>
-          </select>
+          <div class="studio-label">质量</div>
+          <select id="imgQuality" class="img-select"><option value="standard">标准</option><option value="hd">高清 HD</option></select>
         </div>
         <div style="min-width:60px">
-          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">数量</div>
-          <select id="imgCount" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="4">4</option>
-          </select>
+          <div class="studio-label">数量</div>
+          <select id="imgCount" class="img-select"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
         </div>
-        <div style="min-width:80px">
-          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">分组</div>
-          <select id="imgGroup" style="padding:0.35rem 0.5rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.8rem;background:var(--bg)">
-            <option value="">默认</option>
-          </select>
+        <div style="min-width:90px">
+          <div class="studio-label">渠道</div>
+          <select id="imgGroup" class="img-select"><option value="">默认</option></select>
         </div>
       </div>
-      <!-- Generate button -->
-      <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.65rem;font-size:0.95rem;font-weight:600;letter-spacing:0.5px">🎨 生成图片</button>
-      <!-- Result area -->
-      <div id="imgResult" style="margin-top:0.8rem;min-height:0"></div>
-      <!-- History -->
-      <div id="imgHistory" style="margin-top:0.8rem"></div>
+      <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.7rem;font-size:1rem;font-weight:700;letter-spacing:0.5px">🎨 生成图片</button>
     </div>
-  </div>
 
-  <!-- Log Panel (collapsible) -->
-  <div class="log-panel">
-    <div class="log-toggle" onclick="toggleLogs()">
-      <div class="log-header">&#x1F4CB; 网关日志</div>
-      <span class="log-arrow" id="logArrow">&#x25BC;</span>
+    <!-- Zone 2: Temp Images -->
+    <div class="studio-section" id="imgTempZone" style="display:none">
+      <div class="studio-section-title" style="justify-content:space-between">
+        <span>📸 生成结果</span>
+        <div class="batch-bar" style="padding:0;margin:0">
+          <button class="img-action-btn dl" onclick="downloadAllTemp()">⬇ 下载全部</button>
+          <button class="img-action-btn save" onclick="saveAllTemp()">💾 全部保存</button>
+        </div>
+      </div>
+      <div id="imgTempInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.5rem"></div>
+      <div id="imgTempGrid" class="img-grid cols-2"></div>
     </div>
-    <div class="log-body" id="logBody">
-      <div class="log-list" id="logList"></div>
+
+    <!-- Zone 3: Project Gallery -->
+    <div class="studio-section">
+      <div class="studio-section-title" style="justify-content:space-between">
+        <span>🖼️ 项目图库</span>
+        <span id="galleryCount" style="font-size:0.78rem;color:var(--text-muted);font-weight:400"></span>
+      </div>
+      <div id="galleryGrid" class="img-grid cols-4"></div>
+      <div id="galleryEmpty" class="gallery-empty">还没有保存的图片</div>
+      <div id="galleryMore" style="text-align:center;padding:0.6rem;display:none">
+        <button class="img-action-btn dl" onclick="loadMoreGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1090,6 +1187,15 @@ function renderLogs(logEntries) {
   document.getElementById('logList').innerHTML = html || '<div class="log-entry info">暂无日志</div>';
 }
 
+// ── Tabs ──────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  document.getElementById('tabContent' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  if (tab === 'studio') loadGallery();
+}
+
 // ── Image Studio ──────────────────────────────────────────
 const IMG_STYLES = [
   {id:'none',label:'无风格',icon:'🎯'},
@@ -1107,70 +1213,40 @@ const IMG_RATIOS = [
   {id:'1024x1792',label:'2:3',icon:'▮'},
 ];
 let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
-const imgHistoryList = [];
+let tempImages = []; // {b64, prompt, style, size, quality, channel}
+let galleryImages = [];
+let galleryOffset = 0;
+const GALLERY_PAGE = 24;
 
 function initImgStudio() {
-  // Render style chips
   const stylesEl = document.getElementById('imgStyles');
+  if (!stylesEl) return;
   stylesEl.innerHTML = IMG_STYLES.map(s =>
     `<button class="img-chip${s.id===imgSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectImgStyle('${s.id}')">${s.icon} ${s.label}</button>`
   ).join('');
-  // Render ratio chips
   const ratiosEl = document.getElementById('imgRatios');
   ratiosEl.innerHTML = IMG_RATIOS.map(r =>
     `<button class="img-chip ratio${r.id===imgSelectedRatio?' active':''}" data-ratio="${r.id}" onclick="selectImgRatio('${r.id}')">${r.icon} ${r.label}</button>`
   ).join('');
 }
-
 function selectImgStyle(id) {
   imgSelectedStyle = id;
-  document.querySelectorAll('#imgStyles .img-chip').forEach(el => {
-    el.classList.toggle('active', el.dataset.style === id);
-  });
+  document.querySelectorAll('#imgStyles .img-chip').forEach(el => el.classList.toggle('active', el.dataset.style === id));
 }
 function selectImgRatio(id) {
   imgSelectedRatio = id;
-  document.querySelectorAll('#imgRatios .img-chip').forEach(el => {
-    el.classList.toggle('active', el.dataset.ratio === id);
-  });
-}
-
-function toggleImgGen() {
-  const body = document.getElementById('imgGenBody');
-  const arrow = document.getElementById('imgGenArrow');
-  const hidden = body.style.display === 'none';
-  body.style.display = hidden ? '' : 'none';
-  arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
+  document.querySelectorAll('#imgRatios .img-chip').forEach(el => el.classList.toggle('active', el.dataset.ratio === id));
 }
 
 function updateImgGroupSelect() {
   const sel = document.getElementById('imgGroup');
+  if (!sel) return;
   const current = sel.value;
   sel.innerHTML = '<option value="">默认</option>';
   fetch('/gateway/groups', {headers: authHeaders()}).then(r=>r.json()).then(data => {
-    (data.defs||[]).forEach(g => {
-      const opt = document.createElement('option');
-      opt.value = g; opt.textContent = g;
-      sel.appendChild(opt);
-    });
+    (data.defs||[]).forEach(g => { const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o); });
     sel.value = current;
   }).catch(()=>{});
-}
-
-function addImgHistory(prompt, style, ratio, images, sec) {
-  imgHistoryList.unshift({ prompt, style, ratio, images, sec, time: new Date().toLocaleTimeString() });
-  if (imgHistoryList.length > 20) imgHistoryList.pop();
-  renderImgHistory();
-}
-
-function renderImgHistory() {
-  const el = document.getElementById('imgHistory');
-  if (!imgHistoryList.length) { el.innerHTML = ''; return; }
-  el.innerHTML = '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem;border-top:1px solid var(--border);padding-top:0.6rem">历史记录</div>' +
-    imgHistoryList.map((h, i) => `<div class="img-history-item" onclick="document.getElementById('imgPrompt').value='${esc(h.prompt).replace(/'/g,"\\'")}'" title="点击复用提示词">
-      <div style="display:flex;gap:0.4rem;overflow-x:auto">${h.images.map(src => `<img src="${src}" style="height:48px;border-radius:6px">`).join('')}</div>
-      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem">${esc(h.prompt.slice(0,60))}${h.prompt.length>60?'...':''} · ${h.style!=='none'?h.style+' · ':''}${h.sec}s</div>
-    </div>`).join('');
 }
 
 async function doImgGen() {
@@ -1184,14 +1260,12 @@ async function doImgGen() {
   const size = imgSelectedRatio;
   const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
   const btn = document.getElementById('imgGenBtn');
-  const result = document.getElementById('imgResult');
+  const zone = document.getElementById('imgTempZone');
 
   btn.disabled = true; btn.innerHTML = '🍪 生成中...';
-  result.innerHTML = `<div style="color:var(--text-muted);padding:1.5rem;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
-    <div style="font-size:1.5rem;margin-bottom:0.3rem">🎨</div>
-    <div>正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...</div>
-    ${style?`<div style="font-size:0.78rem;margin-top:0.3rem">风格: ${IMG_STYLES.find(s=>s.id===style)?.label||style}</div>`:''}
-  </div>`;
+  zone.style.display = '';
+  document.getElementById('imgTempInfo').textContent = `正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...`;
+  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
 
   const start = Date.now();
   const body = { prompt, model, n, size, quality };
@@ -1208,34 +1282,108 @@ async function doImgGen() {
     const sec = ((Date.now() - start) / 1000).toFixed(1);
 
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
-      const images = data.data.map(d => 'data:image/png;base64,' + d.b64_json);
-      const cols = images.length >= 4 ? 2 : images.length;
-      result.innerHTML = `<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem;display:flex;justify-content:space-between">
-          <span>${sec}s · ${group||'默认'}${style?' · '+(IMG_STYLES.find(s=>s.id===style)?.label||style):''}</span>
-          <span style="color:var(--primary);cursor:pointer" onclick="downloadAllImages()">下载全部</span>
-        </div>
-        <div id="imgGrid" style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:0.5rem">
-          ${images.map((src, i) => `<div style="position:relative;border-radius:var(--radius-sm);overflow:hidden;box-shadow:var(--shadow-sm)">
-            <img src="${src}" style="width:100%;display:block;cursor:pointer" onclick="window.open(this.src)" title="点击查看大图">
-            <a download="gemini-${Date.now()}-${i+1}.png" href="${src}" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.5);color:#fff;border-radius:6px;padding:2px 8px;font-size:0.7rem;text-decoration:none">⬇</a>
-          </div>`).join('')}
-        </div>`;
-      addImgHistory(prompt, imgSelectedStyle, imgSelectedRatio, images, sec);
-    } else if (data.detail) {
-      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem">${esc(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))}</div>`;
-    } else if (data.error) {
-      result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem">${esc(data.error.message || JSON.stringify(data.error))}</div>`;
+      tempImages = data.data.map((d, i) => ({
+        b64: d.b64_json, prompt, style: imgSelectedStyle, size, quality, channel: group || '默认', index: i
+      }));
+      const styleName = style ? (IMG_STYLES.find(s=>s.id===style)?.label||style) : '';
+      document.getElementById('imgTempInfo').textContent = `${sec}s · ${group||'默认'}${styleName?' · '+styleName:''} · ${tempImages.length} 张`;
+      renderTempGrid();
     } else {
-      result.innerHTML = '<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">未生成图片（Cookie 可能需要更新）</div>';
+      const errMsg = data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        : data.error ? (data.error.message || JSON.stringify(data.error))
+        : '未生成图片（Cookie 可能需要更新）';
+      document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">${esc(errMsg)}</div>`;
+      tempImages = [];
     }
   } catch(e) {
-    result.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
+    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`;
+    tempImages = [];
   }
   btn.disabled = false; btn.innerHTML = '🎨 生成图片';
 }
 
-function downloadAllImages() {
-  document.querySelectorAll('#imgGrid a[download]').forEach(a => a.click());
+function renderTempGrid() {
+  const grid = document.getElementById('imgTempGrid');
+  const cols = tempImages.length >= 4 ? 2 : Math.max(1, tempImages.length);
+  grid.className = `img-grid cols-${cols}`;
+  grid.innerHTML = tempImages.map((img, i) => {
+    const src = 'data:image/png;base64,' + img.b64;
+    return `<div class="img-card">
+      <img src="${src}" onclick="window.open(this.src)" title="点击查看大图">
+      <div class="img-card-actions">
+        <button class="img-action-btn save" onclick="event.stopPropagation();saveTempImage(${i})">💾 保存</button>
+        <a class="img-action-btn dl" download="gemini-${Date.now()}-${i+1}.png" href="${src}" onclick="event.stopPropagation()">⬇ 下载</a>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function saveTempImage(index) {
+  const img = tempImages[index];
+  if (!img) return;
+  try {
+    const resp = await fetch('/gateway/images/save', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ b64: img.b64, prompt: img.prompt, style: img.style, size: img.size, quality: img.quality, channel: img.channel })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      toast('已保存到项目图库', 'ok');
+      loadGallery();
+    } else { toast(data.detail || '保存失败', 'err'); }
+  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+}
+
+async function saveAllTemp() {
+  for (let i = 0; i < tempImages.length; i++) await saveTempImage(i);
+}
+
+function downloadAllTemp() {
+  document.querySelectorAll('#imgTempGrid a.img-action-btn.dl').forEach(a => a.click());
+}
+
+// ── Gallery ───────────────────────────────────────────────
+async function loadGallery(append) {
+  if (!append) { galleryOffset = 0; galleryImages = []; }
+  try {
+    const resp = await fetch(`/gateway/images?offset=${galleryOffset}&limit=${GALLERY_PAGE}`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (!append) galleryImages = [];
+    galleryImages.push(...(data.images || []));
+    galleryOffset = galleryImages.length;
+    renderGallery();
+    const more = document.getElementById('galleryMore');
+    more.style.display = (data.total > galleryOffset) ? '' : 'none';
+    document.getElementById('galleryCount').textContent = data.total ? `${data.total} 张` : '';
+    document.getElementById('galleryEmpty').style.display = galleryImages.length ? 'none' : '';
+  } catch(e) { console.error('Gallery load failed:', e); }
+}
+
+function loadMoreGallery() { loadGallery(true); }
+
+function renderGallery() {
+  const grid = document.getElementById('galleryGrid');
+  grid.innerHTML = galleryImages.map(img => {
+    const src = `/data/images/${img.filename}`;
+    const date = new Date(img.created * 1000).toLocaleString();
+    return `<div class="img-card">
+      <img src="${src}" loading="lazy" onclick="window.open('${src}')" title="${esc(img.prompt || '')}">
+      <div class="img-card-actions">
+        <a class="img-action-btn dl" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+        <button class="img-action-btn del" onclick="event.stopPropagation();deleteGalleryImage('${img.id}')">🗑</button>
+      </div>
+      <div class="gallery-meta">${esc((img.prompt||'').slice(0,40))}${img.style&&img.style!=='none'?' · '+img.style:''}</div>
+    </div>`;
+  }).join('');
+}
+
+async function deleteGalleryImage(id) {
+  if (!confirm('删除这张图片？')) return;
+  try {
+    await fetch(`/gateway/images/${id}`, { method: 'DELETE', headers: authHeaders() });
+    toast('已删除', 'ok');
+    loadGallery();
+  } catch(e) { toast('删除失败', 'err'); }
 }
 
 function toggleLogs() {

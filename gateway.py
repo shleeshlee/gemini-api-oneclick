@@ -19,11 +19,14 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import base64
+import uuid as _uuid
+
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -1043,6 +1046,98 @@ async def api_set_guard_settings(request: Request):
 @app.get("/api/health")
 async def api_health():
     return {"status": "ok"}
+
+
+# ── Image Gallery (persistent storage) ─────────────────────────────────
+
+IMAGES_DIR = ROOT_DIR / "data" / "images"
+IMAGES_META = ROOT_DIR / "data" / "images" / "meta.json"
+
+
+def _load_image_meta() -> list[dict]:
+    try:
+        if IMAGES_META.exists():
+            return json.loads(IMAGES_META.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _save_image_meta(meta: list[dict]):
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGES_META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.post("/gateway/images/save", dependencies=[Depends(verify_auth)])
+async def save_image(request: Request):
+    """Save a base64 image to the project gallery."""
+    body = await request.json()
+    b64 = body.get("b64", "")
+    if not b64:
+        raise HTTPException(status_code=400, detail="b64 data required")
+
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    img_id = _uuid.uuid4().hex[:12]
+    filename = f"{img_id}.png"
+    filepath = IMAGES_DIR / filename
+
+    try:
+        img_data = base64.b64decode(b64)
+        filepath.write_bytes(img_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+
+    entry = {
+        "id": img_id,
+        "filename": filename,
+        "prompt": body.get("prompt", ""),
+        "style": body.get("style", ""),
+        "size": body.get("size", ""),
+        "quality": body.get("quality", ""),
+        "channel": body.get("channel", ""),
+        "created": int(time.time()),
+    }
+
+    meta = _load_image_meta()
+    meta.insert(0, entry)
+    _save_image_meta(meta)
+
+    return {"ok": True, "id": img_id, "filename": filename}
+
+
+@app.get("/gateway/images", dependencies=[Depends(verify_auth)])
+async def list_images(offset: int = 0, limit: int = 50):
+    """List saved images with metadata."""
+    meta = _load_image_meta()
+    total = len(meta)
+    items = meta[offset:offset + limit]
+    return {"images": items, "total": total}
+
+
+@app.delete("/gateway/images/{img_id}", dependencies=[Depends(verify_auth)])
+async def delete_image(img_id: str):
+    """Delete a saved image."""
+    meta = _load_image_meta()
+    entry = next((m for m in meta if m["id"] == img_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    filepath = IMAGES_DIR / entry["filename"]
+    if filepath.exists():
+        filepath.unlink()
+
+    meta = [m for m in meta if m["id"] != img_id]
+    _save_image_meta(meta)
+    return {"ok": True}
+
+
+@app.get("/data/images/{filename}")
+async def serve_image(filename: str):
+    """Serve saved image files."""
+    filepath = IMAGES_DIR / filename
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath, media_type="image/png")
 
 
 # ── Frontend ────────────────────────────────────────────────────────────
