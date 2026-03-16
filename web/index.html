@@ -696,7 +696,6 @@ body::before {
                 <div id="imgFileInfo" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem"></div>
                 <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
                   <button onclick="event.stopPropagation();analyzeStyle()" style="border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
-                  <button onclick="event.stopPropagation();doImgEdit()" style="border:none;background:#E0F0FF;color:#2D6DB5;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✏️ 编辑</button>
                   <button onclick="event.stopPropagation();clearUploadImage()" style="border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
                 </div>
               </div>
@@ -1696,54 +1695,6 @@ async function deleteStyleTemplate(id) {
   } catch(e) { toast('删除失败', 'err'); }
 }
 
-async function doImgEdit() {
-  const prompt = document.getElementById('imgPrompt').value.trim();
-  if (!prompt) { toast('请输入编辑描述', 'err'); return; }
-  if (!uploadedImageB64) { toast('请先上传参考图片', 'err'); return; }
-
-  const model = document.getElementById('imgModel').value;
-  const btn = document.getElementById('imgEditBtn');
-  const zone = document.getElementById('imgTempZone');
-
-  btn.disabled = true; btn.innerHTML = '🖌️ 编辑中...';
-  zone.style.display = '';
-  document.getElementById('imgTempInfo').textContent = '正在编辑图片，预计 30-120 秒...';
-  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🖌️ 编辑中...</div>';
-
-  const start = Date.now();
-  try {
-    // Upload image as base64 in message, then ask to modify
-    const messages = [{
-      role: 'user',
-      content: [
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + uploadedImageB64 } },
-        { type: 'text', text: `Based on this image, generate a new version: ${prompt}` }
-      ]
-    }];
-    const resp = await fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, max_tokens: 4096 })
-    });
-    const data = await resp.json();
-    const sec = ((Date.now() - start) / 1000).toFixed(1);
-    const reply = data.choices?.[0]?.message?.content || '';
-
-    // Check if Gemini returned images in the response (via markdown or the response itself)
-    // For now, the edit goes through chat completions which returns text
-    // The actual image generation happens when Gemini decides to generate
-    document.getElementById('imgTempInfo').textContent = `${sec}s · ${model} · 编辑`;
-    document.getElementById('imgTempGrid').innerHTML = `<div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">
-      <div style="margin-bottom:0.5rem;color:var(--text-muted);font-size:0.78rem">AI 回复：</div>
-      ${esc(reply.slice(0, 500))}
-      <div style="margin-top:0.5rem;color:var(--text-muted);font-size:0.75rem">提示：图片编辑通过对话实现。如果没有直接生成修改后的图片，可以尝试更明确的指令如"重新生成这张图片，把背景改成..."</div>
-    </div>`;
-  } catch(e) {
-    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">编辑失败: ${esc(e.message)}</div>`;
-  }
-  btn.disabled = false; btn.innerHTML = '🖌️ 编辑';
-}
-
 // ── Gallery ───────────────────────────────────────────────
 async function loadGallery(append) {
   if (!append) { galleryOffset = 0; galleryImages = []; }
@@ -1771,7 +1722,6 @@ function renderGallery() {
     return `<div class="img-card">
       <img src="${src}" loading="lazy" onclick="window.open('${src}')" title="${esc(img.prompt || '')}">
       <div class="img-card-actions">
-        <button class="img-action-btn dl" onclick="event.stopPropagation();editGalleryImage('${src}')" style="background:rgba(45,109,219,0.85)">✏️</button>
         <a class="img-action-btn dl" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteGalleryImage('${img.id}')">🗑</button>
       </div>
@@ -1780,26 +1730,6 @@ function renderGallery() {
   }).join('');
 }
 
-async function editGalleryImage(src) {
-  // Load gallery image into upload area for editing
-  try {
-    const resp = await fetch(src);
-    const blob = await resp.blob();
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      uploadedImageB64 = e.target.result.split(',')[1];
-      document.getElementById('imgPreviewImg').src = e.target.result;
-      document.getElementById('imgUploadPreview').style.display = '';
-      document.getElementById('imgUploadEmpty').style.display = 'none';
-      const sizeMB = (blob.size / 1024 / 1024).toFixed(2);
-      document.getElementById('imgFileInfo').innerHTML = `<b>图库图片</b><br>${sizeMB} MB · ${blob.type}`;
-      // Scroll to top
-      document.getElementById('tabContentStudio').scrollIntoView({behavior:'smooth'});
-      toast('图片已加载到编辑区，输入修改描述后点击 ✏️ 编辑', 'ok');
-    };
-    reader.readAsDataURL(blob);
-  } catch(e) { toast('加载失败: ' + e.message, 'err'); }
-}
 
 async function deleteGalleryImage(id) {
   if (!confirm('删除这张图片？')) return;
