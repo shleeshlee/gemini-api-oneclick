@@ -172,12 +172,16 @@ if [[ -f .env ]]; then
 
       # 确保 COOKIE_MANAGER_PASSWORD 写入 .env（老用户可能没有）
       if ! grep -q '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null; then
-        NEW_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+        echo ""
+        info "首次启用 Gateway 面板，需要设置登录密码"
+        read -rp "  面板密码 [回车自动生成]: " USER_GW_PASSWORD
+        if [[ -z "$USER_GW_PASSWORD" ]]; then
+          USER_GW_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+          info "已生成面板密码: ${USER_GW_PASSWORD}"
+        fi
         echo "" >> .env
         echo "# Cookie Manager / Gateway 面板密码" >> .env
-        echo "COOKIE_MANAGER_PASSWORD=${NEW_PASSWORD}" >> .env
-        info "已生成面板密码: ${NEW_PASSWORD}"
-        warn "请记住此密码，登录 Gateway 面板时需要！"
+        echo "COOKIE_MANAGER_PASSWORD=${USER_GW_PASSWORD}" >> .env
       fi
 
       # 确保 COOKIE_MANAGER_PORT 写入 .env
