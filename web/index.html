@@ -647,7 +647,10 @@ body::before {
           <select id="imgGroup" class="img-select"><option value="">默认</option></select>
         </div>
       </div>
-      <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.7rem;font-size:1rem;font-weight:700;letter-spacing:0.5px">🎨 生成图片</button>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="flex:0 0 auto;padding:0.7rem 1rem;font-size:0.88rem;font-weight:600">✨ 优化提示词</button>
+        <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="flex:1;padding:0.7rem;font-size:1rem;font-weight:700;letter-spacing:0.5px">🎨 生成图片</button>
+      </div>
     </div>
 
     <!-- Zone 2: Temp Images -->
@@ -1247,6 +1250,54 @@ function updateImgGroupSelect() {
     (data.defs||[]).forEach(g => { const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o); });
     sel.value = current;
   }).catch(()=>{});
+}
+
+async function optimizePrompt() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请先输入提示词', 'err'); return; }
+  const group = document.getElementById('imgGroup').value;
+  const style = imgSelectedStyle !== 'none' ? (IMG_STYLES.find(s=>s.id===imgSelectedStyle)?.label||imgSelectedStyle) : '';
+  const ratio = IMG_RATIOS.find(r=>r.id===imgSelectedRatio)?.label || '';
+  const quality = document.getElementById('imgQuality').value;
+  const model = group ? group + '-gemini-3.0-flash' : 'gemini-3.0-flash';
+  const btn = document.getElementById('imgOptBtn');
+
+  btn.disabled = true; btn.textContent = '✨ 优化中...';
+
+  const sysPrompt = `You are an expert image prompt engineer for Google Gemini's ImageFX generator. Your job is to expand a user's brief description into a detailed, vivid image generation prompt in English.
+
+Rules:
+- Output ONLY the optimized prompt, nothing else
+- Use natural descriptive language (NOT Stable Diffusion tags)
+- Add specific visual details: lighting, composition, mood, colors, textures
+- Keep the user's core intent, don't change the subject
+- 150 words max
+${style ? `- Style requested: ${style}` : ''}
+${ratio ? `- Aspect ratio: ${ratio}` : ''}
+${quality === 'hd' ? '- High quality, ultra detailed' : ''}`;
+
+  try {
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: [
+        { role: 'system', content: sysPrompt },
+        { role: 'user', content: prompt }
+      ], max_tokens: 300, temperature: 0.7 })
+    });
+    const data = await resp.json();
+    let optimized = data.choices?.[0]?.message?.content || '';
+    optimized = optimized.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (optimized) {
+      document.getElementById('imgPrompt').value = optimized;
+      toast('提示词已优化', 'ok');
+    } else {
+      toast('优化失败：空响应', 'err');
+    }
+  } catch(e) {
+    toast('优化失败: ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = '✨ 优化提示词';
 }
 
 async function doImgGen() {

@@ -451,49 +451,57 @@ class ImageGenerationRequest(BaseModel):
 
 
 SIZE_TO_ASPECT = {
-    "1280x720": "16:9", "720x1280": "9:16",
-    "1792x1024": "3:2", "1024x1792": "2:3",
-    "1024x1024": "1:1",
+    "1280x720": "16:9 widescreen landscape",
+    "720x1280": "9:16 tall portrait",
+    "1792x1024": "3:2 landscape",
+    "1024x1792": "2:3 portrait",
+    "1024x1024": "",
 }
 
+# Natural language style descriptions for Gemini (not SD tags)
 STYLE_PROMPTS = {
-    "anime": "anime style, cel shading, vibrant colors, clean lineart",
-    "realistic": "photorealistic, ultra detailed, natural lighting, DSLR photo",
-    "watercolor": "watercolor painting style, soft edges, translucent colors, paper texture",
-    "oil": "oil painting style, rich colors, visible brushstrokes, classical art",
-    "pixel": "pixel art style, retro game aesthetic, 16-bit, clean pixels",
-    "sketch": "pencil sketch style, detailed linework, graphite on paper, monochrome",
-    "gothic": "gothic dark fantasy style, dramatic lighting, ornate details, dark atmosphere",
-    "cute": "cute kawaii style, chibi, pastel colors, round shapes, adorable",
-    "cyberpunk": "cyberpunk style, neon lights, futuristic cityscape, high-tech, rain-soaked streets",
-    "ghibli": "Studio Ghibli style, whimsical, lush nature, soft lighting, hand-drawn animation",
+    "anime": "Draw this in anime style with vibrant colors, clean lineart, and cel shading.",
+    "realistic": "Create a photorealistic image, like a high-end DSLR photograph with natural lighting and sharp details.",
+    "watercolor": "Paint this in watercolor style with soft translucent washes, visible paper texture, and gentle color bleeding.",
+    "oil": "Render this as an oil painting with rich impasto brushstrokes, deep colors, and classical composition.",
+    "pixel": "Create this in pixel art style, like a retro 16-bit video game, with clean pixel boundaries.",
+    "sketch": "Draw this as a detailed pencil sketch on paper, with graphite shading and fine linework.",
+    "gothic": "Create this in dark gothic fantasy style with dramatic chiaroscuro lighting, ornate details, and moody atmosphere.",
+    "cute": "Draw this in an adorable kawaii style with chibi proportions, pastel colors, and round soft shapes.",
+    "cyberpunk": "Create this in cyberpunk aesthetic with neon-lit streets, holographic signs, rain reflections, and futuristic technology.",
+    "ghibli": "Draw this in Studio Ghibli animation style with lush nature, warm soft lighting, and whimsical hand-painted feel.",
 }
 
 QUALITY_PROMPTS = {
-    "hd": "masterpiece, best quality, highly detailed, 8k resolution, sharp focus",
+    "hd": "Make it extremely detailed and high quality, with 4K resolution clarity and sharp focus throughout.",
 }
 
 
 def build_image_prompt(request: ImageGenerationRequest) -> str:
-    """Build optimized prompt from user input + style/quality/size parameters."""
-    parts = []
+    """Build natural language prompt optimized for Gemini's ImageFX engine."""
+    parts = ["Generate an image:"]
 
-    if request.quality and request.quality in QUALITY_PROMPTS:
-        parts.append(QUALITY_PROMPTS[request.quality])
+    # User prompt first — the core intent
+    parts.append(request.prompt)
 
+    # Style as natural language instruction
     if request.style and request.style in STYLE_PROMPTS:
         parts.append(STYLE_PROMPTS[request.style])
 
-    parts.append(request.prompt)
+    # Quality enhancement
+    if request.quality and request.quality in QUALITY_PROMPTS:
+        parts.append(QUALITY_PROMPTS[request.quality])
 
+    # Aspect ratio as natural description
+    aspect_desc = SIZE_TO_ASPECT.get(request.size or "", "")
+    if aspect_desc:
+        parts.append(f"The image should be in {aspect_desc} format.")
+
+    # Negative prompt as natural instruction
     if request.negative_prompt:
-        parts.append(f"Do not include: {request.negative_prompt}")
+        parts.append(f"Important: do not include {request.negative_prompt} in the image.")
 
-    aspect = SIZE_TO_ASPECT.get(request.size or "", "")
-    if aspect and aspect != "1:1":
-        parts.append(f"aspect ratio {aspect}")
-
-    return "Generate an image: " + ", ".join(parts)
+    return " ".join(parts)
 
 
 @app.post("/v1/images/generations")
