@@ -350,7 +350,7 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, api_key: str = Depends(verify_api_key)):
     """Handle chat completion requests with retry and streaming support."""
-    max_retries = 2
+    max_retries = 3
 
     for attempt in range(max_retries):
         try:
@@ -463,6 +463,13 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 
             if any(keyword in error_msg for keyword in ['429', 'rate limit', 'resource exhausted', 'quota']):
                 raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
+
+            # Stream interrupted / truncated — retryable
+            if any(keyword in error_msg for keyword in ['stream', 'interrupted', 'truncated', 'incomplete']):
+                logger.warning(f"Stream error, retrying... ({attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
 
             raise HTTPException(status_code=500, detail=f"Error generating completion: {str(e)}")
 
