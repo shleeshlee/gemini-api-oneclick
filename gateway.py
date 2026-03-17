@@ -129,6 +129,8 @@ class Container:
         self.last_check = 0
         self.total_requests = 0
         self.total_errors = 0
+        self.health_fail_count = 0  # consecutive health check failures
+        self.needs_cookie = False   # True = auth error, restart won't help
 
     @property
     def available(self):
@@ -148,6 +150,7 @@ class Container:
             "last_check": self.last_check,
             "total_requests": self.total_requests,
             "total_errors": self.total_errors,
+            "needs_cookie": self.needs_cookie,
         }
 
 
@@ -290,28 +293,80 @@ def get_next_available(group: str | None = None) -> Container | None:
 
 # ── Health Check ────────────────────────────────────────────────────────
 
+HEALTH_FAIL_TOLERANCE = 2   # consecutive failures before marking unhealthy
+HEALTH_RESTART_THRESHOLD = 3  # consecutive failures to trigger docker restart
+_AUTH_KEYWORDS = {"auth", "cookie", "expired", "credentials", "401", "403"}
+
+
 async def check_health(c: Container, client: httpx.AsyncClient):
-    """Check single container health."""
+    """Check single container health with failure tolerance and auto-restart."""
     try:
         resp = await client.get(f"{c.url}/health", timeout=5.0)
         data = resp.json()
         was_healthy = c.healthy
-        c.healthy = resp.status_code == 200 and data.get("client_ready", False)
+        ok = resp.status_code == 200 and data.get("client_ready", False)
         c.last_check = time.time()
 
-        if c.healthy:
-            c.error_count = 0
-            # Only log recovery if container was previously confirmed unhealthy (not first check)
-            if not was_healthy and c.last_check > 0:
-                add_log("info", c.num, "恢复正常")
+        if ok:
+            c.health_fail_count = 0
+            if not c.healthy:
+                c.healthy = True
+                if was_healthy or c.total_requests > 0:
+                    c.needs_cookie = False
+                    add_log("info", c.num, "恢复正常")
         else:
+            c.health_fail_count += 1
             reason = "client not ready" if resp.status_code == 200 else f"HTTP {resp.status_code}"
-            if was_healthy:
-                add_log("warn", c.num, f"健康检查失败: {reason}")
+            if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
+                c.healthy = False
+                add_log("warn", c.num, f"健康检查连续{HEALTH_FAIL_TOLERANCE}次失败: {reason}")
+            if c.health_fail_count >= HEALTH_RESTART_THRESHOLD:
+                await _maybe_restart(c)
     except Exception as e:
-        c.healthy = False
+        c.health_fail_count += 1
         c.last_check = time.time()
-        add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
+        if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
+            c.healthy = False
+            add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
+        if c.health_fail_count >= HEALTH_RESTART_THRESHOLD:
+            await _maybe_restart(c)
+
+
+async def _maybe_restart(c: Container):
+    """Restart container if not an auth problem. Auth issues need new cookies, not restart."""
+    cname = f"gemini_api_account_{c.num}"
+    # Check recent logs for auth errors
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "logs", "--tail", "30", cname,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+        recent = stdout.decode(errors="replace").lower()
+        if any(kw in recent for kw in _AUTH_KEYWORDS):
+            if not c.needs_cookie:
+                c.needs_cookie = True
+                add_log("error", c.num, "认证错误，需要更换 Cookie（重启无效）")
+            c.health_fail_count = 0  # stop retrying restart
+            return
+    except Exception:
+        pass
+
+    # Not auth — restart
+    add_log("warn", c.num, f"连续{c.health_fail_count}次健康检查失败，自动重启容器")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "restart", cname,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+        c.health_fail_count = 0
+        c.healthy = False  # wait for next health check to confirm
+        add_log("info", c.num, "容器已重启，等待恢复")
+    except Exception as e:
+        add_log("error", c.num, f"容器重启失败: {str(e)[:80]}")
 
 
 _last_log_ts: dict[int, str] = {}  # container num -> last seen log timestamp
@@ -320,28 +375,7 @@ _LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback
 _LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "waiting for"}
 
 
-async def count_container_requests():
-    """Count real requests/errors from container docker logs (tail only)."""
-    for c in containers.values():
-        cname = f"gemini_api_account_{c.num}"
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "logs", "--tail", "500", cname,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
-            reqs = 0
-            errs = 0
-            for line in stdout.decode(errors="replace").splitlines():
-                if "Sending request to Gemini" in line:
-                    reqs += 1
-                elif "Error generating completion" in line:
-                    errs += 1
-            c.total_requests = reqs
-            c.total_errors = errs
-        except Exception:
-            pass
+# count_container_requests removed — proxy tracks total_requests/total_errors in real time
 
 
 _log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
@@ -387,8 +421,12 @@ async def sample_container_logs():
             pass
 
 
+_last_health_available = -1  # track state changes
+
+
 async def health_loop():
     """Background health check + log aggregation loop."""
+    global _last_health_available
     await asyncio.sleep(5)  # initial delay
     async with httpx.AsyncClient() as client:
         while True:
@@ -397,10 +435,11 @@ async def health_loop():
 
             available = sum(1 for c in containers.values() if c.available)
             total = len(containers)
-            add_log("info", None, f"Health check: {available}/{total} available")
+            # Only log when availability changes
+            if available != _last_health_available:
+                add_log("info", None, f"Health check: {available}/{total} available")
+                _last_health_available = available
 
-            # Read real stats from containers + sample logs for errors
-            await count_container_requests()
             await sample_container_logs()
 
             await asyncio.sleep(HEALTH_INTERVAL)
