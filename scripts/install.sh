@@ -198,18 +198,24 @@ if [[ -f .env ]]; then
       info "正在更新 ..."
       git pull --ff-only 2>/dev/null || warn "git pull 失败（非 git 仓库或有冲突）"
 
-      # shellcheck disable=SC1091
-      set +u; source .env; set -u
+      # Read existing config safely (no source, grep only)
+      START_PORT=$(grep '^START_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      API_KEY=$(grep '^API_KEY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      GATEWAY_PORT=$(grep '^GATEWAY_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "9880")
+      COOKIE_MANAGER_PASSWORD=$(grep '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      CONTAINER_PREFIX=$(grep '^CONTAINER_PREFIX=' .env 2>/dev/null | cut -d= -f2 || echo "gemini_api_account_")
+      HTTP_PROXY=$(grep '^HTTP_PROXY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      HTTPS_PROXY=$(grep '^HTTPS_PROXY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      GATEWAY_PORT="${GATEWAY_PORT:-9880}"
+      CONTAINER_PREFIX="${CONTAINER_PREFIX:-gemini_api_account_}"
 
       # 确保 GATEWAY_PORT 写入 .env（老用户可能没有）
       if ! grep -q '^GATEWAY_PORT=' .env 2>/dev/null; then
-        GATEWAY_PORT="${GATEWAY_PORT:-9880}"
         echo "" >> .env
         echo "# Gateway (智能轮询总入口)" >> .env
         echo "GATEWAY_PORT=${GATEWAY_PORT}" >> .env
         info "已添加 GATEWAY_PORT=${GATEWAY_PORT} 到 .env"
       fi
-      GATEWAY_PORT="${GATEWAY_PORT:-9880}"
 
       # 确保 COOKIE_MANAGER_PASSWORD 写入 .env（老用户可能没有）
       if ! grep -q '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null; then
@@ -515,9 +521,6 @@ COOKIE_MANAGER_PASSWORD=${COOKIE_MANAGER_PASSWORD}
 EOF
 
 info ".env 已写入"
-
-# shellcheck disable=SC1091
-set +u; source .env; set -u
 
 # Step: Generate compose
 CURRENT_STEP=$((CURRENT_STEP + 1))
