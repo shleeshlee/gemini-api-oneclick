@@ -1006,7 +1006,7 @@ async def api_accounts():
     return {"accounts": accounts_list}
 
 
-@app.get("/api/guard-settings", dependencies=[Depends(verify_auth)])
+@app.get("/api/guard-settings", dependencies=[Depends(verify_panel_auth)])
 async def api_get_guard_settings():
     """Read guard settings from .env."""
     current = _read_dotenv()
@@ -1022,15 +1022,10 @@ async def api_get_guard_settings():
     return {"settings": settings}
 
 
-@app.post("/api/guard-settings")
+@app.post("/api/guard-settings", dependencies=[Depends(verify_panel_auth)])
 async def api_set_guard_settings(request: Request):
     """Update guard settings in .env."""
     body = await request.json()
-    if COOKIE_MANAGER_PASSWORD:
-        password = body.get("password", "")
-        if not _safe_compare(password, COOKIE_MANAGER_PASSWORD):
-            raise HTTPException(status_code=401, detail="unauthorized")
-
     new_settings = body.get("settings", {})
     if not new_settings:
         raise HTTPException(status_code=400, detail="no settings provided")
