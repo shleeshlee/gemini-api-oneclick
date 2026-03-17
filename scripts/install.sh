@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Use sudo only if not root
+SUDO=""
+if [[ $EUID -ne 0 ]]; then
+  command -v sudo >/dev/null 2>&1 && SUDO="sudo" || { echo "Not root and no sudo found"; exit 1; }
+fi
+
 # ── Colors (need early for bootstrap messages) ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -238,8 +244,8 @@ if [[ -f .env ]]; then
         command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
         $PIP install -q fastapi uvicorn httpx 2>&1 \
           || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-          || sudo $PIP install -q fastapi uvicorn httpx 2>&1 \
-          || sudo $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || $SUDO $PIP install -q fastapi uvicorn httpx 2>&1 \
+          || $SUDO $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
           || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
       fi
 
@@ -249,7 +255,7 @@ if [[ -f .env ]]; then
         SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
         # 始终写入最新的 service 文件（更新配置路径等）
-        sudo tee "$SERVICE_FILE" > /dev/null <<GWEOF
+        $SUDO tee "$SERVICE_FILE" > /dev/null <<GWEOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
 After=network.target docker.service
@@ -266,9 +272,9 @@ EnvironmentFile=${ROOT_DIR}/.env
 WantedBy=multi-user.target
 GWEOF
 
-        sudo systemctl daemon-reload
-        sudo systemctl enable gemini-gateway
-        sudo systemctl restart gemini-gateway
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable gemini-gateway
+        $SUDO systemctl restart gemini-gateway
         info "Gateway 已安装/更新为系统服务（端口 ${GATEWAY_PORT}）"
       fi
 
@@ -548,8 +554,8 @@ if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
   command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
   $PIP install -q fastapi uvicorn httpx 2>&1 \
     || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-    || sudo $PIP install -q fastapi uvicorn httpx 2>&1 \
-    || sudo $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || $SUDO $PIP install -q fastapi uvicorn httpx 2>&1 \
+    || $SUDO $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
     || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
 fi
 
@@ -557,7 +563,7 @@ if command -v systemctl >/dev/null 2>&1; then
   PYTHON_BIN=$(command -v python3)
   SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
-  sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+  $SUDO tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
 After=network.target docker.service
@@ -574,9 +580,9 @@ EnvironmentFile=${ROOT_DIR}/.env
 WantedBy=multi-user.target
 EOF
 
-  sudo systemctl daemon-reload
-  sudo systemctl enable gemini-gateway
-  sudo systemctl restart gemini-gateway
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable gemini-gateway
+  $SUDO systemctl restart gemini-gateway
   info "Gateway 已安装为系统服务"
 else
   warn "未找到 systemctl，后台启动 Gateway ..."
@@ -588,8 +594,8 @@ fi
 # 如果旧版 cookie-manager 服务还在运行，停止它
 if command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active cookie-manager >/dev/null 2>&1; then
-    sudo systemctl stop cookie-manager
-    sudo systemctl disable cookie-manager
+    $SUDO systemctl stop cookie-manager
+    $SUDO systemctl disable cookie-manager
     info "已停止旧版 Cookie Manager 独立服务（功能已集成到 Gateway）"
   fi
 fi
