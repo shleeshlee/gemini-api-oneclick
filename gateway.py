@@ -880,10 +880,14 @@ async def deploy_cookie(num: int, request: Request):
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="docker compose 命令未找到")
 
-    # Discover new container if it wasn't known
+    # Discover new container if it wasn't known, reset health state
     port = BASE_PORT + num - 1
     if num not in containers:
         containers[num] = Container(num, port)
+    c = containers[num]
+    c.needs_cookie = False
+    c.health_fail_count = 0
+    c.healthy = False  # wait for health check to confirm
 
     add_log("info", num, "容器已重建")
     return {"ok": True, "message": f"容器 #{num} Cookie 已部署并重建"}
@@ -1191,8 +1195,13 @@ async def delete_image(img_id: str):
 
 @app.get("/data/images/{filename}")
 async def serve_image(filename: str):
-    """Serve saved image files."""
-    filepath = IMAGES_DIR / filename
+    """Serve saved image files (path-safe, no auth — images are user-facing)."""
+    # Reject path traversal attempts
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    filepath = (IMAGES_DIR / filename).resolve()
+    if not filepath.parent == IMAGES_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not filepath.exists() or not filepath.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(filepath, media_type="image/png")
