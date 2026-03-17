@@ -193,7 +193,8 @@ if [[ -f .env ]]; then
       python3 scripts/generate_compose.py
 
       info "重建并重启容器 ..."
-      docker compose -f docker-compose.accounts.yml up -d --build
+      docker build -t gemini-api-oneclick:local .
+      docker compose -f docker-compose.accounts.yml up -d
 
       # 安装 Gateway 依赖
       if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
@@ -496,7 +497,8 @@ for env_file in envs/account*.env; do
   fi
 done
 
-docker compose -f docker-compose.accounts.yml up -d --build
+docker build -t gemini-api-oneclick:local .
+docker compose -f docker-compose.accounts.yml up -d
 
 # Step: Gateway (智能轮询网关)
 CURRENT_STEP=$((CURRENT_STEP + 1))
