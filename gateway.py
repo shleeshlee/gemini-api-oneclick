@@ -101,7 +101,7 @@ def verify_auth(request: Request):
         return
     raise HTTPException(status_code=401, detail="未授权")
 
-def verify_api_auth(request: Request):
+def verify_auth(request: Request):
     """Dependency: API endpoints, only accept API_KEY."""
     if not API_KEY:
         return
@@ -493,7 +493,7 @@ async def fetch_base_models() -> list[dict]:
     return _models_cache
 
 
-@app.get("/v1/models", dependencies=[Depends(verify_api_auth)])
+@app.get("/v1/models", dependencies=[Depends(verify_auth)])
 async def list_models():
     """Return model list with group prefixes, filtering out 'unspecified'."""
     base_models = [m for m in await fetch_base_models() if m.get("id") != "unspecified"]
@@ -515,7 +515,7 @@ async def list_models():
     return {"object": "list", "data": result}
 
 
-@app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_api_auth)])
+@app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
     body = await request.body()

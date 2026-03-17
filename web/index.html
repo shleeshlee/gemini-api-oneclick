@@ -343,6 +343,7 @@ body::before {
 .img-chip:hover { border-color: var(--primary-light); background: var(--card); }
 .img-chip.active { border-color: var(--primary); background: var(--primary); color: #fff; }
 .img-chip.ratio { min-width: 42px; text-align: center; font-size: 0.7rem; }
+.img-model-sel { min-width: 180px; }
 .img-select {
   padding: 0.35rem 0.5rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
   font-family: 'Outfit', sans-serif; font-size: 0.8rem; background: var(--bg); color: var(--text);
@@ -416,6 +417,8 @@ body::before {
   .card { padding: 1rem; }
   .modal { padding: 1.5rem; }
   .studio-section { overflow: hidden; }
+  .img-model-sel { flex: 1 1 100% !important; min-width: 0 !important; }
+  .img-ctrl-row > div:last-child { flex: 1 1 100%; }
 }
 
 /* --- GUARD SETTINGS MODAL --- */
@@ -666,25 +669,22 @@ body::before {
         <div id="styleTemplates" style="display:flex;gap:0.4rem;overflow-x:auto;padding-bottom:0.2rem"></div>
         <div id="styleDimActive" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin-top:0.3rem"></div>
       </div>
-      <!-- Row 1: 比例 -->
-      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.6rem;flex-wrap:wrap">
+      <!-- Row 1: 比例 + 模型 + 质量 + 数量 -->
+      <!-- 比例 + 模型选择 -->
+      <div class="img-ctrl-row" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.6rem;flex-wrap:wrap">
         <div class="studio-label" style="margin:0;flex-shrink:0">比例</div>
-        <div id="imgRatios" style="display:flex;gap:0.25rem;flex-wrap:wrap"></div>
-      </div>
-      <!-- Row 2: 生图模型 + 质量 + 数量 -->
-      <div style="display:flex;gap:0.4rem;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap">
-        <select id="imgModel" class="img-select" style="flex:1 1 0;min-width:120px;font-size:0.78rem"></select>
-        <select id="imgQuality" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;flex-shrink:0"><option value="standard">标准</option><option value="hd">HD</option></select>
-        <div style="display:flex;align-items:center;gap:0.2rem;flex-shrink:0">
-          <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
-          <select id="imgCount" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
+        <div id="imgRatios" style="display:flex;gap:0.25rem"></div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">
+          <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0">提示词</span>
+          <select id="imgOptModel" class="img-select img-model-sel" style="font-size:0.78rem"></select>
+          <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0">生图</span>
+          <select id="imgModel" class="img-select img-model-sel" style="font-size:0.78rem"></select>
+          <select id="imgQuality" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;flex-shrink:0"><option value="standard">标准</option><option value="hd">HD</option></select>
+          <div style="display:flex;align-items:center;gap:0.2rem;flex-shrink:0">
+            <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
+            <select id="imgCount" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
+          </div>
         </div>
-        <button onclick="document.getElementById('optModelWrap').style.display=document.getElementById('optModelWrap').style.display==='none'?'flex':'none'" style="border:none;background:none;cursor:pointer;font-size:0.85rem;padding:0.2rem;color:var(--text-muted)" title="提示词模型设置">⚙️</button>
-      </div>
-      <!-- Hidden: 提示词模型 -->
-      <div id="optModelWrap" style="display:none;align-items:center;gap:0.4rem;margin-bottom:0.6rem;margin-top:-0.3rem">
-        <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0">提示词模型</span>
-        <select id="imgOptModel" class="img-select" style="flex:1 1 0;min-width:120px;font-size:0.76rem"></select>
       </div>
       <!-- Row 3: Reference image left + buttons right -->
       <div>
