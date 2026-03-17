@@ -311,9 +311,8 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             c.health_fail_count = 0
             if not c.healthy:
                 c.healthy = True
-                if was_healthy or c.total_requests > 0:
-                    c.needs_cookie = False
-                    add_log("info", c.num, "恢复正常")
+                c.needs_cookie = False
+                add_log("info", c.num, "恢复正常")
         else:
             c.health_fail_count += 1
             reason = "client not ready" if resp.status_code == 200 else f"HTTP {resp.status_code}"
@@ -872,11 +871,14 @@ async def deploy_cookie(num: int, request: Request):
             stderr=asyncio.subprocess.PIPE,
             cwd=str(ROOT_DIR),
         )
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         if proc.returncode != 0:
             err = stderr.decode(errors="replace")[:200]
             add_log("error", num, f"容器重建失败: {err}")
             raise HTTPException(status_code=500, detail=f"容器重建失败: {err}")
+    except asyncio.TimeoutError:
+        add_log("error", num, "容器重建超时(60s)")
+        raise HTTPException(status_code=504, detail="容器重建超时")
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="docker compose 命令未找到")
 
@@ -907,9 +909,11 @@ async def container_log(num: int, tail: int = 60):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         lines = stdout.decode(errors="replace").splitlines()[-min(tail, 200):]
         return {"ok": True, "lines": lines}
+    except asyncio.TimeoutError:
+        return {"ok": False, "lines": ["Error: docker logs timed out (10s)"]}
     except Exception as e:
         return {"ok": False, "lines": [f"Error: {str(e)[:200]}"]}
 
@@ -1184,7 +1188,12 @@ async def delete_image(img_id: str):
     if not entry:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    filepath = IMAGES_DIR / entry["filename"]
+    fn = entry["filename"]
+    if "/" in fn or "\\" in fn or ".." in fn:
+        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
+    filepath = (IMAGES_DIR / fn).resolve()
+    if filepath.parent != IMAGES_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
     if filepath.exists():
         filepath.unlink()
 
