@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Use sudo only if not root
+SUDO=""
+if [[ $EUID -ne 0 ]]; then
+  command -v sudo >/dev/null 2>&1 && SUDO="sudo" || { echo "Not root and no sudo found"; exit 1; }
+fi
+
 # ── Colors (need early for bootstrap messages) ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -131,12 +137,47 @@ find_free_port_range() {
 # Dependency check
 # ══════════════════════════════════════════════════════════════
 info "检查依赖 ..."
+
+# Auto-install missing system packages
+install_pkg() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq "$@"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q "$@"
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q "$@"
+  else
+    error "无法自动安装 $*，请手动安装"
+  fi
+}
+
+# Docker
+if ! command -v docker >/dev/null 2>&1; then
+  warn "未找到 Docker，正在安装 ..."
+  curl -fsSL https://get.docker.com | sh || error "Docker 安装失败"
+  systemctl enable --now docker 2>/dev/null || true
+fi
 need_cmd docker
-need_cmd python3
 
 if ! docker compose version >/dev/null 2>&1; then
   error "未找到 docker compose（需要 Docker Compose v2）"
 fi
+
+# Python3 + pip3
+if ! command -v python3 >/dev/null 2>&1; then
+  warn "未找到 Python3，正在安装 ..."
+  install_pkg python3
+fi
+need_cmd python3
+
+if ! command -v pip3 >/dev/null 2>&1; then
+  warn "未找到 pip3，正在安装 ..."
+  install_pkg python3-pip 2>/dev/null || python3 -m ensurepip --upgrade 2>/dev/null || true
+  if ! command -v pip3 >/dev/null 2>&1; then
+    warn "pip3 安装失败，将尝试使用 python3 -m pip"
+  fi
+fi
+
 info "依赖检查通过"
 echo ""
 
@@ -157,18 +198,24 @@ if [[ -f .env ]]; then
       info "正在更新 ..."
       git pull --ff-only 2>/dev/null || warn "git pull 失败（非 git 仓库或有冲突）"
 
-      # shellcheck disable=SC1091
-      source .env
+      # Read existing config safely (no source, grep only)
+      START_PORT=$(grep '^START_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      API_KEY=$(grep '^API_KEY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      GATEWAY_PORT=$(grep '^GATEWAY_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "9880")
+      COOKIE_MANAGER_PASSWORD=$(grep '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      CONTAINER_PREFIX=$(grep '^CONTAINER_PREFIX=' .env 2>/dev/null | cut -d= -f2 || echo "gemini_api_account_")
+      HTTP_PROXY=$(grep '^HTTP_PROXY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      HTTPS_PROXY=$(grep '^HTTPS_PROXY=' .env 2>/dev/null | cut -d= -f2 || echo "")
+      GATEWAY_PORT="${GATEWAY_PORT:-9880}"
+      CONTAINER_PREFIX="${CONTAINER_PREFIX:-gemini_api_account_}"
 
       # 确保 GATEWAY_PORT 写入 .env（老用户可能没有）
       if ! grep -q '^GATEWAY_PORT=' .env 2>/dev/null; then
-        GATEWAY_PORT="${GATEWAY_PORT:-9880}"
         echo "" >> .env
         echo "# Gateway (智能轮询总入口)" >> .env
         echo "GATEWAY_PORT=${GATEWAY_PORT}" >> .env
         info "已添加 GATEWAY_PORT=${GATEWAY_PORT} 到 .env"
       fi
-      GATEWAY_PORT="${GATEWAY_PORT:-9880}"
 
       # 确保 COOKIE_MANAGER_PASSWORD 写入 .env（老用户可能没有）
       if ! grep -q '^COOKIE_MANAGER_PASSWORD=' .env 2>/dev/null; then
@@ -193,16 +240,19 @@ if [[ -f .env ]]; then
       python3 scripts/generate_compose.py
 
       info "重建并重启容器 ..."
-      docker compose -f docker-compose.accounts.yml up -d --build
+      docker build -t gemini-api-oneclick:local .
+      docker compose -f docker-compose.accounts.yml up -d
 
       # 安装 Gateway 依赖
       if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
         info "安装 Gateway 依赖 ..."
-        pip3 install -q fastapi uvicorn httpx 2>&1 \
-          || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-          || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
-          || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-          || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+        PIP="pip3"
+        command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
+        $PIP install -q fastapi uvicorn httpx 2>&1 \
+          || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || $SUDO $PIP install -q fastapi uvicorn httpx 2>&1 \
+          || $SUDO $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
       fi
 
       # 重启或安装 Gateway 服务
@@ -211,7 +261,7 @@ if [[ -f .env ]]; then
         SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
         # 始终写入最新的 service 文件（更新配置路径等）
-        sudo tee "$SERVICE_FILE" > /dev/null <<GWEOF
+        $SUDO tee "$SERVICE_FILE" > /dev/null <<GWEOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
 After=network.target docker.service
@@ -228,9 +278,9 @@ EnvironmentFile=${ROOT_DIR}/.env
 WantedBy=multi-user.target
 GWEOF
 
-        sudo systemctl daemon-reload
-        sudo systemctl enable gemini-gateway
-        sudo systemctl restart gemini-gateway
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable gemini-gateway
+        $SUDO systemctl restart gemini-gateway
         info "Gateway 已安装/更新为系统服务（端口 ${GATEWAY_PORT}）"
       fi
 
@@ -471,6 +521,7 @@ COOKIE_MANAGER_PASSWORD=${COOKIE_MANAGER_PASSWORD}
 EOF
 
 info ".env 已写入"
+CONTAINER_PREFIX="gemini_api_account_"
 
 # Step: Generate compose
 CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -493,7 +544,8 @@ for env_file in envs/account*.env; do
   fi
 done
 
-docker compose -f docker-compose.accounts.yml up -d --build
+docker build -t gemini-api-oneclick:local .
+docker compose -f docker-compose.accounts.yml up -d
 
 # Step: Gateway (智能轮询网关)
 CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -502,18 +554,20 @@ step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署智能轮询网关 (端口 ${GATEWA
 # 安装 gateway 依赖
 if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
   info "安装 Gateway 依赖 ..."
-  pip3 install -q fastapi uvicorn httpx 2>&1 \
-    || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-    || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
-    || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-    || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+  PIP="pip3"
+  command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
+  $PIP install -q fastapi uvicorn httpx 2>&1 \
+    || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || $SUDO $PIP install -q fastapi uvicorn httpx 2>&1 \
+    || $SUDO $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
   PYTHON_BIN=$(command -v python3)
   SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
-  sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+  $SUDO tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
 After=network.target docker.service
@@ -530,9 +584,9 @@ EnvironmentFile=${ROOT_DIR}/.env
 WantedBy=multi-user.target
 EOF
 
-  sudo systemctl daemon-reload
-  sudo systemctl enable gemini-gateway
-  sudo systemctl restart gemini-gateway
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable gemini-gateway
+  $SUDO systemctl restart gemini-gateway
   info "Gateway 已安装为系统服务"
 else
   warn "未找到 systemctl，后台启动 Gateway ..."
@@ -544,8 +598,8 @@ fi
 # 如果旧版 cookie-manager 服务还在运行，停止它
 if command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active cookie-manager >/dev/null 2>&1; then
-    sudo systemctl stop cookie-manager
-    sudo systemctl disable cookie-manager
+    $SUDO systemctl stop cookie-manager
+    $SUDO systemctl disable cookie-manager
     info "已停止旧版 Cookie Manager 独立服务（功能已集成到 Gateway）"
   fi
 fi

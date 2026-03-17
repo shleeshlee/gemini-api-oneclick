@@ -10,6 +10,7 @@
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
@@ -31,6 +32,12 @@ from pydantic import BaseModel
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
 from gemini_webapi.types.image import GeneratedImage
+
+# ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
+# gemini_webapi's RotateCookies sends 401 and invalidates all cookies.
+# This monkey-patch disables it regardless of init() parameters or library defaults.
+# See: https://github.com/shleeshlee/gemini-api-oneclick/issues/XX
+GeminiClient.start_auto_refresh = lambda self, *a, **kw: None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -67,7 +74,7 @@ async def get_or_create_client():
                 proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
-                await gemini_client.init(timeout=600, watchdog_timeout=120, auto_refresh=False)
+                await gemini_client.init(timeout=600, watchdog_timeout=120)
                 logger.info("Gemini client initialized successfully.")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
@@ -213,6 +220,7 @@ async def list_models():
             "owned_by": "google-gemini-web",
         }
         for m in Model
+        if m.model_name != "unspecified"
     ]
     return {"object": "list", "data": data}
 
@@ -461,50 +469,58 @@ SIZE_TO_ASPECT = {
 # Style descriptions — Gemini's API may not trigger the web app's hidden style templates,
 # so we provide detailed descriptions as guidance. Style name + description for best results.
 STYLE_PROMPTS = {
+    # Each style has prefix (before content) and suffix (after content)
+    # prefix = style declaration + rendering technique
+    # suffix = lighting + atmosphere + quality
     # Gemini official image styles
-    "Monochrome": "Monochrome style, black and white with dramatic contrast, deep shadows and bright highlights, film noir aesthetic",
-    "Color Block": "Color Block style, bold flat areas of saturated color, graphic design inspired, strong geometric shapes",
-    "Runway": "Fashion runway style, high-fashion editorial look, dramatic poses, luxury aesthetic, magazine quality",
-    "Screen Print": "Screen print style, Andy Warhol inspired, halftone dots, limited color palette, pop art aesthetic",
-    "Colorful": "Extremely colorful and vibrant, rainbow palette, maximum saturation, joyful and energetic",
-    "Gothic Clay": "Gothic claymation style, stop-motion clay figures, dark and eerie, Tim Burton inspired, textured surfaces",
-    "Explosive": "Explosive action style, dramatic impact, debris and particles, high-energy dynamic composition, Michael Bay aesthetic",
-    "Salon": "Salon portrait style, elegant and refined, soft glamour lighting, classic beauty photography",
-    "Sketch": "Detailed pencil sketch on paper, graphite shading, fine crosshatch linework, hand-drawn feel",
-    "Cinematic": "Cinematic style, movie still aesthetic, Rembrandt lighting, dramatic composition, anamorphic lens feel, film grain",
-    "Steampunk": "Steampunk style, Victorian-era machinery, brass gears and pipes, industrial revolution meets fantasy",
-    "Sunrise": "Golden sunrise style, warm golden hour light, long shadows, atmospheric haze, serene and hopeful mood",
-    "Myth Fighter": "Epic mythological warrior style, ancient Greek/Norse aesthetic, dramatic battle poses, ornate armor, heroic composition",
-    "Surreal": "Surrealist style, Salvador Dali inspired, impossible geometry, dreamlike distortions, melting forms",
-    "Dark": "Dark moody style, deep shadows, minimal lighting, noir atmosphere, mysterious and brooding",
-    "Enamel Pin": "Enamel pin style, flat vector illustration, bold outlines, limited colors, cute collectible aesthetic",
-    "Cyborg": "Cyborg style, human-machine hybrid, visible circuitry and metal parts, bioluminescent elements, sci-fi realism",
-    "Soft Portrait": "Soft portrait style, gentle diffused lighting, shallow depth of field, warm skin tones, intimate and dreamy",
-    "Retro Cartoon": "1930s retro cartoon style, rubber hose animation, black and white with halftone, Fleischer Studios inspired",
-    "Oil Painting": "Oil painting style, rich impasto brushstrokes, Rembrandt-style golden lighting, classical composition, museum quality, visible canvas texture",
-    # Extra common styles
-    "Anime": "Anime style, vibrant colors, clean cel-shading lineart, expressive eyes, Japanese animation aesthetic",
-    "Photorealistic": "Photorealistic, ultra detailed like a DSLR photograph, natural lighting, sharp focus, 85mm lens",
-    "Watercolor": "Watercolor painting, soft translucent washes, visible paper texture, gentle color bleeding, delicate brushwork",
-    "Pixel Art": "Pixel art style, retro 16-bit video game aesthetic, clean pixel boundaries, limited palette, nostalgic",
-    "Kawaii": "Kawaii style, adorable chibi proportions, pastel colors, round soft shapes, sparkles and hearts",
-    "Ghibli": "Studio Ghibli animation style, lush hand-painted nature, warm soft lighting, whimsical and magical atmosphere",
+    "Monochrome": {"prefix": "Monochrome style, black and white with dramatic contrast", "suffix": "deep shadows and bright highlights, film noir aesthetic, highly detailed"},
+    "Color Block": {"prefix": "Color Block style, bold flat areas of saturated color, graphic design inspired", "suffix": "strong geometric shapes, clean edges, highly detailed"},
+    "Runway": {"prefix": "Fashion runway style, high-fashion editorial look", "suffix": "dramatic poses, luxury aesthetic, magazine quality, highly detailed"},
+    "Screen Print": {"prefix": "Screen print style, Andy Warhol inspired, halftone dots", "suffix": "limited color palette, pop art aesthetic, bold graphic quality"},
+    "Colorful": {"prefix": "Extremely colorful and vibrant, rainbow palette", "suffix": "maximum saturation, joyful and energetic, highly detailed"},
+    "Gothic Clay": {"prefix": "Gothic claymation style, stop-motion clay figures", "suffix": "dark and eerie, Tim Burton inspired, textured surfaces, highly detailed"},
+    "Explosive": {"prefix": "Explosive action style, dramatic impact", "suffix": "debris and particles, high-energy dynamic composition, cinematic lighting, highly detailed"},
+    "Salon": {"prefix": "Salon portrait style, elegant and refined", "suffix": "soft glamour lighting, classic beauty photography, smooth skin texture, highly detailed"},
+    "Sketch": {"prefix": "Detailed pencil sketch on paper, graphite shading", "suffix": "fine crosshatch linework, hand-drawn feel, visible paper texture"},
+    "Cinematic": {"prefix": "Cinematic style, movie still aesthetic, dramatic Rembrandt lighting", "suffix": "anamorphic lens feel, volumetric light rays, film grain, atmospheric haze, highly detailed"},
+    "Steampunk": {"prefix": "Steampunk style, Victorian-era machinery", "suffix": "brass gears and pipes, industrial revolution meets fantasy, warm amber lighting, highly detailed"},
+    "Sunrise": {"prefix": "Golden sunrise style, warm golden hour light", "suffix": "long shadows, atmospheric haze, serene and hopeful mood, highly detailed"},
+    "Myth Fighter": {"prefix": "Epic mythological warrior style, ancient Greek/Norse aesthetic", "suffix": "dramatic battle poses, ornate armor, heroic composition, cinematic lighting, highly detailed"},
+    "Surreal": {"prefix": "Surrealist style, Salvador Dali inspired", "suffix": "impossible geometry, dreamlike distortions, melting forms, ethereal lighting"},
+    "Dark": {"prefix": "Dark moody style, deep shadows, minimal cold lighting", "suffix": "noir atmosphere, misty volumetric haze, subtle rim light on edges, mysterious and brooding, highly detailed"},
+    "Enamel Pin": {"prefix": "Enamel pin style, flat vector illustration, bold outlines", "suffix": "limited colors, cute collectible aesthetic, clean graphic quality"},
+    "Cyborg": {"prefix": "Cyborg style, human-machine hybrid, visible circuitry", "suffix": "bioluminescent elements, sci-fi realism, cold blue rim lighting, highly detailed"},
+    "Soft Portrait": {"prefix": "Soft portrait style, gentle diffused lighting, shallow depth of field", "suffix": "warm skin tones, smooth skin texture, dreamy bokeh highlights, intimate atmosphere, highly detailed"},
+    "Retro Cartoon": {"prefix": "1930s retro cartoon style, rubber hose animation", "suffix": "black and white with halftone, Fleischer Studios inspired, playful and nostalgic"},
+    "Oil Painting": {"prefix": "Oil painting style, rich impasto brushstrokes, semi-painterly rendering", "suffix": "Rembrandt-style golden lighting, classical composition, visible canvas texture, museum quality, highly detailed"},
+    # Anime styles (proven Gemini-effective)
+    "Anime": {"prefix": "[anime style], semi-realistic illustration", "suffix": "dreamy soft highlights, ethereal lighting, subtle shimmer on fabric and hair, cinematic lighting, soft shadows, highly detailed"},
+    "Photorealistic": {"prefix": "Photorealistic, ultra detailed like a DSLR photograph", "suffix": "natural lighting, sharp focus, 85mm lens, shallow depth of field, highly detailed"},
+    "Watercolor": {"prefix": "Detailed watercolor painting, soft translucent washes", "suffix": "visible paper texture, gentle color bleeding, warm tyndall effect lighting, delicate brushwork, highly detailed"},
+    "Pixel Art": {"prefix": "Pixel art style, retro 16-bit video game aesthetic", "suffix": "clean pixel boundaries, limited palette, nostalgic, charming"},
+    "Kawaii": {"prefix": "Kawaii style, adorable chibi proportions, pastel colors", "suffix": "round soft shapes, sparkles and hearts, cute and expressive"},
+    "Ghibli": {"prefix": "[anime style], pseudo-painterly rendering, semi-thick brush strokes", "suffix": "expressive shadows, soft textured lighting, vivid color grading, cinematic lighting, painterly anime background, dramatic atmosphere, highly detailed, Ghibli meets digital art"},
     # Gemini official video styles
-    "Civilization": "Ancient civilization epic style, grand architecture, marble and gold, historical drama aesthetic",
-    "Metallic": "Metallic chrome style, reflective surfaces, liquid metal, futuristic industrial aesthetic",
-    "Memo": "Memo style, playful and expressive, close-up character study, natural and candid feel",
-    "Glam": "Glamorous style, sparkle and shine, luxury fashion, dramatic beauty lighting, editorial elegance",
-    "Crochet": "Crochet knitted style, soft yarn textures, handcrafted warmth, cozy stop-motion aesthetic",
-    "Cyberpunk": "Cyberpunk style, neon-lit streets, holographic signs, rain reflections, futuristic dystopia",
-    "Video Game": "Retro video game style, pixel art animation, 8-bit/16-bit aesthetic, arcade feel",
-    "Cosmos": "Cosmic space style, nebulae and stars, infinite depth, astronomical wonder, sci-fi grandeur",
-    "Action Hero": "Action hero blockbuster style, intense close-ups, dramatic slow motion, gritty and cinematic",
-    "Stardust": "Stardust fairy tale style, magical sparkles, enchanted garden, soft dreamy atmosphere, romantic fantasy",
-    "Jellytoon": "Jellytoon style, 3D animated character, soft rounded forms, vibrant Pixar-like aesthetic, cute and expressive",
-    "Racetrack": "Racetrack style, miniature tilt-shift effect, toy-like world, bright saturated colors, playful perspective",
-    "ASMR Apple": "ASMR macro style, extreme close-up detail, satisfying textures, crisp focus, sensory-rich",
-    "Red Carpet": "Red carpet documentary style, paparazzi flash, celebrity glamour, dramatic entrances",
-    "Popcorn": "Popcorn fun style, playful stop-motion, whimsical food art, creative and surprising compositions",
+    "Civilization": {"prefix": "Ancient civilization epic style, grand architecture", "suffix": "marble and gold, historical drama aesthetic, cinematic lighting, highly detailed"},
+    "Metallic": {"prefix": "Metallic chrome style, reflective surfaces, liquid metal", "suffix": "futuristic industrial aesthetic, cold blue lighting, highly detailed"},
+    "Memo": {"prefix": "Memo style, playful and expressive, close-up character study", "suffix": "natural and candid feel, warm soft lighting, highly detailed"},
+    "Glam": {"prefix": "Glamorous style, sparkle and shine, luxury fashion", "suffix": "dramatic beauty lighting, editorial elegance, highly detailed"},
+    "Crochet": {"prefix": "Crochet knitted style, soft yarn textures", "suffix": "handcrafted warmth, cozy stop-motion aesthetic, soft lighting, highly detailed"},
+    "Cyberpunk": {"prefix": "Cyberpunk style, neon-lit streets, holographic signs", "suffix": "rain reflections, futuristic dystopia, volumetric neon lighting, highly detailed"},
+    "Video Game": {"prefix": "Retro video game style, pixel art animation", "suffix": "8-bit/16-bit aesthetic, arcade feel, nostalgic"},
+    "Cosmos": {"prefix": "Cosmic space style, nebulae and stars, infinite depth", "suffix": "astronomical wonder, sci-fi grandeur, ethereal lighting, highly detailed"},
+    "Action Hero": {"prefix": "Action hero blockbuster style, intense close-ups", "suffix": "dramatic slow motion, gritty and cinematic, volumetric lighting, highly detailed"},
+    "Stardust": {"prefix": "Stardust fairy tale style, magical sparkles", "suffix": "enchanted garden, soft dreamy atmosphere, romantic fantasy, ethereal glow, highly detailed"},
+    "Jellytoon": {"prefix": "Jellytoon style, 3D animated character, soft rounded forms", "suffix": "vibrant Pixar-like aesthetic, cute and expressive, soft studio lighting"},
+    "Racetrack": {"prefix": "Racetrack style, miniature tilt-shift effect", "suffix": "toy-like world, bright saturated colors, playful perspective"},
+    "ASMR Apple": {"prefix": "ASMR macro style, extreme close-up detail", "suffix": "satisfying textures, crisp focus, sensory-rich, highly detailed"},
+    "Red Carpet": {"prefix": "Red carpet documentary style, paparazzi flash", "suffix": "celebrity glamour, dramatic entrances, cinematic, highly detailed"},
+    "Popcorn": {"prefix": "Popcorn fun style, playful stop-motion", "suffix": "whimsical food art, creative and surprising compositions"},
+    # Enhanced anime styles (from proven templates)
+    "Otome CG": {"prefix": "Otome game CG style, detailed watercolor painting", "suffix": "cinematic lighting, tyndall effect, sentimental atmosphere, smooth skin texture, elegant jewelry details, highly detailed"},
+    "Fantasy Anime": {"prefix": "[fantasy anime style], semi-realistic illustration", "suffix": "dreamy soft highlights, ethereal lighting, cold pastel color palette, smooth skin texture, misty atmosphere, cinematic lighting, soft shadows, highly detailed"},
+    "Shinkai": {"prefix": "[anime style], semi-painterly rendering, pseudo-oil painting texture, soft expressive brush strokes", "suffix": "cinematic rim lighting, subtle bloom effect, vivid cold-warm color grading, moody and dramatic atmosphere, highly detailed, Makoto Shinkai meets digital painting"},
+    "Soft Anime": {"prefix": "[anime style], soft rendering, subtle realism, delicate brushwork", "suffix": "subtle shadows, soft rim lighting, gentle highlights, muted color palette, smooth skin texture, introspective atmosphere, highly detailed"},
 }
 
 QUALITY_PROMPTS = {
@@ -513,31 +529,33 @@ QUALITY_PROMPTS = {
 
 
 def build_image_prompt(request: ImageGenerationRequest) -> str:
-    """Build natural language prompt optimized for Gemini's ImageFX engine."""
-    parts = ["Generate an image:"]
+    """Build prompt with style prefix + content + style suffix structure."""
+    style_data = STYLE_PROMPTS.get(request.style) if request.style else None
 
-    # User prompt first — the core intent
-    parts.append(request.prompt)
+    parts_prefix = []
+    parts_suffix = []
 
-    # Style — use detailed description if available, fall back to style name
-    if request.style:
-        desc = STYLE_PROMPTS.get(request.style, f"{request.style} style")
-        parts.append(desc)
+    if style_data:
+        parts_prefix.append(style_data["prefix"])
+        parts_suffix.append(style_data["suffix"])
 
-    # Quality enhancement
+    # Quality enhancement goes to suffix
     if request.quality and request.quality in QUALITY_PROMPTS:
-        parts.append(QUALITY_PROMPTS[request.quality])
+        parts_suffix.append(QUALITY_PROMPTS[request.quality])
 
-    # Aspect ratio as natural description
+    # Aspect ratio
     aspect_desc = SIZE_TO_ASPECT.get(request.size or "", "")
     if aspect_desc:
-        parts.append(f"The image should be in {aspect_desc} format.")
+        parts_suffix.append(f"The image should be in {aspect_desc} format.")
 
-    # Negative prompt as natural instruction
+    # Negative prompt
     if request.negative_prompt:
-        parts.append(f"Important: do not include {request.negative_prompt} in the image.")
+        parts_suffix.append(f"Important: do not include {request.negative_prompt} in the image.")
 
-    return " ".join(parts)
+    # Assemble: prefix + content + suffix
+    prefix = ", ".join(parts_prefix) + ", " if parts_prefix else ""
+    suffix = ", " + ", ".join(parts_suffix) if parts_suffix else ""
+    return f"{prefix}{request.prompt}{suffix}"
 
 
 @app.post("/v1/images/generations")
@@ -554,6 +572,7 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
         kwargs = {}
         if model:
             kwargs["model"] = model
+
         response = await client.generate_content(prompt, **kwargs)
 
         # Log what we got back for debugging
@@ -573,14 +592,7 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
             logger.info(f"Alternate attempt images: {images}")
 
         if not images:
-            return {
-                "created": int(time.time()),
-                "data": [],
-                "error": {
-                    "message": f"Gemini did not generate images. Response: {response.text[:300] if response.text else 'empty'}",
-                    "type": "no_images",
-                }
-            }
+            raise HTTPException(status_code=422, detail=f"Gemini did not generate images. Response: {response.text[:300] if response.text else 'empty'}")
 
         result_data = []
         for img in images[:request.n]:
@@ -596,7 +608,7 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
             raise HTTPException(status_code=500, detail="Images found but all downloads failed")
 
         logger.info(f"Image generation complete: {len(result_data)} image(s)")
-        return {"created": int(time.time()), "data": result_data}
+        return {"created": int(time.time()), "data": result_data, "final_prompt": prompt}
 
     except HTTPException:
         raise

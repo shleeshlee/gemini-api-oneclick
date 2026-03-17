@@ -84,17 +84,30 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def verify_auth(request: Request):
-    """Dependency: check Authorization Bearer header."""
-    if not API_KEY and not COOKIE_MANAGER_PASSWORD:
-        return  # no key configured, allow all
-    valid_keys = [k for k in (API_KEY, COOKIE_MANAGER_PASSWORD) if k]
-    # Check Authorization header
+def _extract_bearer(request: Request) -> str:
+    """Extract Bearer token from Authorization header."""
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
-        token = auth[7:].strip()
-        if any(_safe_compare(token, k) for k in valid_keys):
-            return
+        return auth[7:].strip()
+    return ""
+
+def verify_auth(request: Request):
+    """Dependency: accept either API_KEY or panel password."""
+    if not API_KEY and not COOKIE_MANAGER_PASSWORD:
+        return
+    token = _extract_bearer(request)
+    valid_keys = [k for k in (API_KEY, COOKIE_MANAGER_PASSWORD) if k]
+    if token and any(_safe_compare(token, k) for k in valid_keys):
+        return
+    raise HTTPException(status_code=401, detail="未授权")
+
+def verify_panel_auth(request: Request):
+    """Dependency: panel/management endpoints, only accept panel password."""
+    if not COOKIE_MANAGER_PASSWORD:
+        return
+    token = _extract_bearer(request)
+    if token and _safe_compare(token, COOKIE_MANAGER_PASSWORD):
+        return
     raise HTTPException(status_code=401, detail="未授权")
 
 HEALTH_INTERVAL = 30  # seconds between health checks
@@ -493,6 +506,7 @@ async def list_models():
     return {"object": "list", "data": result}
 
 
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
@@ -544,12 +558,14 @@ async def proxy(request: Request, path: str):
         c.total_requests += 1
 
         try:
-            client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0))
+            # 生图 300s，聊天 600s
+            read_timeout = 300.0 if "images" in path else 600.0
+            client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
                 resp = await client.send(req, stream=True)
 
-                if resp.status_code >= 500:
+                if resp.status_code >= 500 or resp.status_code == 422:
                     error_body = (await resp.aread()).decode(errors="replace")[:200]
                     await resp.aclose()
                     await client.aclose()
@@ -597,7 +613,7 @@ async def proxy(request: Request, path: str):
 
 # ── Management API ──────────────────────────────────────────────────────
 
-@app.get("/gateway/status", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/status", dependencies=[Depends(verify_panel_auth)])
 async def gateway_status():
     """Return all container statuses."""
     return {
@@ -608,13 +624,13 @@ async def gateway_status():
     }
 
 
-@app.get("/gateway/logs", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/logs", dependencies=[Depends(verify_panel_auth)])
 async def gateway_logs(limit: int = 50):
     """Return recent gateway logs."""
     return {"logs": list(logs)[:limit]}
 
 
-@app.post("/gateway/enable/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/enable/{num}", dependencies=[Depends(verify_panel_auth)])
 async def enable_container(num: int):
     """Re-enable a disabled container."""
     if num not in containers:
@@ -627,7 +643,7 @@ async def enable_container(num: int):
     return {"ok": True, "message": f"Container {num} re-enabled"}
 
 
-@app.post("/gateway/disable/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/disable/{num}", dependencies=[Depends(verify_panel_auth)])
 async def disable_container(num: int):
     """Manually disable a container."""
     if num not in containers:
@@ -639,7 +655,7 @@ async def disable_container(num: int):
     return {"ok": True, "message": f"Container {num} disabled"}
 
 
-@app.post("/gateway/name/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/name/{num}", dependencies=[Depends(verify_panel_auth)])
 async def set_container_name(num: int, request: Request):
     """Set display name for a container (persisted to disk)."""
     if num not in containers:
@@ -654,7 +670,7 @@ async def set_container_name(num: int, request: Request):
     return {"ok": True}
 
 
-@app.post("/gateway/refresh", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/refresh", dependencies=[Depends(verify_panel_auth)])
 async def refresh_health():
     """Trigger immediate health check."""
     async with httpx.AsyncClient() as client:
@@ -664,7 +680,7 @@ async def refresh_health():
     return {"ok": True, "available": available, "total": len(containers)}
 
 
-@app.post("/gateway/group/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/group/{num}", dependencies=[Depends(verify_panel_auth)])
 async def set_container_group(num: int, request: Request):
     """Set group for a container. Must be a defined group or empty (= default)."""
     if num not in containers:
@@ -682,7 +698,7 @@ async def set_container_group(num: int, request: Request):
     return {"ok": True}
 
 
-@app.post("/gateway/batch-group", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/batch-group", dependencies=[Depends(verify_panel_auth)])
 async def batch_set_groups(request: Request):
     """Batch assign containers to a group. Body: {"group": "pro", "containers": [1,2,3,...]}"""
     body = await request.json()
@@ -706,7 +722,7 @@ async def batch_set_groups(request: Request):
     return {"ok": True, "count": count}
 
 
-@app.get("/gateway/groups", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/groups", dependencies=[Depends(verify_panel_auth)])
 async def get_groups():
     """Return defined groups with their container lists."""
     groups: dict[str, list[int]] = {}
@@ -722,7 +738,7 @@ async def get_groups():
     return {"groups": groups, "ungrouped": ungrouped, "defs": sorted(group_defs)}
 
 
-@app.post("/gateway/create-group", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/create-group", dependencies=[Depends(verify_panel_auth)])
 async def create_group(request: Request):
     """Create a new group definition."""
     body = await request.json()
@@ -739,7 +755,7 @@ async def create_group(request: Request):
     return {"ok": True}
 
 
-@app.post("/gateway/rename-group", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/rename-group", dependencies=[Depends(verify_panel_auth)])
 async def rename_group(request: Request):
     """Rename a group definition. Containers follow automatically."""
     body = await request.json()
@@ -765,7 +781,7 @@ async def rename_group(request: Request):
     return {"ok": True}
 
 
-@app.post("/gateway/delete-group", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/delete-group", dependencies=[Depends(verify_panel_auth)])
 async def delete_group(request: Request):
     """Delete a group definition and ungroup its containers."""
     body = await request.json()
@@ -783,7 +799,7 @@ async def delete_group(request: Request):
     return {"ok": True, "ungrouped": len(removed)}
 
 
-@app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_panel_auth)])
 async def deploy_cookie(num: int, request: Request):
     """Deploy cookies to a container: write env file and recreate container."""
     body = await request.json()
@@ -836,7 +852,7 @@ async def deploy_cookie(num: int, request: Request):
 
 # ── Container Logs & Test ──────────────────────────────────────────────
 
-@app.get("/gateway/container-log/{num}", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/container-log/{num}", dependencies=[Depends(verify_panel_auth)])
 async def container_log(num: int, tail: int = 60):
     """Fetch recent docker logs from a specific container."""
     if num not in containers:
@@ -855,14 +871,14 @@ async def container_log(num: int, tail: int = 60):
         return {"ok": False, "lines": [f"Error: {str(e)[:200]}"]}
 
 
-@app.post("/gateway/test/{num}", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/test/{num}", dependencies=[Depends(verify_panel_auth)])
 async def test_container(num: int):
     """Send a minimal test request to a specific container to verify it works."""
     if num not in containers:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
     c = containers[num]
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             # First check health
             health = await client.get(f"{c.url}/health")
             health_data = health.json()
@@ -874,10 +890,17 @@ async def test_container(num: int):
             model_name = "unspecified"
             if models_resp.status_code == 200:
                 model_data = models_resp.json().get("data", [])
+                # 测试用 flash 模型（快）
                 for m in model_data:
-                    if m.get("id") and m["id"] != "unspecified":
-                        model_name = m["id"]
+                    mid = m.get("id", "")
+                    if "flash" in mid.lower():
+                        model_name = mid
                         break
+                if model_name == "unspecified":
+                    for m in model_data:
+                        if m.get("id") and m["id"] != "unspecified":
+                            model_name = m["id"]
+                            break
 
             # Send a minimal chat request
             resp = await client.post(
@@ -916,7 +939,7 @@ def save_models(models: list[dict]):
     MODELS_FILE.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-@app.post("/gateway/refresh-models", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/refresh-models", dependencies=[Depends(verify_panel_auth)])
 async def refresh_models():
     """Fetch model list from a healthy container and save to state."""
     global _models_cache, _models_cache_time
@@ -964,7 +987,7 @@ async def api_login(request: Request):
     return {"ok": True}
 
 
-@app.get("/api/accounts", dependencies=[Depends(verify_auth)])
+@app.get("/api/accounts", dependencies=[Depends(verify_panel_auth)])
 async def api_accounts():
     """List accounts from envs/ directory with cookie status."""
     accounts_list = []
@@ -993,7 +1016,7 @@ async def api_accounts():
     return {"accounts": accounts_list}
 
 
-@app.get("/api/guard-settings", dependencies=[Depends(verify_auth)])
+@app.get("/api/guard-settings", dependencies=[Depends(verify_panel_auth)])
 async def api_get_guard_settings():
     """Read guard settings from .env."""
     current = _read_dotenv()
@@ -1009,15 +1032,10 @@ async def api_get_guard_settings():
     return {"settings": settings}
 
 
-@app.post("/api/guard-settings")
+@app.post("/api/guard-settings", dependencies=[Depends(verify_panel_auth)])
 async def api_set_guard_settings(request: Request):
     """Update guard settings in .env."""
     body = await request.json()
-    if COOKIE_MANAGER_PASSWORD:
-        password = body.get("password", "")
-        if not _safe_compare(password, COOKIE_MANAGER_PASSWORD):
-            raise HTTPException(status_code=401, detail="unauthorized")
-
     new_settings = body.get("settings", {})
     if not new_settings:
         raise HTTPException(status_code=400, detail="no settings provided")
@@ -1068,7 +1086,7 @@ def _save_image_meta(meta: list[dict]):
     IMAGES_META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-@app.post("/gateway/images/save", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/images/save", dependencies=[Depends(verify_panel_auth)])
 async def save_image(request: Request):
     """Save a base64 image to the project gallery."""
     body = await request.json()
@@ -1091,6 +1109,7 @@ async def save_image(request: Request):
         "id": img_id,
         "filename": filename,
         "prompt": body.get("prompt", ""),
+        "final_prompt": body.get("final_prompt", ""),
         "style": body.get("style", ""),
         "size": body.get("size", ""),
         "quality": body.get("quality", ""),
@@ -1105,7 +1124,7 @@ async def save_image(request: Request):
     return {"ok": True, "id": img_id, "filename": filename}
 
 
-@app.get("/gateway/images", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/images", dependencies=[Depends(verify_panel_auth)])
 async def list_images(offset: int = 0, limit: int = 50):
     """List saved images with metadata."""
     meta = _load_image_meta()
@@ -1114,7 +1133,7 @@ async def list_images(offset: int = 0, limit: int = 50):
     return {"images": items, "total": total}
 
 
-@app.delete("/gateway/images/{img_id}", dependencies=[Depends(verify_auth)])
+@app.delete("/gateway/images/{img_id}", dependencies=[Depends(verify_panel_auth)])
 async def delete_image(img_id: str):
     """Delete a saved image."""
     meta = _load_image_meta()
@@ -1160,7 +1179,7 @@ def _save_styles(styles: list[dict]):
     STYLES_META.write_text(json.dumps(styles, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-@app.post("/gateway/styles/save", dependencies=[Depends(verify_auth)])
+@app.post("/gateway/styles/save", dependencies=[Depends(verify_panel_auth)])
 async def save_style(request: Request):
     """Save a style template with multi-dimension descriptors."""
     body = await request.json()
@@ -1185,13 +1204,13 @@ async def save_style(request: Request):
     return {"ok": True, "id": style_id}
 
 
-@app.get("/gateway/styles", dependencies=[Depends(verify_auth)])
+@app.get("/gateway/styles", dependencies=[Depends(verify_panel_auth)])
 async def list_styles():
     """List saved style templates."""
     return {"styles": _load_styles()}
 
 
-@app.delete("/gateway/styles/{style_id}", dependencies=[Depends(verify_auth)])
+@app.delete("/gateway/styles/{style_id}", dependencies=[Depends(verify_panel_auth)])
 async def delete_style(style_id: str):
     """Delete a style template."""
     styles = _load_styles()
