@@ -131,12 +131,47 @@ find_free_port_range() {
 # Dependency check
 # ══════════════════════════════════════════════════════════════
 info "检查依赖 ..."
+
+# Auto-install missing system packages
+install_pkg() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq "$@"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q "$@"
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q "$@"
+  else
+    error "无法自动安装 $*，请手动安装"
+  fi
+}
+
+# Docker
+if ! command -v docker >/dev/null 2>&1; then
+  warn "未找到 Docker，正在安装 ..."
+  curl -fsSL https://get.docker.com | sh || error "Docker 安装失败"
+  systemctl enable --now docker 2>/dev/null || true
+fi
 need_cmd docker
-need_cmd python3
 
 if ! docker compose version >/dev/null 2>&1; then
   error "未找到 docker compose（需要 Docker Compose v2）"
 fi
+
+# Python3 + pip3
+if ! command -v python3 >/dev/null 2>&1; then
+  warn "未找到 Python3，正在安装 ..."
+  install_pkg python3
+fi
+need_cmd python3
+
+if ! command -v pip3 >/dev/null 2>&1; then
+  warn "未找到 pip3，正在安装 ..."
+  install_pkg python3-pip 2>/dev/null || python3 -m ensurepip --upgrade 2>/dev/null || true
+  if ! command -v pip3 >/dev/null 2>&1; then
+    warn "pip3 安装失败，将尝试使用 python3 -m pip"
+  fi
+fi
+
 info "依赖检查通过"
 echo ""
 
@@ -199,11 +234,13 @@ if [[ -f .env ]]; then
       # 安装 Gateway 依赖
       if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
         info "安装 Gateway 依赖 ..."
-        pip3 install -q fastapi uvicorn httpx 2>&1 \
-          || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-          || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
-          || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-          || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+        PIP="pip3"
+        command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
+        $PIP install -q fastapi uvicorn httpx 2>&1 \
+          || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || sudo $PIP install -q fastapi uvicorn httpx 2>&1 \
+          || sudo $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+          || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
       fi
 
       # 重启或安装 Gateway 服务
@@ -507,11 +544,13 @@ step "${CURRENT_STEP}/${TOTAL_STEPS}" "部署智能轮询网关 (端口 ${GATEWA
 # 安装 gateway 依赖
 if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
   info "安装 Gateway 依赖 ..."
-  pip3 install -q fastapi uvicorn httpx 2>&1 \
-    || pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-    || sudo pip3 install -q fastapi uvicorn httpx 2>&1 \
-    || sudo pip3 install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
-    || { error "Gateway 依赖安装失败，请手动运行: sudo pip3 install fastapi uvicorn httpx"; }
+  PIP="pip3"
+  command -v pip3 >/dev/null 2>&1 || PIP="python3 -m pip"
+  $PIP install -q fastapi uvicorn httpx 2>&1 \
+    || $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || sudo $PIP install -q fastapi uvicorn httpx 2>&1 \
+    || sudo $PIP install --break-system-packages -q fastapi uvicorn httpx 2>&1 \
+    || { error "Gateway 依赖安装失败，请手动运行: pip3 install fastapi uvicorn httpx"; }
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
