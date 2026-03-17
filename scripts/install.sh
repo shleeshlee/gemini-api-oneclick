@@ -158,7 +158,7 @@ if [[ -f .env ]]; then
       git pull --ff-only 2>/dev/null || warn "git pull 失败（非 git 仓库或有冲突）"
 
       # shellcheck disable=SC1091
-      source .env
+      set +u; source .env; set -u
 
       # 确保 GATEWAY_PORT 写入 .env（老用户可能没有）
       if ! grep -q '^GATEWAY_PORT=' .env 2>/dev/null; then
@@ -471,6 +471,9 @@ COOKIE_MANAGER_PASSWORD=${COOKIE_MANAGER_PASSWORD}
 EOF
 
 info ".env 已写入"
+
+# shellcheck disable=SC1091
+set +u; source .env; set -u
 
 # Step: Generate compose
 CURRENT_STEP=$((CURRENT_STEP + 1))
