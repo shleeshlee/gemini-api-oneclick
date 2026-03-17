@@ -101,15 +101,6 @@ def verify_auth(request: Request):
         return
     raise HTTPException(status_code=401, detail="未授权")
 
-def verify_auth(request: Request):
-    """Dependency: API endpoints, only accept API_KEY."""
-    if not API_KEY:
-        return
-    token = _extract_bearer(request)
-    if token and _safe_compare(token, API_KEY):
-        return
-    raise HTTPException(status_code=401, detail="未授权")
-
 def verify_panel_auth(request: Request):
     """Dependency: panel/management endpoints, only accept panel password."""
     if not COOKIE_MANAGER_PASSWORD:
