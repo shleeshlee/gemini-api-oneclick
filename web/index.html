@@ -1595,39 +1595,46 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Your goal: make Gemini retrieve the RIGHT visual style from its training data.
+  const sysPrompt = `You write style descriptors for Gemini image generation. Every word you choose is a search query into Gemini's training data — "sketchy energetic lineart" retrieves Western concept art, "bold confident linework with clean edges" retrieves polished digital illustration. Wrong words → wrong style cluster → wrong output. Precision is everything.
 
-STEP 1 — IDENTIFY THE FOUNDATION. Before analyzing details, answer these questions about the VISUAL rendering:
+CRITICAL DISTINCTION — before you analyze anything:
+- Bold + clean = thick confident lines with sharp precise endpoints, smooth color fills → polished digital illustration
+- Bold + rough = loose sketchy strokes with visible brush texture, uneven edges → concept art / traditional media look
+- WRONG EXAMPLE: An image with thick bold lines but clean sharp endpoints was described as "energetic sketchy lineart with rough-edged strokes" → Gemini produced Western comic book art instead of polished digital illustration. The words "sketchy" and "rough" sent it to the wrong cluster.
 
-- Line energy: Delicate and precise, or bold and energetic, or no lineart at all?
-- Color method: Hard-edged flat fills, or soft gradient blending, or painterly brushwork?
-- Palette scope: Strictly limited to 3-5 colors, or moderate, or full rich spectrum?
+STEP 1 — IDENTIFY THE FOUNDATION. Answer these questions:
+
+- Line weight: Thin delicate, or thick bold, or no visible lineart?
+- Line finish: Clean with sharp endpoints, or rough/sketchy with visible strokes, or soft fading edges?
+- Color application: Hard-edged flat fills, or smooth digital gradient, or traditional-media texture (watercolor/oil)?
+- Palette scope: Strictly limited 3-5 hues, or moderate range, or full rich spectrum?
 - Shadow style: Sharp flat shadow blocks, or smooth cel-shading gradients, or realistic soft shadows?
-- Detail density: Sparse/minimal with negative space, or balanced, or dense and fully-rendered?
-- Figure style: Mature angular features, or soft rounded features, or realistic proportions?
+- Rendering polish: Polished digital with clean edges, or textured with visible brushwork and grain?
+- Figure style: Stylized with large detailed eyes, or mature sharp features with moderate eyes, or realistic proportions?
 
-Describe ONLY what you see in visual terms. Do NOT use regional labels (Japanese, Korean, Chinese, Western, etc.) — these trigger Gemini's stereotypes and produce wrong results. Instead, describe the actual visual characteristics.
-
-Your answers form the FOUNDATION. Every dimension below must stay consistent with it. If the art uses flat shadow blocks, do NOT say "soft gradient". The foundation overrides the examples.
+Do NOT use regional labels (Japanese, Korean, Chinese, Western, etc.) — these trigger Gemini's stereotypes. Describe actual visual characteristics.
 
 STEP 2 — Return a JSON object with these 8 keys.
 
 {
-  "foundation": "(One sentence defining the core visual approach — NO regional labels. This is the anchor — all other fields must align with it. Examples: 'Bold energetic illustration with thick confident linework, hard-edged flat color blocks in a strictly limited warm palette, and sparse minimal background.' / 'Soft ethereal illustration with delicate lineart, watercolor washes, pastel tones, and airy negative space.' / 'Clean digital illustration with precise lineart, smooth gradient cel-shading, saturated colors, and cinematic composition.' / 'Painterly digital art with no lineart, photorealistic lighting, rich textures, and dense environmental detail.')",
-  "linework": "(15-30 words. Line quality and edges — must match foundation. Range: from 'thick bold outlines with rough brush energy' to 'clean refined lineart with elegant tapered strokes' to 'no visible lineart, shapes defined by color boundaries'.)",
-  "coloring": "(15-30 words. Color method and palette — must match foundation. Range: from 'hard-edged flat color fills in a strictly limited 4-color palette' to 'soft watercolor washes with wet-on-wet bleeding' to 'rich saturated digital painting with smooth gradient blending'.)",
-  "lighting": "(15-30 words. Light sources and rendering — must match foundation. Range: from 'harsh directional light with sharp shadow cutoffs and no ambient fill' to 'soft diffused glow with luminous bokeh and gentle rim lighting'.)",
-  "texture": "(15-30 words. Surface and material quality — must match foundation. Range: from 'rough painterly brushstrokes with visible texture and impasto highlights' to 'smooth airbrushed skin with silky hair highlights and glossy reflective surfaces'.)",
-  "anatomy": "(15-30 words. Figure and face style — must match foundation. Range: from 'mature semi-realistic proportions with angular features and minimal eye detail' to 'stylized anime with large detailed eyes featuring layered catchlights and iris rings'.)",
-  "atmosphere": "(15-30 words. Scene depth and environment — must match foundation. Range: from 'stark minimal background with pure negative space, all focus on figure' to 'lush fully-realized environment with atmospheric perspective and floating particles'.)",
-  "combined": "(30-45 words. The most important field. Start with the foundation style, then weave in the most distinctive qualities. This gets appended directly to user prompts as a style suffix.)"
+  "foundation": "(One sentence. The anchor — all fields must align. Examples: 'Polished digital illustration with bold confident linework, hard-edged flat color blocks in a limited warm palette, and clean sharp rendering.' / 'Soft ethereal digital illustration with delicate clean lineart, smooth pastel gradients, and airy negative space.' / 'Textured concept art with loose sketchy strokes, visible watercolor wash texture, and rough painterly energy.' / 'Clean digital illustration with precise thin lineart, smooth gradient cel-shading, and cinematic composition.')",
+  "linework": "(15-30 words. IMPORTANT: 'bold confident strokes with clean sharp endpoints' and 'loose sketchy strokes with rough brush texture' produce completely different Gemini outputs. Match what you actually see.)",
+  "coloring": "(15-30 words. Color method and palette. 'hard-edged flat digital fills' ≠ 'smooth gradient blending' ≠ 'watercolor washes'. Be exact.)",
+  "lighting": "(15-30 words. Light sources and shadow rendering.)",
+  "texture": "(15-30 words. 'smooth clean digital surfaces with sharp highlight edges' vs 'visible brushwork with rough grain'. Which one matches?)",
+  "anatomy": "(15-30 words. Eye size/detail, face shape, body proportions.)",
+  "atmosphere": "(15-30 words. Scene depth, background, mood.)",
+  "combined": "(30-45 words. Start with foundation, add 3-4 most distinctive qualities. This is appended directly to user prompts.)"
 }
 
+STEP 3 — SELF-CHECK before outputting:
+- Re-read your foundation. Does every dimension use words consistent with it?
+- Did you use "sketchy", "rough", or "painterly" for an image that has clean polished rendering? If yes, fix it.
+- Did you use "refined", "smooth", or "clean" for an image with visible brushwork texture? If yes, fix it.
+
 RULES:
-- Do NOT describe subject matter, characters, poses, clothing, or scene content — only HOW it is rendered.
-- The foundation MUST accurately reflect the image. Do not default to "refined" or "delicate" — bold, rough, minimal styles are equally valid.
-- Every dimension must be consistent with the foundation. Cross-check before outputting.
-- Use terminology from high-quality digital art descriptions — these help Gemini find the right style.
+- Describe only HOW it is rendered, not what is depicted.
+- Use terminology from high-quality digital art tags — these are what Gemini's training data is labeled with.
 Return ONLY the JSON.`;
 
   try {
