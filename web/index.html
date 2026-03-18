@@ -1585,7 +1585,7 @@ function clearUploadImage() {
 }
 
 // ── Style Templates ────────────────────────────────────────
-const DIM_LABELS = {foundation:'🎯 基调',linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
+const DIM_LABELS = {linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
 let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
@@ -1595,46 +1595,27 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You write style descriptors for Gemini image generation. Every word you choose is a search query into Gemini's training data — "sketchy energetic lineart" retrieves Western concept art, "bold confident linework with clean edges" retrieves polished digital illustration. Wrong words → wrong style cluster → wrong output. Precision is everything.
+  const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Analyze this image and extract the precise visual qualities that make it look the way it does.
 
-CRITICAL DISTINCTION — before you analyze anything:
-- Bold + clean = thick confident lines with sharp precise endpoints, smooth color fills → polished digital illustration
-- Bold + rough = loose sketchy strokes with visible brush texture, uneven edges → concept art / traditional media look
-- WRONG EXAMPLE: An image with thick bold lines but clean sharp endpoints was described as "energetic sketchy lineart with rough-edged strokes" → Gemini produced Western comic book art instead of polished digital illustration. The words "sketchy" and "rough" sent it to the wrong cluster.
+Your goal: write descriptors that will make Gemini retrieve the RIGHT visual style from its training data. Think of each field as a search query into Gemini's memory of beautiful artwork — use the specific terminology that high-quality illustrations are tagged with.
 
-STEP 1 — IDENTIFY THE FOUNDATION. Answer these questions:
-
-- Line weight: Thin delicate, or thick bold, or no visible lineart?
-- Line finish: Clean with sharp endpoints, or rough/sketchy with visible strokes, or soft fading edges?
-- Color application: Hard-edged flat fills, or smooth digital gradient, or traditional-media texture (watercolor/oil)?
-- Palette scope: Strictly limited 3-5 hues, or moderate range, or full rich spectrum?
-- Shadow style: Sharp flat shadow blocks, or smooth cel-shading gradients, or realistic soft shadows?
-- Rendering polish: Polished digital with clean edges, or textured with visible brushwork and grain?
-- Figure style: Stylized with large detailed eyes, or mature sharp features with moderate eyes, or realistic proportions?
-
-Do NOT use regional labels (Japanese, Korean, Chinese, Western, etc.) — these trigger Gemini's stereotypes. Describe actual visual characteristics.
-
-STEP 2 — Return a JSON object with these 8 keys.
+Return a JSON object with these 7 keys. For the first 6 keys, write a precise English style descriptor (15-30 words). Be specific enough to distinguish this style from similar ones, but use natural art terminology Gemini understands well.
 
 {
-  "foundation": "(One sentence. The anchor — all fields must align. Examples: 'Polished digital illustration with bold confident linework, hard-edged flat color blocks in a limited warm palette, and clean sharp rendering.' / 'Soft ethereal digital illustration with delicate clean lineart, smooth pastel gradients, and airy negative space.' / 'Textured concept art with loose sketchy strokes, visible watercolor wash texture, and rough painterly energy.' / 'Clean digital illustration with precise thin lineart, smooth gradient cel-shading, and cinematic composition.')",
-  "linework": "(15-30 words. IMPORTANT: 'bold confident strokes with clean sharp endpoints' and 'loose sketchy strokes with rough brush texture' produce completely different Gemini outputs. Match what you actually see.)",
-  "coloring": "(15-30 words. Color method and palette. 'hard-edged flat digital fills' ≠ 'smooth gradient blending' ≠ 'watercolor washes'. Be exact.)",
-  "lighting": "(15-30 words. Light sources and shadow rendering.)",
-  "texture": "(15-30 words. 'smooth clean digital surfaces with sharp highlight edges' vs 'visible brushwork with rough grain'. Which one matches?)",
-  "anatomy": "(15-30 words. Eye size/detail, face shape, body proportions.)",
-  "atmosphere": "(15-30 words. Scene depth, background, mood.)",
-  "combined": "(30-45 words. Start with foundation, add 3-4 most distinctive qualities. This is appended directly to user prompts.)"
+  "linework": "(Line quality and edge treatment. Use terms like: clean refined lineart, thick bold outlines, no-lineart painterly edges, sketchy loose strokes, varied line weight, tapered brush strokes, sharp silhouette edges, soft lost edges. Example: Clean refined anime lineart with confident varied line weight, thicker on silhouettes and thinner on inner details, elegant flowing contours.)",
+  "coloring": "(Color method, palette, and shadow style. Use terms like: soft cel-shading, watercolor wash, flat color fills, rich saturated jewel tones, desaturated pastels, hard-edged shadows, gradient blending, wet-on-wet transitions, complementary color contrast. Example: Rich watercolor palette with deep cerulean shadows and warm golden highlights, visible wet-on-wet color bleeding, soft cel-shaded skin tones.)",
+  "lighting": "(Light sources and their visual effect. Use terms like: dramatic rim lighting, soft diffused ambient light, volumetric haze, luminous bokeh, backlit glow, chiaroscuro contrast, warm key light, cool fill light, god rays, overexposed bloom. Example: Warm magical glow from focal point with cool blue ambient fill, luminous bokeh particles, soft rim lighting on hair and shoulders.)",
+  "texture": "(Surface quality and material rendering. Use terms like: silky hair highlights, delicate lace detail, glossy reflective surfaces, matte skin, watercolor paper grain, fabric folds with natural draping, transparent glass refraction, metallic sheen. Example: Delicate hair with silky highlight streaks, soft fabric with layered lace detail, traditional watercolor paper texture throughout.)",
+  "anatomy": "(Figure and face rendering quality. Use terms like: elegant anime proportions, detailed expressive eyes with layered catchlights, refined facial features, graceful slender hands, semi-realistic body proportions, large eyes with iris detail, minimal implied nose. Example: Elegant anime proportions with large detailed eyes featuring multiple catchlight reflections and layered iris colors, refined soft features.)",
+  "atmosphere": "(Scene depth and environmental quality. Use terms like: lush detailed environment, atmospheric perspective, shallow depth-of-field bokeh, floating particles, negative space, storybook-quality background, dreamy haze, immersive scene depth, minimalist white space. Example: Lush fully-realized storybook environment with atmospheric depth, abundant floating light particles, strong foreground-background separation.)",
+  "combined": "(The most important field. A single fluent style instruction for Gemini, 30-45 words. Weave together the most distinctive qualities from above into a natural sentence. This gets appended directly to user prompts. Example: High-quality digital anime illustration with refined lineart and rich watercolor coloring, deep cerulean shadows with warm golden glow, luminous bokeh particles, detailed eyes with layered catchlights, lush storybook atmosphere.)"
 }
 
-STEP 3 — SELF-CHECK before outputting:
-- Re-read your foundation. Does every dimension use words consistent with it?
-- Did you use "sketchy", "rough", or "painterly" for an image that has clean polished rendering? If yes, fix it.
-- Did you use "refined", "smooth", or "clean" for an image with visible brushwork texture? If yes, fix it.
-
 RULES:
-- Describe only HOW it is rendered, not what is depicted.
-- Use terminology from high-quality digital art tags — these are what Gemini's training data is labeled with.
+- Do NOT describe subject matter, characters, poses, clothing, or scene content — only visual style and rendering quality.
+- Use terminology commonly found in high-quality digital art descriptions — these words help Gemini find the right style in its training data.
+- Prioritize specificity over length. "Rich watercolor with deep cerulean shadows" beats "beautiful colorful painting with blue tones".
+- The "combined" field will be appended to a user's prompt as a style suffix — it must read naturally.
 Return ONLY the JSON.`;
 
   try {
