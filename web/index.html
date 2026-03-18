@@ -1597,33 +1597,23 @@ async function analyzeStyle() {
 
   const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Your goal: make Gemini retrieve the RIGHT visual style from its training data.
 
-STEP 1 — IDENTIFY THE FOUNDATION. Before analyzing details, determine TWO things:
+STEP 1 — IDENTIFY THE FOUNDATION. Before analyzing details, answer these questions about the VISUAL rendering:
 
-A) ART TRADITION — Which regional/genre school does this belong to?
-- Japanese anime/manga (shoujo, shounen, seinen, josei subtypes)
-- Korean manhwa / Korean webtoon style
-- Chinese manhua / donghua style (国漫)
-- Western comic / graphic novel (American superhero, European BD, indie)
-- Concept art / game art / cinematic illustration
-- Watercolor / traditional media illustration
-- Other (specify)
+- Line energy: Delicate and precise, or bold and energetic, or no lineart at all?
+- Color method: Hard-edged flat fills, or soft gradient blending, or painterly brushwork?
+- Palette scope: Strictly limited to 3-5 colors, or moderate, or full rich spectrum?
+- Shadow style: Sharp flat shadow blocks, or smooth cel-shading gradients, or realistic soft shadows?
+- Detail density: Sparse/minimal with negative space, or balanced, or dense and fully-rendered?
+- Figure style: Mature angular features, or soft rounded features, or realistic proportions?
 
-B) RENDERING APPROACH — How is it drawn?
-- Delicate and refined, or bold and energetic?
-- Cel-shaded flat fills, or soft gradient blending?
-- Thick impasto strokes, or clean thin lines?
-- Limited restricted palette, or rich full-spectrum color?
-- Minimal/empty background, or detailed environment?
-- Stylized/exaggerated proportions, or semi-realistic?
+Describe ONLY what you see in visual terms. Do NOT use regional labels (Japanese, Korean, Chinese, Western, etc.) — these trigger Gemini's stereotypes and produce wrong results. Instead, describe the actual visual characteristics.
 
-The combination of A + B is the FOUNDATION. "Korean manhwa with bold flat color blocks and a limited warm palette" is completely different from "Japanese shoujo anime with soft gradients and pastel watercolor tones" — even though both are Asian illustration styles. Be precise.
-
-Every dimension below must stay consistent with this foundation. The foundation overrides the examples.
+Your answers form the FOUNDATION. Every dimension below must stay consistent with it. If the art uses flat shadow blocks, do NOT say "soft gradient". The foundation overrides the examples.
 
 STEP 2 — Return a JSON object with these 8 keys.
 
 {
-  "foundation": "(One sentence: [art tradition] + [rendering approach]. This is the anchor — all other fields must align with it. Examples: 'Chinese manhua style with bold confident linework, hard-edged flat color blocks, and a strictly limited warm palette on minimal background.' / 'Japanese shoujo anime with delicate ethereal watercolor washes, soft lost edges, pastel tones, and airy negative space.' / 'Korean webtoon style with clean digital lineart, smooth gradient cel-shading, and cinematic panel-like framing.' / 'Western concept art with no lineart, photorealistic lighting, and rich painterly material detail.')",
+  "foundation": "(One sentence defining the core visual approach — NO regional labels. This is the anchor — all other fields must align with it. Examples: 'Bold energetic illustration with thick confident linework, hard-edged flat color blocks in a strictly limited warm palette, and sparse minimal background.' / 'Soft ethereal illustration with delicate lineart, watercolor washes, pastel tones, and airy negative space.' / 'Clean digital illustration with precise lineart, smooth gradient cel-shading, saturated colors, and cinematic composition.' / 'Painterly digital art with no lineart, photorealistic lighting, rich textures, and dense environmental detail.')",
   "linework": "(15-30 words. Line quality and edges — must match foundation. Range: from 'thick bold outlines with rough brush energy' to 'clean refined lineart with elegant tapered strokes' to 'no visible lineart, shapes defined by color boundaries'.)",
   "coloring": "(15-30 words. Color method and palette — must match foundation. Range: from 'hard-edged flat color fills in a strictly limited 4-color palette' to 'soft watercolor washes with wet-on-wet bleeding' to 'rich saturated digital painting with smooth gradient blending'.)",
   "lighting": "(15-30 words. Light sources and rendering — must match foundation. Range: from 'harsh directional light with sharp shadow cutoffs and no ambient fill' to 'soft diffused glow with luminous bokeh and gentle rim lighting'.)",
