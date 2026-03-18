@@ -1585,7 +1585,7 @@ function clearUploadImage() {
 }
 
 // ── Style Templates ────────────────────────────────────────
-const DIM_LABELS = {style:'🎨 画风',palette:'🎨 色调',composition:'📐 构图',mood:'💫 氛围',lighting:'💡 光影',detail:'✨ 细节',combined:'🎭 综合'};
+const DIM_LABELS = {linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
 let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
@@ -1595,24 +1595,27 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You are an expert art style analyst for Google Gemini image generation. Analyze this image and extract its artistic rendering style — the techniques that make it look the way it does.
+  const sysPrompt = `You are a master illustrator teaching Google Gemini how to paint. Your job is NOT to describe what this image looks like — it is to write precise rendering instructions so Gemini can reproduce the same level of craft on a completely different subject.
 
-Return a JSON object with these 7 keys. For the first 6 keys, write a concise English descriptor (under 30 words). The 7th key "combined" is the most important — it must be a single fluent English sentence (40-60 words) that naturally weaves together the most distinctive rendering characteristics into a Gemini-compatible style instruction.
+Think of each field as a painting lesson: tell Gemini exactly what brush to use, where to press hard, where to lift, what to leave blank.
+
+Return a JSON object with these 7 keys. For the first 6 keys, write actionable technique instructions in English (under 40 words each). The 7th key "combined" is the most critical.
 
 {
-  "style": "(rendering technique and art medium: e.g. digital anime illustration with thick outlines and soft cel-shading, semi-realistic body proportions with stylized facial features)",
-  "palette": "(dominant color scheme and contrast: e.g. deep teal and muted gold palette with desaturated midtones and selective neon purple accents, high value contrast)",
-  "composition": "(camera angle and framing: e.g. full-body centered composition with strong vertical symmetry, low eye-level perspective, architectural depth framing the subject)",
-  "mood": "(emotional atmosphere conveyed by the art: e.g. solemn gothic elegance with quiet tension, intimate gravity)",
-  "lighting": "(light source, direction, quality: e.g. cool ambient top-light with warm backlight rim, volumetric haze, dramatic chiaroscuro on the figure)",
-  "detail": "(rendering fidelity and texture work: e.g. intricate fabric fold rendering, individual hair strand detail, particle effects, reflective floor surface)",
-  "combined": "(A short comma-separated style description for Gemini image generation, 20-35 words max. Combine the most distinctive visual traits into a format like: [medium] style, [key technique], [palette], [lighting], [standout detail]. Example: high-fidelity digital anime illustration, soft cel-shading with thick lineart, deep teal-and-gold palette, dramatic volumetric top-lighting, intricate hair and fabric detail)"
+  "linework": "(How to draw lines. Describe: line weight variation — where thick, where thin, where absent. Edge treatment — hard edges vs lost edges. Whether outlines exist or shapes are defined by color boundaries alone. Example: Use varied line weight — heavier at joints and contour turns with tapering endpoints. Omit outlines on light-facing edges, let color blocks define the boundary. Sketch-like construction lines visible in hair.)",
+  "coloring": "(How to apply color and shadow. Describe: flat fill vs gradient, hard-edged shadow blocks vs soft blending, how many value steps from light to dark, how accent colors are placed. Example: Shadows as flat hard-edged color blocks one value step darker than base — never gradient-blended. Accent warm orange on ear tips and fingernails only. Limit to 3 value steps per surface.)",
+  "lighting": "(How to set up and render light. Describe: number of light sources, their direction, how highlights are rendered (sharp cutout vs soft glow), how rim light or bounce light appears on surfaces. Example: Single backlight from upper-left creating sharp white cutout highlights on hair — no feathering. Cool blue bounce light on shadow-side skin. Volumetric haze between figure and background light source.)",
+  "texture": "(How to render each material differently. Describe specific techniques for hair, skin, fabric, metal, etc. Example: Hair in grouped ribbons of 3-5 strands with a sharp white highlight strip following each ribbon flow and dark gaps between groups. Skin is matte diffuse with subsurface glow at thin areas like ears. Fabric folds follow gravity with crisp crease lines.)",
+  "anatomy": "(How to draw the human figure and face. Describe: body proportions — head-to-body ratio, limb length style. Face construction — eye size and detail layers, nose and mouth rendering method, how much is drawn vs implied. Hand treatment. Example: 7.5-head proportion with slightly elongated limbs. Eyes have 4 layers: dark pupil, colored iris gradient, dual catchlight spots, and eyelash shadow. Nose implied by a single shadow stroke, no outline. Hands have visible knuckle joints and natural finger spacing.)",
+  "atmosphere": "(How to create depth and mood through rendering technique. Describe: background detail level vs foreground, depth-of-field simulation, particle or environmental effects, negative space usage. Example: Background painted loose and desaturated with visible brushstrokes, foreground figure crisp and saturated — 2-stop exposure difference creates depth. Floating particles rendered as soft unfocused circles in foreground. Large areas of blank white space around subject.)",
+  "combined": "(The most important field. Write a single Gemini-ready style instruction, 35-50 words max. Structure: [medium and linework technique], [coloring method], [lighting setup], [standout texture/anatomy technique]. This will be appended to a user's prompt, so it must be a natural English instruction. Example: High-fidelity digital anime with varied-weight lineart heavier at joints, flat hard-edged cel-shading in 3 value steps, single backlight with sharp cutout highlights, hair rendered as grouped ribbon strands with individual highlight strips.)"
 }
 
-IMPORTANT:
-- Do NOT describe the subject, characters, poses, clothing, or scene content — only HOW the image is rendered.
-- The "combined" field will be appended directly to a user's image prompt, so it must read naturally as a style suffix.
-- Write for Gemini's image generator which prefers natural descriptive language over comma-separated tags.
+CRITICAL RULES:
+- Do NOT describe the subject, characters, scene content, poses, or clothing — only HOW to render.
+- Every sentence must be an instruction Gemini can follow, not a description of what you see.
+- Test each sentence: could an artist follow this instruction without seeing the original image? If not, rewrite it.
+- Write for Gemini's image generator which responds best to natural descriptive language as rendering directions.
 Return ONLY the JSON.`;
 
   try {
@@ -1624,7 +1627,7 @@ Return ONLY the JSON.`;
           { type: 'image_url', image_url: { url: 'data:image/png;base64,' + uploadedImageB64 } },
           { type: 'text', text: 'Analyze this image.' }
         ]}
-      ], max_tokens: 500, temperature: 0.3 })
+      ], max_tokens: 1000, temperature: 0.3 })
     });
     const data = await resp.json();
     let reply = data.choices?.[0]?.message?.content || '';
