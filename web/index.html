@@ -1585,7 +1585,7 @@ function clearUploadImage() {
 }
 
 // ── Style Templates ────────────────────────────────────────
-const DIM_LABELS = {linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
+const DIM_LABELS = {foundation:'🎯 基调',linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
 let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
@@ -1595,27 +1595,36 @@ async function analyzeStyle() {
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Analyze this image and extract the precise visual qualities that make it look the way it does.
+  const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Your goal: make Gemini retrieve the RIGHT visual style from its training data.
 
-Your goal: write descriptors that will make Gemini retrieve the RIGHT visual style from its training data. Think of each field as a search query into Gemini's memory of beautiful artwork — use the specific terminology that high-quality illustrations are tagged with.
+STEP 1 — IDENTIFY THE FOUNDATION. Before analyzing details, determine the overall rendering approach:
+- Is it delicate and refined, or bold and rough?
+- Cel-shaded flat fills, or soft gradient blending?
+- Thick impasto strokes, or clean thin lines?
+- Limited restricted palette, or rich full-spectrum color?
+- Minimal/empty background, or detailed environment?
+- Stylized/exaggerated proportions, or semi-realistic?
 
-Return a JSON object with these 7 keys. For the first 6 keys, write a precise English style descriptor (15-30 words). Be specific enough to distinguish this style from similar ones, but use natural art terminology Gemini understands well.
+Your answer to these questions is the FOUNDATION. Every dimension below must stay consistent with this foundation. If the art is bold and rough, do NOT use words like "refined" or "delicate". If it uses flat color blocks, do NOT say "soft gradient". The foundation overrides the examples.
+
+STEP 2 — Return a JSON object with these 8 keys.
 
 {
-  "linework": "(Line quality and edge treatment. Use terms like: clean refined lineart, thick bold outlines, no-lineart painterly edges, sketchy loose strokes, varied line weight, tapered brush strokes, sharp silhouette edges, soft lost edges. Example: Clean refined anime lineart with confident varied line weight, thicker on silhouettes and thinner on inner details, elegant flowing contours.)",
-  "coloring": "(Color method, palette, and shadow style. Use terms like: soft cel-shading, watercolor wash, flat color fills, rich saturated jewel tones, desaturated pastels, hard-edged shadows, gradient blending, wet-on-wet transitions, complementary color contrast. Example: Rich watercolor palette with deep cerulean shadows and warm golden highlights, visible wet-on-wet color bleeding, soft cel-shaded skin tones.)",
-  "lighting": "(Light sources and their visual effect. Use terms like: dramatic rim lighting, soft diffused ambient light, volumetric haze, luminous bokeh, backlit glow, chiaroscuro contrast, warm key light, cool fill light, god rays, overexposed bloom. Example: Warm magical glow from focal point with cool blue ambient fill, luminous bokeh particles, soft rim lighting on hair and shoulders.)",
-  "texture": "(Surface quality and material rendering. Use terms like: silky hair highlights, delicate lace detail, glossy reflective surfaces, matte skin, watercolor paper grain, fabric folds with natural draping, transparent glass refraction, metallic sheen. Example: Delicate hair with silky highlight streaks, soft fabric with layered lace detail, traditional watercolor paper texture throughout.)",
-  "anatomy": "(Figure and face rendering quality. Use terms like: elegant anime proportions, detailed expressive eyes with layered catchlights, refined facial features, graceful slender hands, semi-realistic body proportions, large eyes with iris detail, minimal implied nose. Example: Elegant anime proportions with large detailed eyes featuring multiple catchlight reflections and layered iris colors, refined soft features.)",
-  "atmosphere": "(Scene depth and environmental quality. Use terms like: lush detailed environment, atmospheric perspective, shallow depth-of-field bokeh, floating particles, negative space, storybook-quality background, dreamy haze, immersive scene depth, minimalist white space. Example: Lush fully-realized storybook environment with atmospheric depth, abundant floating light particles, strong foreground-background separation.)",
-  "combined": "(The most important field. A single fluent style instruction for Gemini, 30-45 words. Weave together the most distinctive qualities from above into a natural sentence. This gets appended directly to user prompts. Example: High-quality digital anime illustration with refined lineart and rich watercolor coloring, deep cerulean shadows with warm golden glow, luminous bokeh particles, detailed eyes with layered catchlights, lush storybook atmosphere.)"
+  "foundation": "(One sentence defining the core rendering approach. This is the anchor — all other fields must align with it. Examples: 'Bold graphic style with thick confident linework, hard-edged flat color blocks, and a strictly limited warm palette.' / 'Delicate ethereal watercolor with soft lost edges, pastel washes, and airy negative space.' / 'High-fidelity digital painting with no lineart, photorealistic lighting, and rich material detail.')",
+  "linework": "(15-30 words. Line quality and edges — must match foundation. Range: from 'thick bold outlines with rough brush energy' to 'clean refined lineart with elegant tapered strokes' to 'no visible lineart, shapes defined by color boundaries'.)",
+  "coloring": "(15-30 words. Color method and palette — must match foundation. Range: from 'hard-edged flat color fills in a strictly limited 4-color palette' to 'soft watercolor washes with wet-on-wet bleeding' to 'rich saturated digital painting with smooth gradient blending'.)",
+  "lighting": "(15-30 words. Light sources and rendering — must match foundation. Range: from 'harsh directional light with sharp shadow cutoffs and no ambient fill' to 'soft diffused glow with luminous bokeh and gentle rim lighting'.)",
+  "texture": "(15-30 words. Surface and material quality — must match foundation. Range: from 'rough painterly brushstrokes with visible texture and impasto highlights' to 'smooth airbrushed skin with silky hair highlights and glossy reflective surfaces'.)",
+  "anatomy": "(15-30 words. Figure and face style — must match foundation. Range: from 'mature semi-realistic proportions with angular features and minimal eye detail' to 'stylized anime with large detailed eyes featuring layered catchlights and iris rings'.)",
+  "atmosphere": "(15-30 words. Scene depth and environment — must match foundation. Range: from 'stark minimal background with pure negative space, all focus on figure' to 'lush fully-realized environment with atmospheric perspective and floating particles'.)",
+  "combined": "(30-45 words. The most important field. Start with the foundation style, then weave in the most distinctive qualities. This gets appended directly to user prompts as a style suffix.)"
 }
 
 RULES:
-- Do NOT describe subject matter, characters, poses, clothing, or scene content — only visual style and rendering quality.
-- Use terminology commonly found in high-quality digital art descriptions — these words help Gemini find the right style in its training data.
-- Prioritize specificity over length. "Rich watercolor with deep cerulean shadows" beats "beautiful colorful painting with blue tones".
-- The "combined" field will be appended to a user's prompt as a style suffix — it must read naturally.
+- Do NOT describe subject matter, characters, poses, clothing, or scene content — only HOW it is rendered.
+- The foundation MUST accurately reflect the image. Do not default to "refined" or "delicate" — bold, rough, minimal styles are equally valid.
+- Every dimension must be consistent with the foundation. Cross-check before outputting.
+- Use terminology from high-quality digital art descriptions — these help Gemini find the right style.
 Return ONLY the JSON.`;
 
   try {
