@@ -1,6 +1,6 @@
 # 🎀 Gemini API OneClick
 
-一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、健康检查、Cookie 管理，一个端口搞定。
+一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、健康检查、Cookie 管理、图片生成，一个端口搞定。
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -40,13 +40,15 @@ bash scripts/install.sh
 
 - ⚡ **智能网关** — 自动轮询所有容器，故障节点静默跳过，最多 5 次重试
 - 🏷️ **分组路由** — 按模型前缀自动分流到不同容器池（如 `pro-gemini-2.0-flash` → `pro` 组）
+- 🎨 **图片生成** — OpenAI 兼容的 `/v1/images/generations` 端点，支持 30+ 内置风格
 - 🔍 **健康检查** — 后台每 30 秒检测容器状态，连续 3 次失败自动禁用
+- ⏱️ **超时容错** — 三层超时保护 + 容器冷却机制，防止请求积压
 - 📊 **管理面板** — 容器状态、请求统计、错误日志、容器测试、日志查看
 - 🍪 **Cookie 管理** — 面板内直接部署 Cookie，一键重启单个容器
-- 🔖 **账号标识** — 给容器命名（如"工作号""备用号"），服务端存储
+- 🔖 **账号标识** — 给容器命名（如工作号备用号），服务端存储
 - 🔒 **安全加固** — 速率限制、timing-safe 认证、防暴力破解
 - ➕ **弹性扩容** — 随时通过 `manage.sh` 新增/删除容器
-- 🔄 **一键更新** — 已安装的环境重新跑 `install.sh` 选"更新"即可
+- 🔄 **安全部署** — `safe-deploy.sh` 分批重启（每批 6 个，间隔 120 秒），防止触发机房 DDoS 防护
 
 ## 架构
 
@@ -71,6 +73,20 @@ bash scripts/install.sh
 - **Container** — 每个容器一个 FastAPI 实例，使用独立的 Gemini Cookie
 - **不需要外部负载均衡** — Gateway 自带轮询、故障转移和分组路由
 
+## 超时与容错
+
+请求经过三层超时保护，每层超时都会释放资源并尝试下一个容器：
+
+| 层级 | 生图 | 生文 | 说明 |
+|------|------|------|------|
+| 容器内部（Gemini API） | 150s | 150s | gemini_webapi 的请求超时，超时后释放连接 |
+| Gateway（单容器） | 100s | 120s | 单个容器无响应时跳下一个，超时容器冷却 60s |
+| 客户端（Bot 等） | 自定 | 自定 | 建议 ≥120s，给 Gateway 足够时间完成容器重试 |
+
+**容器冷却机制：** 容器超时后 60 秒内不再接收新请求，防止积压。冷却结束后自动恢复轮询。
+
+**Cookie 保护：** 已禁用 gemini_webapi 的 auto_refresh（Cookie 自动轮转），该功能会永久损坏 Cookie 导致能聊天但无法生图。
+
 ## 分组路由
 
 将容器分成不同的组（如 `pro`、`free`），通过模型名前缀指定走哪个组：
@@ -83,8 +99,6 @@ bash scripts/install.sh
 转发到 pro 组的健康容器
 ```
 
-**使用场景：** 在 NewAPI 等中转站配置不同渠道使用不同前缀，实现账号隔离。未分组的容器接收所有无前缀请求。
-
 面板内管理分组：创建 / 删除 / 重命名 / 批量分配容器。
 
 ## API 端点
@@ -94,10 +108,33 @@ bash scripts/install.sh
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | 聊天（OpenAI 兼容，支持流式） |
+| `POST /v1/images/generations` | 图片生成（OpenAI 兼容，支持风格/质量/负面提示词） |
 | `GET /v1/models` | 可用模型列表 |
 | `GET /` | 管理面板 |
 
-兼容 OpenAI 格式，可直接接入 SillyTavern、NextChat、NewAPI 等。
+兼容 OpenAI 格式，可直接接入 SillyTavern、NextChat、NewAPI、Cherry Studio 等。
+
+### 图片生成
+
+```bash
+curl -X POST http://你的IP:9880/v1/images/generations \
+  -H Authorization: Bearer 你的API密钥 \
+  -H Content-Type: application/json \
+  -d '{
+    prompt: a cute cat sitting on a window,
+    style: Ghibli,
+    quality: hd,
+    size: 1024x1024,
+    n: 1
+  }'
+```
+
+**支持参数：**
+- `style` — 30+ 内置风格（Anime、Ghibli、Shinkai、Oil Painting、Pixel Art 等）
+- `quality` — `standard`（默认）或 `hd`（更高细节）
+- `negative_prompt` — 不想出现的元素
+- `size` — `1024x1024`（默认）等
+- 返回格式：base64 编码的图片数据
 
 ## 管理面板
 
@@ -131,11 +168,15 @@ make manage
 |------|------|
 | `make install` | 运行交互式安装 |
 | `make manage` | 容器管理菜单 |
-| `make up` | 启动所有容器 |
+| `make up` | 构建并分批启动所有容器 |
 | `make down` | 停止所有容器 |
-| `make restart` | 重启所有容器 |
+| `make restart` | 分批重启所有容器 |
 | `make logs` | 实时查看日志 |
 | `make generate` | 重新生成 docker-compose |
+| `bash scripts/safe-deploy.sh` | 分批部署（每批 6 个，间隔 120 秒） |
+| `bash scripts/safe-deploy.sh --build` | 重建镜像 + 分批部署 |
+
+> ⚠️ **禁止全量重启容器**（`docker compose restart`），短时间大量对外连接会触发机房 DDoS 防护封网络。务必使用 `safe-deploy.sh` 分批操作。
 
 ## 安全提醒
 
@@ -162,15 +203,3 @@ make manage
 **🎀 Gemini API OneClick** by WanWan | [GitHub](https://github.com/shleeshlee/gemini-api-oneclick)
 
 觉得好用的话，给个 Star 支持一下！
-
-## 超时与容错
-
-请求经过三层超时保护，每层超时都会释放资源并尝试下一个容器：
-
-| 层级 | 生图 | 生文 | 说明 |
-|------|------|------|------|
-| 容器内部（Gemini API） | 150s | 150s | gemini_webapi 的请求超时，超时后释放连接 |
-| Gateway（单容器） | 100s | 120s | 单个容器无响应时跳下一个，超时容器冷却 60s |
-| 客户端（Bot 等） | 120s | 120s | 给 Gateway 足够时间完成容器重试 |
-
-**容器冷却机制：** 容器超时后 60 秒内不再接收新请求，防止积压。冷却结束后自动恢复轮询。
