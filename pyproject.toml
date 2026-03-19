@@ -7,6 +7,6 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
   "pydantic>=2.0.0",
-  "gemini-webapi @ git+https://github.com/xob0t/Gemini-API.git",
+  "gemini-webapi @ git+https://github.com/xob0t/Gemini-API.git@4402e5231760a1e85e28eb6cd0040ff302b764de",
   "httpx[http2]>=0.27.0",
 ]
