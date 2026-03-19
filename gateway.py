@@ -131,10 +131,11 @@ class Container:
         self.total_errors = 0
         self.health_fail_count = 0  # consecutive health check failures
         self.needs_cookie = False   # True = auth error, restart won't help
+        self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
 
     @property
     def available(self):
-        return self.healthy and self.enabled
+        return self.healthy and self.enabled and time.time() > self.cooldown_until
 
     def to_dict(self):
         return {
@@ -597,7 +598,7 @@ async def proxy(request: Request, path: str):
 
         try:
             # 生图 300s，聊天 600s
-            read_timeout = 300.0 if "images" in path else 600.0
+            read_timeout = 100.0 if "images" in path else 120.0
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
@@ -637,6 +638,11 @@ async def proxy(request: Request, path: str):
             c.last_error = error_msg
             last_error = error_msg
             add_log("error", c.num, f"Request failed (attempt {attempt+1}): {error_msg[:100]}")
+
+            # 超时的容器冷却60秒，防止积压
+            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                c.cooldown_until = time.time() + 60
+                add_log("warning", c.num, f"Container timed out, cooling down 60s")
 
             if is_auth_error(error_msg):
                 c.healthy = False

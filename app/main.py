@@ -75,7 +75,7 @@ async def get_or_create_client():
                 proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
-                await gemini_client.init(timeout=600, watchdog_timeout=120)
+                await gemini_client.init(timeout=90, watchdog_timeout=30)
                 logger.info("Gemini client initialized successfully.")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
