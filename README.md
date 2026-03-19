@@ -162,3 +162,15 @@ make manage
 **🎀 Gemini API OneClick** by WanWan | [GitHub](https://github.com/shleeshlee/gemini-api-oneclick)
 
 觉得好用的话，给个 Star 支持一下！
+
+## 超时与容错
+
+请求经过三层超时保护，每层超时都会释放资源并尝试下一个容器：
+
+| 层级 | 生图 | 生文 | 说明 |
+|------|------|------|------|
+| 容器内部（Gemini API） | 150s | 150s | gemini_webapi 的请求超时，超时后释放连接 |
+| Gateway（单容器） | 100s | 120s | 单个容器无响应时跳下一个，超时容器冷却 60s |
+| 客户端（Bot 等） | 120s | 120s | 给 Gateway 足够时间完成容器重试 |
+
+**容器冷却机制：** 容器超时后 60 秒内不再接收新请求，防止积压。冷却结束后自动恢复轮询。
