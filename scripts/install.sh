@@ -197,6 +197,8 @@ if [[ -f .env ]]; then
     1)
       info "正在更新 ..."
       git pull --ff-only 2>/dev/null || warn "git pull 失败（非 git 仓库或有冲突）"
+      # Clean up sensitive files that should never have been in the repo
+      rm -f CLAUDE.md
 
       # Read existing config safely (no source, grep only)
       START_PORT=$(grep '^START_PORT=' .env 2>/dev/null | cut -d= -f2 || echo "")
