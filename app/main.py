@@ -37,7 +37,8 @@ from gemini_webapi.types.image import GeneratedImage
 # gemini_webapi's RotateCookies sends 401 and invalidates all cookies.
 # This monkey-patch disables it regardless of init() parameters or library defaults.
 # See: https://github.com/shleeshlee/gemini-api-oneclick/issues/XX
-GeminiClient.start_auto_refresh = lambda self, *a, **kw: None
+async def _noop_auto_refresh(self, *a, **kw): pass
+GeminiClient.start_auto_refresh = _noop_auto_refresh
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -9,13 +9,13 @@ generate:
 	python3 scripts/generate_compose.py
 
 up: generate
-	docker compose -f docker-compose.accounts.yml up -d --build
+	./scripts/safe-deploy.sh --build
 
 down:
 	docker compose -f docker-compose.accounts.yml down
 
-restart:
-	docker compose -f docker-compose.accounts.yml restart
+restart: generate
+	./scripts/safe-deploy.sh
 
 status:
 	./scripts/manage.sh
