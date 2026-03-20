@@ -728,7 +728,7 @@ body::before {
           <div id="imgBtnCol" style="flex:0 0 120px;display:flex;flex-direction:column;gap:0.4rem">
             <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
             <button class="btn btn-primary" id="imgEditBtn" onclick="doImgEdit()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">✏️ 编辑图片</button>
-            <button class="btn btn-ghost" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入图库</button>
+            <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入图库</button>
             <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除</button>
             <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消请求</button>
             <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
@@ -1649,9 +1649,8 @@ function cancelImgRequest() {
   toast('已取消请求', 'ok');
   // Reset button states
   document.getElementById('imgEditBtn').disabled = false;
-  document.getElementById('imgEditBtn').innerHTML = '✏️ 编辑图片';
   document.getElementById('imgGenBtn').disabled = false;
-  document.getElementById('imgGenBtn').innerHTML = '🎨 生成图片';
+  updateButtonsForMediaType();
 }
 
 function handleImageSelect(input) {
@@ -1707,6 +1706,7 @@ function readUploadFile(file) {
       document.getElementById('imgUploadEmpty').style.display = 'none';
       document.getElementById('editSessionInfo').style.display = 'none';
       document.getElementById('imgFileInfo').innerHTML = `<b>${esc(file.name)}</b><br>🎬 视频 · ${sizeMB} MB`;
+      updateButtonsForMediaType();
     } else {
       uploadedMediaType = 'image';
       const tmpImg = new Image();
@@ -1716,6 +1716,7 @@ function readUploadFile(file) {
         if (oldVid) oldVid.remove();
         document.getElementById('imgPreviewImg').style.display = '';
         setEditImage(b64, `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB`);
+        updateButtonsForMediaType();
       };
       tmpImg.src = e.target.result;
     }
@@ -1733,6 +1734,13 @@ function clearUploadImage() {
   document.getElementById('imgPreviewImg').style.display = '';
   const oldVid = document.getElementById('vidPreviewPlayer');
   if (oldVid) oldVid.remove();
+  updateButtonsForMediaType();
+}
+function updateButtonsForMediaType() {
+  const isVid = uploadedMediaType === 'video';
+  document.getElementById('analyzeBtn').innerHTML = isVid ? '🔍 解析视频' : '🔍 解析风格';
+  document.getElementById('imgEditBtn').innerHTML = isVid ? '✏️ 编辑视频' : '✏️ 编辑图片';
+  document.getElementById('saveMediaBtn').innerHTML = isVid ? '💾 存入视频库' : '💾 存入图库';
 }
 
 // Load gallery image into edit zone
@@ -1756,16 +1764,26 @@ async function loadGalleryImageToEdit(filename) {
 
 // Save currently displayed image to gallery
 async function saveUploadedToGallery() {
-  if (!uploadedImageB64) { toast('没有图片可保存', 'err'); return; }
+  if (!uploadedImageB64) { toast('没有素材可保存', 'err'); return; }
+  const prompt = document.getElementById('imgPrompt').value.trim() || '手动上传';
   try {
-    const prompt = document.getElementById('imgPrompt').value.trim() || '手动上传';
-    const resp = await fetch('/gateway/images/save', {
-      method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ b64: uploadedImageB64, prompt, final_prompt: '', style: '', size: '', quality: '', channel: '' })
-    });
-    const data = await resp.json();
-    if (data.ok) { toast('已保存到图库', 'ok'); loadGallery(); }
-    else { toast(data.detail || '保存失败', 'err'); }
+    if (uploadedMediaType === 'video') {
+      const resp = await fetch('/gateway/videos/save', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ b64: uploadedImageB64, prompt, model: '', url: '' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到视频库', 'ok'); loadVideoGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    } else {
+      const resp = await fetch('/gateway/images/save', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ b64: uploadedImageB64, prompt, final_prompt: '', style: '', size: '', quality: '', channel: '' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到图库', 'ok'); loadGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    }
   } catch(e) { toast('保存失败: ' + e.message, 'err'); }
 }
 
@@ -1773,7 +1791,7 @@ async function saveUploadedToGallery() {
 async function doImgEdit() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请输入编辑指令', 'err'); return; }
-  if (!uploadedImageB64) { toast('请先上传或选择图片', 'err'); return; }
+  if (!uploadedImageB64) { toast('请先上传素材', 'err'); return; }
 
   const btn = document.getElementById('imgEditBtn');
   const model = document.getElementById('imgModel').value;
@@ -1828,7 +1846,7 @@ async function doImgEdit() {
   }
   activeAbortController = null;
   hideCancelBtn();
-  btn.disabled = false; btn.innerHTML = '✏️ 编辑图片';
+  btn.disabled = false; btn.innerHTML = uploadedMediaType === 'video' ? '✏️ 编辑视频' : '✏️ 编辑图片';
 }
 
 // ── Style Templates ────────────────────────────────────────
