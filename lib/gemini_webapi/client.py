@@ -1267,16 +1267,20 @@ class GeminiClient(GemMixin):
                     candidates = get_nested_value(part_json, [0, 0, 3], [])
                     for candidate_data in candidates:
                         text = get_nested_value(candidate_data, [1, 0], "")
-                        if "Your video is ready" in text or "video is ready" in text.lower():
+                        # Check for video ready in any language
+                        if any(kw in text.lower() for kw in ["video is ready", "视频已准备就绪", "视频已准备好"]):
                             if verbose:
                                 logger.debug("Video generation completed!")
-                            # Parse videos from the candidate data
-                            videos = _parse_generated_videos(candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs)
+                            _, _, videos = _parse_all_media(candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs)
                             if videos:
                                 return videos
 
-                        # Check if still generating
-                        if _is_video_generation_pending(text):
+                        # Also check: not pending anymore but has video URLs = ready
+                        if not _is_video_generation_pending(text):
+                            _, _, videos = _parse_all_media(candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs)
+                            if videos:
+                                return videos
+                        else:
                             if verbose:
                                 logger.debug("Video still generating...")
                             break
