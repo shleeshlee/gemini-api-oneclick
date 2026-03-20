@@ -272,15 +272,18 @@ def prepare_conversation(messages: List[Message]) -> tuple:
                     conversation += item.text or ""
                 elif item.type == "image_url" and item.image_url:
                     image_url = item.image_url.get("url", "")
-                    if image_url.startswith("data:image/"):
+                    if image_url.startswith("data:"):
                         try:
+                            # Detect suffix from MIME type
+                            mime = image_url.split(";")[0].split(":")[1] if ":" in image_url else ""
+                            suffix = ".mp4" if "video" in mime else ".png"
                             base64_data = image_url.split(",")[1]
                             image_data = base64.b64decode(base64_data)
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                                 tmp.write(image_data)
                                 temp_files.append(tmp.name)
                         except Exception as e:
-                            logger.error(f"Error processing base64 image: {str(e)}")
+                            logger.error(f"Error processing base64 media: {str(e)}")
             conversation += "\n\n"
 
     conversation += "Assistant: "

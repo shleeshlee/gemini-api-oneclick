@@ -1855,7 +1855,7 @@ let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
 async function analyzeStyle() {
-  if (!uploadedImageB64) { toast('请先上传图片', 'err'); return; }
+  if (!uploadedImageB64) { toast('请先上传图片或视频', 'err'); return; }
   const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
@@ -1889,8 +1889,8 @@ Return ONLY the JSON.`;
       body: JSON.stringify({ model, messages: [
         { role: 'system', content: sysPrompt },
         { role: 'user', content: [
-          { type: 'image_url', image_url: { url: 'data:image/png;base64,' + uploadedImageB64 } },
-          { type: 'text', text: 'Analyze this image.' }
+          { type: 'image_url', image_url: { url: `data:${uploadedMediaType === 'video' ? 'video/mp4' : 'image/png'};base64,${uploadedImageB64}` } },
+          { type: 'text', text: uploadedMediaType === 'video' ? 'Analyze this video\'s visual style.' : 'Analyze this image.' }
         ]}
       ], max_tokens: 1000, temperature: 0.3 })
     });
