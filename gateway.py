@@ -654,6 +654,20 @@ def _build_image_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
     return body_json, new_body, headers
 
 
+def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, dict]:
+    """Prepend video generation instruction to prompt so Gemini knows the desired output format."""
+    prompt = body_json.get("prompt", "")
+    has_media = bool(body_json.get("image"))
+    if has_media:
+        final_prompt = f"Generate a video based on this input. Instructions: {prompt}"
+    else:
+        final_prompt = f"Generate a video: {prompt}"
+    body_json["prompt"] = final_prompt
+    new_body = json.dumps(body_json).encode("utf-8")
+    headers["content-length"] = str(len(new_body))
+    return body_json, new_body, headers
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
@@ -687,6 +701,8 @@ async def proxy(request: Request, path: str):
     is_image_req = is_media_req  # reuse for img_blocked filtering
     if body_json and "images" in path:
         body_json, body, headers = _build_image_prompt(body_json, headers)
+    elif body_json and "videos" in path:
+        body_json, body, headers = _build_video_prompt(body_json, headers)
 
     # Count available containers in target pool
     if target_group:
