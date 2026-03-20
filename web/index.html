@@ -325,6 +325,19 @@ body::before {
 .img-action-btn.del { background: rgba(255,123,123,0.85); color: #fff; }
 .img-action-btn.del:hover { background: var(--danger); }
 
+.section-toggle {
+  cursor: pointer; user-select: none;
+}
+.section-toggle::before {
+  content: '▼'; display: inline-block; font-size: 0.6rem; margin-right: 0.3rem;
+  transition: transform 0.2s ease; vertical-align: middle;
+}
+.section-toggle.collapsed::before {
+  transform: rotate(-90deg);
+}
+.section-content.collapsed {
+  display: none !important;
+}
 .gallery-empty {
   text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.88rem;
 }
@@ -751,13 +764,30 @@ body::before {
     <!-- Zone 3: Project Gallery -->
     <div class="studio-section">
       <div class="studio-section-title" style="justify-content:space-between">
-        <span>🖼️ 项目图库</span>
+        <span class="section-toggle" onclick="toggleSection('gallery_collapsed','galleryContent')">🖼️ 项目图库</span>
         <span id="galleryCount" style="font-size:0.78rem;color:var(--text-muted);font-weight:400"></span>
       </div>
-      <div id="galleryGrid" class="img-grid cols-4"></div>
-      <div id="galleryEmpty" class="gallery-empty">还没有保存的图片</div>
-      <div id="galleryMore" style="text-align:center;padding:0.6rem;display:none">
-        <button class="img-action-btn dl" onclick="loadMoreGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
+      <div id="galleryContent">
+        <div id="galleryGrid" class="img-grid cols-4"></div>
+        <div id="galleryEmpty" class="gallery-empty">还没有保存的图片</div>
+        <div id="galleryMore" style="text-align:center;padding:0.6rem;display:none">
+          <button class="img-action-btn dl" onclick="loadMoreGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zone 4: Video Gallery -->
+    <div class="studio-section">
+      <div class="studio-section-title" style="justify-content:space-between">
+        <span class="section-toggle" onclick="toggleSection('vidgallery_collapsed','vidGalleryContent')">🎬 视频库</span>
+        <span id="vidGalleryCount" style="font-size:0.78rem;color:var(--text-muted);font-weight:400"></span>
+      </div>
+      <div id="vidGalleryContent">
+        <div id="vidGalleryGrid" class="img-grid cols-2"></div>
+        <div id="vidGalleryEmpty" class="gallery-empty">还没有保存的视频</div>
+        <div id="vidGalleryMore" style="text-align:center;padding:0.6rem;display:none">
+          <button class="img-action-btn dl" onclick="loadMoreVideoGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1297,6 +1327,7 @@ function switchTab(tab) {
   document.getElementById('tabContent' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   if (tab === 'studio') {
     loadGallery();
+    loadVideoGallery();
     // Sync upload area height with button column (must be visible to measure)
     requestAnimationFrame(() => {
       const col = document.getElementById('imgBtnCol');
@@ -1343,6 +1374,9 @@ let tempImages = []; // {b64, prompt, style, size, quality, channel}
 let galleryImages = [];
 let galleryOffset = 0;
 const GALLERY_PAGE = 24;
+let vidGalleryItems = [];
+let vidGalleryOffset = 0;
+const VID_GALLERY_PAGE = 12;
 
 function renderStyleChips() {
   const stylesEl = document.getElementById('imgStyles');
@@ -2508,9 +2542,7 @@ async function doVidGen() {
         html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
         if (v.b64_json) {
           html += `<button class="img-action-btn dl" onclick="downloadVideo(${i})" style="flex:1">⬇ 下载</button>`;
-        }
-        if (v.url) {
-          html += `<button class="img-action-btn save" onclick="window.open('${v.url}','_blank')" style="flex:1">🔗 源链接</button>`;
+          html += `<button class="img-action-btn save" onclick="saveVideoToGallery(${i})" style="flex:1">💾 保存</button>`;
         }
         html += '</div>';
         if (data.text) {
@@ -2538,6 +2570,97 @@ function downloadVideo(idx) {
   a.href = 'data:video/mp4;base64,' + v.b64_json;
   a.download = `video_${Date.now()}.mp4`;
   a.click();
+}
+
+// ── Section Toggle ────────────────────────────────────────
+function toggleSection(key, contentId) {
+  const content = document.getElementById(contentId);
+  const collapsed = localStorage.getItem(key) === '1';
+  if (collapsed) {
+    localStorage.removeItem(key);
+    content.classList.remove('collapsed');
+    document.querySelector(`[onclick*="${key}"]`).classList.remove('collapsed');
+  } else {
+    localStorage.setItem(key, '1');
+    content.classList.add('collapsed');
+    document.querySelector(`[onclick*="${key}"]`).classList.add('collapsed');
+  }
+}
+function restoreSectionState(key, contentId) {
+  if (localStorage.getItem(key) === '1') {
+    const content = document.getElementById(contentId);
+    if (content) content.classList.add('collapsed');
+    const toggle = document.querySelector(`[onclick*="${key}"]`);
+    if (toggle) toggle.classList.add('collapsed');
+  }
+}
+restoreSectionState('gallery_collapsed', 'galleryContent');
+restoreSectionState('vidgallery_collapsed', 'vidGalleryContent');
+
+// ── Video Gallery ─────────────────────────────────────────
+async function saveVideoToGallery(idx) {
+  const v = window._vidResults?.[idx];
+  if (!v) return;
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  const model = document.getElementById('imgModel').value;
+  const body = { prompt, model };
+  if (v.b64_json) body.b64_json = v.b64_json;
+  if (v.url) body.url = v.url;
+  try {
+    const resp = await fetch('/gateway/videos/save', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (data.ok) { toast('已保存到视频库', 'ok'); loadVideoGallery(); }
+    else { toast(data.detail || '保存失败', 'err'); }
+  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+}
+
+async function loadVideoGallery(append) {
+  if (!append) { vidGalleryOffset = 0; vidGalleryItems = []; }
+  try {
+    const resp = await fetch(`/gateway/videos?offset=${vidGalleryOffset}&limit=${VID_GALLERY_PAGE}`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (!append) vidGalleryItems = [];
+    vidGalleryItems.push(...(data.videos || []));
+    vidGalleryOffset = vidGalleryItems.length;
+    renderVideoGallery();
+    const more = document.getElementById('vidGalleryMore');
+    more.style.display = (data.total > vidGalleryOffset) ? '' : 'none';
+    document.getElementById('vidGalleryCount').textContent = data.total ? `${data.total} 个` : '';
+    document.getElementById('vidGalleryEmpty').style.display = vidGalleryItems.length ? 'none' : '';
+  } catch(e) { console.error('Video gallery load failed:', e); }
+}
+
+function loadMoreVideoGallery() { loadVideoGallery(true); }
+
+function renderVideoGallery() {
+  const grid = document.getElementById('vidGalleryGrid');
+  grid.innerHTML = vidGalleryItems.map(v => {
+    const src = `/data/videos/${v.filename}`;
+    const fp = esc(v.prompt || '');
+    return `<div class="img-card">
+      <video controls style="width:100%;border-radius:6px" src="${src}" preload="metadata"></video>
+      <div class="img-card-actions">
+        <a class="img-action-btn dl" download="${v.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+        <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
+        <button class="img-action-btn del" onclick="event.stopPropagation();deleteVideo('${v.id}')">🗑</button>
+      </div>
+      <div class="gallery-meta">${esc((v.prompt||'').slice(0,40))}${v.model?' · '+v.model:''}</div>
+      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.2rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
+    </div>`;
+  }).join('');
+}
+
+async function deleteVideo(vid_id) {
+  if (!confirm('删除这个视频？')) return;
+  try {
+    await fetch(`/gateway/videos/${vid_id}`, { method: 'DELETE', headers: authHeaders() });
+    toast('已删除', 'ok');
+    loadVideoGallery();
+  } catch(e) { toast('删除失败', 'err'); }
 }
 
 </script>

@@ -1359,6 +1359,105 @@ async def serve_image(filename: str):
     return FileResponse(filepath, media_type="image/png")
 
 
+# ── Video Gallery ──────────────────────────────────────────────────────
+
+VIDEOS_DIR = ROOT_DIR / "data" / "videos"
+VIDEOS_META = ROOT_DIR / "data" / "videos" / "meta.json"
+
+
+def _load_video_meta() -> list[dict]:
+    try:
+        if VIDEOS_META.exists():
+            return json.loads(VIDEOS_META.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _save_video_meta(meta: list[dict]):
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEOS_META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.post("/gateway/videos/save", dependencies=[Depends(verify_panel_auth)])
+async def save_video(request: Request):
+    """Save a base64 video to the project gallery."""
+    body = await request.json()
+    b64 = body.get("b64", "")
+    if not b64:
+        raise HTTPException(status_code=400, detail="b64 data required")
+
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    vid_id = _uuid.uuid4().hex[:12]
+    filename = f"{vid_id}.mp4"
+    filepath = VIDEOS_DIR / filename
+
+    try:
+        vid_data = base64.b64decode(b64)
+        filepath.write_bytes(vid_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+
+    entry = {
+        "id": vid_id,
+        "filename": filename,
+        "prompt": body.get("prompt", ""),
+        "model": body.get("model", ""),
+        "url": body.get("url", ""),
+        "created": int(time.time()),
+    }
+
+    meta = _load_video_meta()
+    meta.insert(0, entry)
+    _save_video_meta(meta)
+
+    return {"ok": True, "id": vid_id, "filename": filename}
+
+
+@app.get("/gateway/videos", dependencies=[Depends(verify_panel_auth)])
+async def list_videos(offset: int = 0, limit: int = 50):
+    """List saved videos with metadata."""
+    meta = _load_video_meta()
+    total = len(meta)
+    items = meta[offset:offset + limit]
+    return {"videos": items, "total": total}
+
+
+@app.delete("/gateway/videos/{vid_id}", dependencies=[Depends(verify_panel_auth)])
+async def delete_video(vid_id: str):
+    """Delete a saved video."""
+    meta = _load_video_meta()
+    entry = next((m for m in meta if m["id"] == vid_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    fn = entry["filename"]
+    if "/" in fn or "\\" in fn or ".." in fn:
+        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
+    filepath = (VIDEOS_DIR / fn).resolve()
+    if filepath.parent != VIDEOS_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
+    if filepath.exists():
+        filepath.unlink()
+
+    meta = [m for m in meta if m["id"] != vid_id]
+    _save_video_meta(meta)
+    return {"ok": True}
+
+
+@app.get("/data/videos/{filename}")
+async def serve_video(filename: str):
+    """Serve saved video files (path-safe, no auth — videos are user-facing)."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    filepath = (VIDEOS_DIR / filename).resolve()
+    if not filepath.parent == VIDEOS_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath, media_type="video/mp4")
+
+
 # ── Style Templates ────────────────────────────────────────────────────
 
 STYLES_DIR = ROOT_DIR / "data" / "styles"
