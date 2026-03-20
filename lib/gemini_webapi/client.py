@@ -112,13 +112,29 @@ def _parse_web_images(candidate_data: list[Any], proxy: str | None, session_kwar
     return web_images
 
 
+def _find_image_urls(data: Any, urls: list[str]) -> None:
+    """Recursively find all lh3.googleusercontent.com image URLs in nested data."""
+    if isinstance(data, str):
+        if data.startswith("https://lh3.googleusercontent.com/"):
+            urls.append(data)
+    elif isinstance(data, list):
+        for item in data:
+            _find_image_urls(item, urls)
+    elif isinstance(data, dict):
+        for v in data.values():
+            _find_image_urls(v, urls)
+
+
 def _parse_generated_images(candidate_data: list[Any], proxy: str | None, cookies: Cookies, account_index: int = 0, session_kwargs: dict | None = None) -> list[GeneratedImage]:
     """Extract generated images from candidate data."""
     generated_images = []
+    seen_urls = set()
+
     # Path 1: ImageFX generated images (candidate_data[12][7][0])
     for gen_img_data in get_nested_value(candidate_data, [12, 7, 0], []):
         url = get_nested_value(gen_img_data, [0, 3, 3])
-        if url:
+        if url and url not in seen_urls:
+            seen_urls.add(url)
             img_num = get_nested_value(gen_img_data, [3, 6])
             generated_images.append(
                 GeneratedImage(
@@ -131,24 +147,28 @@ def _parse_generated_images(candidate_data: list[Any], proxy: str | None, cookie
                     session_kwargs=session_kwargs or {},
                 )
             )
-    # Path 2: Nano Banana edit images (candidate_data[12][46])
-    for edit_img_group in get_nested_value(candidate_data, [12, 46], []):
-        img_entry = get_nested_value(edit_img_group, [0, 0])
-        if not img_entry:
-            continue
-        url = get_nested_value(img_entry, [3])
-        if url and isinstance(url, str) and url.startswith("http"):
-            generated_images.append(
-                GeneratedImage(
-                    url=url,
-                    title="[Edited Image]",
-                    alt=get_nested_value(img_entry, [2], ""),
-                    proxy=proxy,
-                    cookies=cookies,
-                    account_index=account_index,
-                    session_kwargs=session_kwargs or {},
-                )
-            )
+
+    # Path 2: fallback — recursively scan candidate_data[12] for any image URLs
+    if not generated_images:
+        candidate_12 = get_nested_value(candidate_data, [12])
+        if candidate_12:
+            urls: list[str] = []
+            _find_image_urls(candidate_12, urls)
+            for url in urls:
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    generated_images.append(
+                        GeneratedImage(
+                            url=url,
+                            title="[Generated Image]",
+                            alt="",
+                            proxy=proxy,
+                            cookies=cookies,
+                            account_index=account_index,
+                            session_kwargs=session_kwargs or {},
+                        )
+                    )
+
     return generated_images
 
 
