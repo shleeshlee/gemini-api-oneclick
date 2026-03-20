@@ -168,6 +168,11 @@ body::before {
 .card-status.red { background: var(--danger); box-shadow: 0 0 8px rgba(255,123,123,0.4); animation: pulse 2s ease-in-out infinite; }
 .card-status.yellow { background: var(--warn); }
 .card-status.grey { background: var(--text-light); }
+.card-status.orange { background: var(--warn); box-shadow: 0 0 8px rgba(255,179,71,0.4); }
+.card-status.blue { background: #5B9BD5; box-shadow: 0 0 8px rgba(91,155,213,0.4); animation: pulse 1.5s ease-in-out infinite; }
+.card.img-blocked::after { background: linear-gradient(90deg, var(--warn), var(--accent)); }
+.card-warn { font-size: 0.7rem; color: var(--warn); background: var(--warn-light); padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem; }
+.card-busy { font-size: 0.7rem; color: #5B9BD5; background: #E8F0FE; padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 .card-meta { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
@@ -1074,6 +1079,12 @@ function renderGrid() {
     if (gw && !gw.enabled) {
       cardClass = 'disabled-card'; dotClass = 'yellow'; stateLabel = '已禁用';
       offCount++;
+    } else if (gw && gw.healthy && gw.img_blocked) {
+      cardClass = 'img-blocked'; dotClass = 'orange'; stateLabel = '仅生文';
+      okCount++;
+    } else if (gw && gw.healthy && gw.busy) {
+      cardClass = 'healthy'; dotClass = 'blue'; stateLabel = '处理中';
+      okCount++;
     } else if (gw && gw.healthy) {
       cardClass = 'healthy'; dotClass = 'green'; stateLabel = '正常';
       okCount++;
@@ -1121,6 +1132,8 @@ function renderGrid() {
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
+        ${gw && gw.img_blocked ? '<div class="card-warn">⚠ 仅生文，需更新Cookie</div>' : ''}
+        ${gw && gw.busy ? '<div class="card-busy">⏳ 处理中</div>' : ''}
         ${statsLine}
         ${errorLine}
         <div class="card-actions">${actionBtn}</div>
@@ -1282,7 +1295,7 @@ const IMG_STYLES = [
   // 额外常用
   {id:'Anime',label:'动漫',icon:'🌸'},{id:'Photorealistic',label:'写实',icon:'📷'},
   {id:'Watercolor',label:'水彩',icon:'🎨'},{id:'Pixel Art',label:'像素',icon:'👾'},
-  {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},{id:'Otome CG',label:'乙女CG',icon:'🌸'},{id:'Fantasy Anime',label:'幻想动漫',icon:'✨'},{id:'Shinkai',label:'新海诚',icon:'🌊'},{id:'Soft Anime',label:'柔和动漫',icon:'🌿'},
+  {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},{id:'Otome CG',label:'乙女CG',icon:'🌸'},{id:'Fantasy Anime',label:'幻想动漫',icon:'✨'},{id:'Shinkai',label:'新海诚',icon:'🌊'},{id:'Soft Anime',label:'柔和动漫',icon:'🌿'},{id:'Pixiv Rank',label:'P站精选',icon:'🏆'},
 ];
 const IMG_RATIOS = [
   {id:'1024x1024',label:'1:1',icon:'□'},

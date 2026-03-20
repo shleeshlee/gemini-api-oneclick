@@ -132,10 +132,12 @@ class Container:
         self.health_fail_count = 0  # consecutive health check failures
         self.needs_cookie = False   # True = auth error, restart won't help
         self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
+        self.img_blocked = False    # True = can chat but not generate images, needs fresh cookie
+        self.busy = False           # True = currently processing a request
 
     @property
     def available(self):
-        return self.healthy and self.enabled and time.time() > self.cooldown_until
+        return self.healthy and self.enabled and time.time() > self.cooldown_until and not self.busy
 
     def to_dict(self):
         return {
@@ -152,6 +154,8 @@ class Container:
             "total_requests": self.total_requests,
             "total_errors": self.total_errors,
             "needs_cookie": self.needs_cookie,
+            "img_blocked": self.img_blocked,
+            "busy": self.busy,
         }
 
 
@@ -274,18 +278,22 @@ def discover_containers():
     add_log("info", None, f"Discovered {len(containers)} containers")
 
 
-def get_next_available(group: str | None = None) -> Container | None:
+def get_next_available(group: str | None = None, is_image: bool = False) -> Container | None:
     """Round-robin to next available container, optionally filtered by group."""
     if group:
         nums = sorted(n for n, g in container_groups.items()
-                       if g == group and n in containers and containers[n].available)
+                       if g == group and n in containers and containers[n].available
+                       and (not is_image or not containers[n].img_blocked))
     else:
-        nums = sorted(n for n in containers if containers[n].available)
+        nums = sorted(n for n in containers if containers[n].available
+                       and (not is_image or not containers[n].img_blocked))
 
     if not nums:
         return None
 
     key = group or "__default__"
+    if is_image:
+        key += ":img"
     idx = group_round_robin.get(key, -1)
     idx = (idx + 1) % len(nums)
     group_round_robin[key] = idx
@@ -546,6 +554,106 @@ async def list_models():
 
 
 
+# ── Image Prompt Building ──────────────────────────────────────────────
+
+SIZE_TO_ASPECT = {
+    "1280x720": "16:9 widescreen landscape",
+    "720x1280": "9:16 tall portrait",
+    "1792x1024": "3:2 landscape",
+    "1024x1792": "2:3 portrait",
+    "1024x1024": "",
+}
+
+STYLE_PROMPTS = {
+    "Monochrome": {"prefix": "Monochrome style, black and white with dramatic contrast", "suffix": "deep shadows and bright highlights, film noir aesthetic, highly detailed"},
+    "Color Block": {"prefix": "Color Block style, bold flat areas of saturated color, graphic design inspired", "suffix": "strong geometric shapes, clean edges, highly detailed"},
+    "Runway": {"prefix": "Fashion runway style, high-fashion editorial look", "suffix": "dramatic poses, luxury aesthetic, magazine quality, highly detailed"},
+    "Screen Print": {"prefix": "Screen print style, Andy Warhol inspired, halftone dots", "suffix": "limited color palette, pop art aesthetic, bold graphic quality"},
+    "Colorful": {"prefix": "Extremely colorful and vibrant, rainbow palette", "suffix": "maximum saturation, joyful and energetic, highly detailed"},
+    "Gothic Clay": {"prefix": "Gothic claymation style, stop-motion clay figures", "suffix": "dark and eerie, Tim Burton inspired, textured surfaces, highly detailed"},
+    "Explosive": {"prefix": "Explosive action style, dramatic impact", "suffix": "debris and particles, high-energy dynamic composition, cinematic lighting, highly detailed"},
+    "Salon": {"prefix": "Salon portrait style, elegant and refined", "suffix": "soft glamour lighting, classic beauty photography, smooth skin texture, highly detailed"},
+    "Sketch": {"prefix": "Detailed pencil sketch on paper, graphite shading", "suffix": "fine crosshatch linework, hand-drawn feel, visible paper texture"},
+    "Cinematic": {"prefix": "Cinematic style, movie still aesthetic, dramatic Rembrandt lighting", "suffix": "anamorphic lens feel, volumetric light rays, film grain, atmospheric haze, highly detailed"},
+    "Steampunk": {"prefix": "Steampunk style, Victorian-era machinery", "suffix": "brass gears and pipes, industrial revolution meets fantasy, warm amber lighting, highly detailed"},
+    "Sunrise": {"prefix": "Golden sunrise style, warm golden hour light", "suffix": "long shadows, atmospheric haze, serene and hopeful mood, highly detailed"},
+    "Myth Fighter": {"prefix": "Epic mythological warrior style, ancient Greek/Norse aesthetic", "suffix": "dramatic battle poses, ornate armor, heroic composition, cinematic lighting, highly detailed"},
+    "Surreal": {"prefix": "Surrealist style, Salvador Dali inspired", "suffix": "impossible geometry, dreamlike distortions, melting forms, ethereal lighting"},
+    "Dark": {"prefix": "Dark moody style, deep shadows, minimal cold lighting", "suffix": "noir atmosphere, misty volumetric haze, subtle rim light on edges, mysterious and brooding, highly detailed"},
+    "Enamel Pin": {"prefix": "Enamel pin style, flat vector illustration, bold outlines", "suffix": "limited colors, cute collectible aesthetic, clean graphic quality"},
+    "Cyborg": {"prefix": "Cyborg style, human-machine hybrid, visible circuitry", "suffix": "bioluminescent elements, sci-fi realism, cold blue rim lighting, highly detailed"},
+    "Soft Portrait": {"prefix": "Soft portrait style, gentle diffused lighting, shallow depth of field", "suffix": "warm skin tones, smooth skin texture, dreamy bokeh highlights, intimate atmosphere, highly detailed"},
+    "Retro Cartoon": {"prefix": "1930s retro cartoon style, rubber hose animation", "suffix": "black and white with halftone, Fleischer Studios inspired, playful and nostalgic"},
+    "Oil Painting": {"prefix": "Oil painting style, rich impasto brushstrokes, semi-painterly rendering", "suffix": "Rembrandt-style golden lighting, classical composition, visible canvas texture, museum quality, highly detailed"},
+    "Anime": {"prefix": "High-quality digital anime illustration with refined lineart and confident varied line weight, elegant anime proportions with large expressive eyes featuring layered catchlights and iris detail", "suffix": "soft cel-shading with smooth gradient blending, refined facial features, graceful slender hands, silky hair with highlight streaks, cinematic lighting, soft shadows"},
+    "Photorealistic": {"prefix": "Photorealistic, ultra detailed like a DSLR photograph", "suffix": "natural lighting, sharp focus, 85mm lens, shallow depth of field, highly detailed"},
+    "Watercolor": {"prefix": "Detailed watercolor painting, soft translucent washes", "suffix": "visible paper texture, gentle color bleeding, warm tyndall effect lighting, delicate brushwork, highly detailed"},
+    "Pixel Art": {"prefix": "Pixel art style, retro 16-bit video game aesthetic", "suffix": "clean pixel boundaries, limited palette, nostalgic, charming"},
+    "Kawaii": {"prefix": "Kawaii style, adorable chibi proportions, pastel colors", "suffix": "round soft shapes, sparkles and hearts, cute and expressive"},
+    "Ghibli": {"prefix": "High-quality anime illustration with pseudo-painterly rendering and semi-thick brush strokes, refined anime proportions with expressive eyes and soft facial features", "suffix": "vivid color grading with warm natural tones, expressive shadows with soft textured lighting, silky hair with natural highlight streaks, painterly anime background with atmospheric depth, dramatic atmosphere"},
+    "Civilization": {"prefix": "Ancient civilization epic style, grand architecture", "suffix": "marble and gold, historical drama aesthetic, cinematic lighting, highly detailed"},
+    "Metallic": {"prefix": "Metallic chrome style, reflective surfaces, liquid metal", "suffix": "futuristic industrial aesthetic, cold blue lighting, highly detailed"},
+    "Memo": {"prefix": "Memo style, playful and expressive, close-up character study", "suffix": "natural and candid feel, warm soft lighting, highly detailed"},
+    "Glam": {"prefix": "Glamorous style, sparkle and shine, luxury fashion", "suffix": "dramatic beauty lighting, editorial elegance, highly detailed"},
+    "Crochet": {"prefix": "Crochet knitted style, soft yarn textures", "suffix": "handcrafted warmth, cozy stop-motion aesthetic, soft lighting, highly detailed"},
+    "Cyberpunk": {"prefix": "Cyberpunk style, neon-lit streets, holographic signs", "suffix": "rain reflections, futuristic dystopia, volumetric neon lighting, highly detailed"},
+    "Video Game": {"prefix": "Retro video game style, pixel art animation", "suffix": "8-bit/16-bit aesthetic, arcade feel, nostalgic"},
+    "Cosmos": {"prefix": "Cosmic space style, nebulae and stars, infinite depth", "suffix": "astronomical wonder, sci-fi grandeur, ethereal lighting, highly detailed"},
+    "Action Hero": {"prefix": "Action hero blockbuster style, intense close-ups", "suffix": "dramatic slow motion, gritty and cinematic, volumetric lighting, highly detailed"},
+    "Stardust": {"prefix": "Stardust fairy tale style, magical sparkles", "suffix": "enchanted garden, soft dreamy atmosphere, romantic fantasy, ethereal glow, highly detailed"},
+    "Jellytoon": {"prefix": "Jellytoon style, 3D animated character, soft rounded forms", "suffix": "vibrant Pixar-like aesthetic, cute and expressive, soft studio lighting"},
+    "Racetrack": {"prefix": "Racetrack style, miniature tilt-shift effect", "suffix": "toy-like world, bright saturated colors, playful perspective"},
+    "ASMR Apple": {"prefix": "ASMR macro style, extreme close-up detail", "suffix": "satisfying textures, crisp focus, sensory-rich, highly detailed"},
+    "Red Carpet": {"prefix": "Red carpet documentary style, paparazzi flash", "suffix": "celebrity glamour, dramatic entrances, cinematic, highly detailed"},
+    "Popcorn": {"prefix": "Popcorn fun style, playful stop-motion", "suffix": "whimsical food art, creative and surprising compositions"},
+    "Otome CG": {"prefix": "High-quality otome game CG illustration with refined lineart and delicate tapered strokes, elegant bishoujo anime proportions with large expressive eyes featuring complex layered irises and bright catchlights, refined soft facial features", "suffix": "soft watercolor wash with warm peach and cool blue cel-shading, silky fine-line hair highlights, soft matte skin rendering, tyndall effect lighting, sentimental atmosphere with shallow depth-of-field, elegant jewelry details"},
+    "Fantasy Anime": {"prefix": "High-quality fantasy anime illustration with refined lineart and varied line weights, elegant anime proportions with large detailed eyes featuring layered catchlights, refined facial features, graceful slender gestures", "suffix": "soft watercolor-like coloring with desaturated pastel tones and subtle color bleeding, ethereal diffused lighting with soft bloom effect, floating particles and magical light motes, lush fully-realized fantasy environment with atmospheric depth and dreamy haze"},
+    "Shinkai": {"prefix": "High-quality digital anime illustration with crisp refined lineart and delicate tapered ends, thin internal detailing and slightly weighted outer silhouettes, elegant anime proportions with large intensely detailed eyes featuring complex iris patterns and multiple catchlights", "suffix": "saturated palette with vivid cold-warm color grading, smooth digital gradients with soft-edged cel-shading, dramatic cinematic rim lighting with subtle bloom effect, silky hair with sharp high-contrast highlights, luminous transparent sky with detailed cloud layers and sunlight rays piercing through, wistful and nostalgic atmosphere"},
+    "Soft Anime": {"prefix": "High-quality digital anime illustration with soft watercolor aesthetic, refined sketchy lineart with varied line weights and delicate tapered strokes blending into soft coloring, elegant bishoujo anime proportions with large expressive eyes featuring complex layered irises and bright catchlights", "suffix": "desaturated pastel palette with gentle wet-on-wet transitions and subtle color bleeding, light cel-shading with warm peach and cool blue shadow accents, soft diffused ambient light with ethereal high-key glow, traditional watercolor paper grain texture, silky fine-line hair highlights, minimalist airy storybook atmosphere with floating particles"},
+    "Pixiv Rank": {"prefix": "Top-ranked Pixiv illustration quality, masterful digital painting with professional polish and appeal, refined anime art style with meticulous attention to detail", "suffix": "vibrant saturated colors with expert light-shadow interplay, intricate hair rendering with flowing strands, jewel-like eyes with multiple reflections, dramatic composition, trending on Pixiv daily ranking, highly detailed"},
+}
+
+QUALITY_PROMPTS = {
+    "hd": "Make it extremely detailed and high quality, with 4K resolution clarity and sharp focus throughout.",
+}
+
+
+def _build_image_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, dict]:
+    """Extract style/quality/size/negative from body, build final prompt, clean body for container."""
+    prompt = body_json.get("prompt", "")
+    style = body_json.pop("style", None)
+    quality = body_json.get("quality")
+    size = body_json.get("size", "")
+    negative = body_json.pop("negative_prompt", None)
+
+    style_data = STYLE_PROMPTS.get(style) if style else None
+    parts_prefix = []
+    parts_suffix = []
+
+    if style_data:
+        parts_prefix.append(style_data["prefix"])
+        parts_suffix.append(style_data["suffix"])
+
+    if quality and quality in QUALITY_PROMPTS:
+        parts_suffix.append(QUALITY_PROMPTS[quality])
+
+    aspect_desc = SIZE_TO_ASPECT.get(size or "", "")
+    if aspect_desc:
+        parts_suffix.append(f"The image should be in {aspect_desc} format.")
+
+    if negative:
+        parts_suffix.append(f"Important: do not include {negative} in the image.")
+
+    prefix = ", ".join(parts_prefix) + ", " if parts_prefix else ""
+    suffix = ", " + ", ".join(parts_suffix) if parts_suffix else ""
+    final_prompt = f"{prefix}{prompt}{suffix}"
+
+    body_json["prompt"] = final_prompt
+    new_body = json.dumps(body_json).encode("utf-8")
+    headers["content-length"] = str(len(new_body))
+    return body_json, new_body, headers
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
@@ -575,26 +683,36 @@ async def proxy(request: Request, path: str):
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
 
+    is_image_req = "images" in path
+    if body_json and is_image_req:
+        body_json, body, headers = _build_image_prompt(body_json, headers)
+
     # Count available containers in target pool
     if target_group:
         pool_available = sum(1 for n, g in container_groups.items()
-                             if g == target_group and n in containers and containers[n].available)
+                             if g == target_group and n in containers and containers[n].available
+                             and (not is_image_req or not containers[n].img_blocked))
     else:
-        pool_available = sum(1 for c in containers.values() if c.available)
+        pool_available = sum(1 for c in containers.values() if c.available
+                             and (not is_image_req or not c.img_blocked))
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
-        detail = f"No healthy containers in group [{target_group}]" if target_group else "No healthy containers available"
+        if is_image_req:
+            detail = f"No containers available for image generation" + (f" in group [{target_group}]" if target_group else "") + " (all may be img_blocked)"
+        else:
+            detail = f"No healthy containers in group [{target_group}]" if target_group else "No healthy containers available"
         raise HTTPException(status_code=503, detail=detail)
 
     last_error = ""
     for attempt in range(retries):
-        c = get_next_available(target_group)
+        c = get_next_available(target_group, is_image=is_image_req)
         if not c:
             break
 
         target_url = f"{c.url}/v1/{path}"
         c.total_requests += 1
+        c.busy = True
 
         try:
             # 生图 300s，聊天 600s
@@ -608,6 +726,12 @@ async def proxy(request: Request, path: str):
                     error_body = (await resp.aread()).decode(errors="replace")[:200]
                     await resp.aclose()
                     await client.aclose()
+                    # Detect image generation blocked
+                    if is_image_req and resp.status_code == 500:
+                        lower_err = error_body.lower()
+                        if any(kw in lower_err for kw in ("blocked", "safety", "policy", "restricted", "not available")):
+                            c.img_blocked = True
+                            add_log("warn", c.num, f"生图被阻止，标记为仅生文: {error_body[:80]}")
                     raise httpx.HTTPStatusError(
                         f"HTTP {resp.status_code}: {error_body}",
                         request=resp.request, response=resp
@@ -619,6 +743,7 @@ async def proxy(request: Request, path: str):
                         async for chunk in resp.aiter_bytes():
                             yield chunk
                     finally:
+                        c.busy = False
                         await resp.aclose()
                         await client.aclose()
 
@@ -632,6 +757,7 @@ async def proxy(request: Request, path: str):
                 raise
 
         except Exception as e:
+            c.busy = False
             error_msg = str(e)[:200]
             c.total_errors += 1
             c.error_count += 1
