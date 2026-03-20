@@ -1,0 +1,59 @@
+from pydantic import BaseModel
+
+from .candidate import Candidate
+from .image import Image
+from .video import GeneratedVideo
+
+
+class ModelOutput(BaseModel):
+    """
+    Classified output from gemini.google.com
+
+    Parameters
+    ----------
+    metadata: `list[str | None]`
+        List of chat metadata `[cid, rid, rcid]`, can be shorter than 3 elements, like `[cid, rid]` or `[cid]` only.
+        Elements can be strings or None.
+    candidates: `list[Candidate]`
+        List of all candidates returned from gemini
+    chosen: `int`, optional
+        Index of the chosen candidate, by default will choose the first one
+    """
+
+    metadata: list[str | None]
+    candidates: list[Candidate]
+    chosen: int = 0
+
+    def __str__(self):
+        return self.text
+
+    def __repr__(self):
+        return f"ModelOutput(metadata={self.metadata}, chosen={self.chosen}, candidates={self.candidates})"
+
+    @property
+    def text(self) -> str:
+        return self.candidates[self.chosen].text
+
+    @property
+    def text_delta(self) -> str:
+        return self.candidates[self.chosen].text_delta or ""
+
+    @property
+    def thoughts(self) -> str | None:
+        return self.candidates[self.chosen].thoughts
+
+    @property
+    def thoughts_delta(self) -> str:
+        return self.candidates[self.chosen].thoughts_delta or ""
+
+    @property
+    def images(self) -> list[Image]:
+        return self.candidates[self.chosen].images
+
+    @property
+    def videos(self) -> list[GeneratedVideo]:
+        return self.candidates[self.chosen].videos
+
+    @property
+    def rcid(self) -> str:
+        return self.candidates[self.chosen].rcid
