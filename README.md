@@ -36,17 +36,6 @@ bash scripts/install.sh
 
 已有环境重新跑 `install.sh` 可选择更新（保留账号配置）或全新安装。
 
-## v2.0.0 新功能
-
-- 🎬 **视频生成** — 文本生视频、图片生视频、视频生视频，Veo 自动轮询
-- ✏️ **图片/视频编辑** — 上传素材 + prompt 编辑，支持多轮连续编辑
-- 🔄 **6 种创作模式** — 文→图、图→图、图→视频、文→视频、视频→视频、视频→图
-- 📦 **gemini_webapi 内置** — 不再依赖外部库，直接修改和优化
-- 🔍 **统一媒体解析** — 递归扫描 Gemini 响应，不硬编码路径，任何格式变化自动适应
-- 🎥 **视频库** — 保存、管理、播放生成的视频
-- 📱 **移动端适配** — 图库 2 列展示，按钮完整保留
-- 📁 **可折叠区域** — 图库和视频库可折叠，状态自动记忆
-
 ## 功能一览
 
 ### 核心能力
@@ -96,7 +85,7 @@ bash scripts/install.sh
 
 - **Gateway** — 宿主机进程，统一接收请求，按分组路由 + 轮询分发到健康容器
 - **Container** — 每个容器一个 FastAPI 实例，使用独立的 Gemini Cookie
-- **gemini_webapi** — 内置在 `lib/` 中，直接维护，无需等待上游更新
+- **不需要外部负载均衡** — Gateway 自带轮询、故障转移和分组路由
 
 ## API 端点
 
@@ -146,7 +135,7 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 
 | 项目 | 作者 | 说明 |
 |------|------|------|
-| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | 原始 gemini-webapi 库（v2.0.0 起已内置） |
+| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | gemini-webapi 库 |
 | [xob0t/Gemini-API](https://github.com/xob0t/Gemini-API) | xob0t | curl_cffi 分支 |
 | [Gemini-FastAPI](https://github.com/Nativu5/Gemini-FastAPI) | Nativu5 | 架构参考 |
 
