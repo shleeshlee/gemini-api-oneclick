@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,7 +76,7 @@ async def get_or_create_client():
                 proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
-                await gemini_client.init(timeout=150, watchdog_timeout=60, auto_refresh=False)
+                await gemini_client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
                 logger.info("Gemini client initialized successfully.")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")

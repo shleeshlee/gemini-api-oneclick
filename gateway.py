@@ -1043,12 +1043,17 @@ async def container_log(num: int, tail: int = 60):
     cname = f"gemini_api_account_{num}"
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "logs", "--tail", str(min(tail, 200)), "--timestamps", cname,
+            "docker", "logs", "--tail", str(min(tail * 10, 2000)), "--timestamps", cname,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-        lines = stdout.decode(errors="replace").splitlines()[-min(tail, 200):]
+        all_lines = stdout.decode(errors="replace").splitlines()
+        # Filter out health check noise so real logs are visible
+        lines = [l for l in all_lines if "/health" not in l]
+        if not lines:
+            lines = all_lines
+        lines = lines[-min(tail, 200):]
         return {"ok": True, "lines": lines}
     except asyncio.TimeoutError:
         return {"ok": False, "lines": ["Error: docker logs timed out (10s)"]}
