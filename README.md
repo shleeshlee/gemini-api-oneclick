@@ -1,8 +1,8 @@
 # 🎀 Gemini API OneClick
 
-一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、健康检查、Cookie 管理、图片生成，一个端口搞定。
+一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、图片/视频生成与编辑，一个端口搞定。
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/shleeshlee/gemini-api-oneclick/releases)
 
 > **👤 作者:** WanWan
 > **📦 开源协议:** MIT (免费使用，保留署名)
@@ -36,19 +36,45 @@ bash scripts/install.sh
 
 已有环境重新跑 `install.sh` 可选择更新（保留账号配置）或全新安装。
 
+## v2.0.0 新功能
+
+- 🎬 **视频生成** — 文本生视频、图片生视频、视频生视频，Veo 自动轮询
+- ✏️ **图片/视频编辑** — 上传素材 + prompt 编辑，支持多轮连续编辑
+- 🔄 **6 种创作模式** — 文→图、图→图、图→视频、文→视频、视频→视频、视频→图
+- 📦 **gemini_webapi 内置** — 不再依赖外部库，直接修改和优化
+- 🔍 **统一媒体解析** — 递归扫描 Gemini 响应，不硬编码路径，任何格式变化自动适应
+- 🎥 **视频库** — 保存、管理、播放生成的视频
+- 📱 **移动端适配** — 图库 2 列展示，按钮完整保留
+- 📁 **可折叠区域** — 图库和视频库可折叠，状态自动记忆
+
 ## 功能一览
 
+### 核心能力
+
 - ⚡ **智能网关** — 自动轮询所有容器，故障节点静默跳过，最多 5 次重试
-- 🏷️ **分组路由** — 按模型前缀自动分流到不同容器池（如 `pro-gemini-2.0-flash` → `pro` 组）
-- 🎨 **图片生成** — OpenAI 兼容的 `/v1/images/generations` 端点，支持 30+ 内置风格
+- 🏷️ **分组路由** — 按模型前缀自动分流到不同容器池
 - 🔍 **健康检查** — 后台每 30 秒检测容器状态，连续 3 次失败自动禁用
 - ⏱️ **超时容错** — 三层超时保护 + 容器冷却机制，防止请求积压
-- 📊 **管理面板** — 容器状态、请求统计、错误日志、容器测试、日志查看
-- 🍪 **Cookie 管理** — 面板内直接部署 Cookie，一键重启单个容器
-- 🔖 **账号标识** — 给容器命名（如工作号备用号），服务端存储
 - 🔒 **安全加固** — 速率限制、timing-safe 认证、防暴力破解
 - ➕ **弹性扩容** — 随时通过 `manage.sh` 新增/删除容器
-- 🔄 **安全部署** — `safe-deploy.sh` 分批重启（每批 6 个，间隔 120 秒），防止触发机房 DDoS 防护
+- 🔄 **安全部署** — `safe-deploy.sh` 分批重启，防止触发机房 DDoS 防护
+
+### 创作工作室
+
+- 🎨 **图片生成** — OpenAI 兼容端点，30+ 内置风格模板
+- 🎬 **视频生成** — Veo 视频生成，支持图片/视频作为输入素材
+- ✏️ **素材编辑** — 上传图片或视频，用自然语言描述修改内容
+- 🔍 **风格解析** — AI 分析图片/视频的视觉风格，保存为可复用模板
+- ✨ **提示词优化** — AI 自动优化生成提示词
+- 🖼️ **项目图库** — 保存、管理、拖拽编辑生成的图片
+- 🎥 **项目视频库** — 保存、播放、下载生成的视频
+
+### 管理面板
+
+- 📊 **容器状态** — 编号、端口、名称、分组、健康状态一目了然
+- 🍪 **Cookie 管理** — 面板内直接部署 Cookie，一键重启单个容器
+- 📋 **容器日志** — 面板内查看 Docker 日志（自动过滤健康检查噪音）
+- 🏷️ **分组管理** — 创建分组、批量分配容器、重命名、删除
 
 ## 架构
 
@@ -63,7 +89,6 @@ bash scripts/install.sh
               ▼            ▼            ▼
          Container 1  Container 2  Container N
          (账号 1)     (账号 2)     (账号 N)
-         [pro 组]     [pro 组]     [默认组]
               │            │            │
               ▼            ▼            ▼
            Gemini Web API (Cookie 认证)
@@ -71,135 +96,64 @@ bash scripts/install.sh
 
 - **Gateway** — 宿主机进程，统一接收请求，按分组路由 + 轮询分发到健康容器
 - **Container** — 每个容器一个 FastAPI 实例，使用独立的 Gemini Cookie
-- **不需要外部负载均衡** — Gateway 自带轮询、故障转移和分组路由
-
-## 超时与容错
-
-请求经过三层超时保护，每层超时都会释放资源并尝试下一个容器：
-
-| 层级 | 生图 | 生文 | 说明 |
-|------|------|------|------|
-| 容器内部（Gemini API） | 150s | 150s | gemini_webapi 的请求超时，超时后释放连接 |
-| Gateway（单容器） | 100s | 120s | 单个容器无响应时跳下一个，超时容器冷却 60s |
-| 客户端（Bot 等） | 自定 | 自定 | 建议 ≥120s，给 Gateway 足够时间完成容器重试 |
-
-**容器冷却机制：** 容器超时后 60 秒内不再接收新请求，防止积压。冷却结束后自动恢复轮询。
-
-**Cookie 保护：** 已禁用 gemini_webapi 的 auto_refresh（Cookie 自动轮转），该功能会永久损坏 Cookie 导致能聊天但无法生图。
-
-## 分组路由
-
-将容器分成不同的组（如 `pro`、`free`），通过模型名前缀指定走哪个组：
-
-```
-请求模型: pro-gemini-2.0-flash
-  ↓ Gateway 解析
-分组: pro | 实际模型: gemini-2.0-flash
-  ↓ 只在 pro 组的容器里轮询
-转发到 pro 组的健康容器
-```
-
-面板内管理分组：创建 / 删除 / 重命名 / 批量分配容器。
+- **gemini_webapi** — 内置在 `lib/` 中，直接维护，无需等待上游更新
 
 ## API 端点
 
-所有端点通过 Gateway 统一入口访问，请求头带 `Authorization: Bearer 你的API密钥`。
+请求头带 `Authorization: Bearer 你的API密钥`。
 
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | 聊天（OpenAI 兼容，支持流式） |
-| `POST /v1/images/generations` | 图片生成（OpenAI 兼容，支持风格/质量/负面提示词） |
+| `POST /v1/images/generations` | 图片生成/编辑（支持风格/质量/素材上传） |
+| `POST /v1/videos/generations` | 视频生成（支持文本/图片/视频输入） |
 | `GET /v1/models` | 可用模型列表 |
-| `GET /` | 管理面板 |
+| `GET /` | 管理面板 + 创作工作室 |
 
 兼容 OpenAI 格式，可直接接入 SillyTavern、NextChat、NewAPI、Cherry Studio 等。
 
-### 图片生成
+### 视频生成
 
 ```bash
-curl -X POST http://你的IP:9880/v1/images/generations \
-  -H Authorization: Bearer 你的API密钥 \
-  -H Content-Type: application/json \
-  -d '{
-    prompt: a cute cat sitting on a window,
-    style: Ghibli,
-    quality: hd,
-    size: 1024x1024,
-    n: 1
-  }'
+curl -X POST http://你的IP:9880/v1/videos/generations \
+  -H "Authorization: Bearer 你的API密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a kitten playing with yarn", "model": "gemini-2.0-flash"}'
 ```
 
-**支持参数：**
-- `style` — 30+ 内置风格（Anime、Ghibli、Shinkai、Oil Painting、Pixel Art 等）
-- `quality` — `standard`（默认）或 `hd`（更高细节）
-- `negative_prompt` — 不想出现的元素
-- `size` — `1024x1024`（默认）等
-- 返回格式：base64 编码的图片数据
+视频生成需要 1-5 分钟（Veo），API 自动轮询等待完成，返回 base64 数据和下载 URL。
 
-## 管理面板
+## 超时与容错
 
-浏览器打开 `http://你的IP:9880`，输入密码登录：
-
-- **容器卡片** — 编号、端口、名称、分组、健康状态一目了然
-- **一键测试** — 直接测试容器是否可用，结果显示在按钮上
-- **Cookie 部署** — 点击容器卡片填入 Cookie，一键重启生效
-- **容器日志** — 面板内查看每个容器的 Docker 日志
-- **分组管理** — 创建分组、批量分配容器、重命名、删除
-- **请求统计** — 从容器日志读取真实请求数和错误数
-- **启用/禁用** — 手动控制容器是否参与轮询
-- **模型刷新** — 设置内一键刷新可用模型列表
-
-## 容器管理
-
-```bash
-bash scripts/manage.sh
-# 或
-make manage
-```
-
-- **[1] 添加容器** — 指定数量，自动创建 env、生成 compose、增量启动
-- **[2] 删除容器** — 选择编号，停止容器、删除配置
-- **[3] 查看状态** — 容器运行状态 + Gateway 状态
-- **[4] 完整卸载** — 清理容器和配置（保留 envs/ 防误删）
+| 层级 | 生图 | 生视频 | 生文 |
+|------|------|--------|------|
+| 容器内部 | 300s | 300s | 300s |
+| Gateway | 100s | 330s | 120s |
+| 客户端建议 | ≥120s | ≥360s | ≥120s |
 
 ## 常用命令
 
 | 命令 | 说明 |
 |------|------|
-| `make install` | 运行交互式安装 |
-| `make manage` | 容器管理菜单 |
-| `make up` | 构建并分批启动所有容器 |
-| `make down` | 停止所有容器 |
-| `make restart` | 分批重启所有容器 |
-| `make logs` | 实时查看日志 |
-| `make generate` | 重新生成 docker-compose |
-| `bash scripts/safe-deploy.sh` | 分批部署（每批 6 个，间隔 120 秒） |
+| `make install` | 交互式安装 |
+| `make manage` | 容器管理 |
+| `make up` | 构建并分批启动 |
 | `bash scripts/safe-deploy.sh --build` | 重建镜像 + 分批部署 |
 
-> ⚠️ **禁止全量重启容器**（`docker compose restart`），短时间大量对外连接会触发机房 DDoS 防护封网络。务必使用 `safe-deploy.sh` 分批操作。
-
-## 安全提醒
-
-- Gateway 面板登录有速率限制（每 IP 60 秒内 5 次）
-- API 密钥使用 timing-safe 比较，防时序攻击
-- 不要提交 `.env` 和 `envs/*.env`（含 Cookie 和密码）
-- 不要提交 `cookie-cache/` 和 `state/`
-- 详见 [SECURITY.md](SECURITY.md)
+> ⚠️ **禁止全量重启**（`docker compose restart`），务必用 `safe-deploy.sh` 分批操作。
 
 ## 致谢
 
-| 项目 | 作者 | 参考内容 |
-|------|------|---------|
-| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | **核心依赖** — `gemini-webapi` 库，Gemini Web Cookie 认证和对话能力 |
-| [Gemini-FastAPI](https://github.com/Nativu5/Gemini-FastAPI) | Nativu5 | **架构参考** — OpenAI 兼容 API 格式、多账号负载均衡思路 |
-| [Gemi2Api-Server](https://github.com/zhiyu1998/Gemi2Api-Server) | zhiyu1998 | **部署参考** — 轻量化 Docker 部署模式 |
+| 项目 | 作者 | 说明 |
+|------|------|------|
+| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | 原始 gemini-webapi 库（v2.0.0 起已内置） |
+| [xob0t/Gemini-API](https://github.com/xob0t/Gemini-API) | xob0t | curl_cffi 分支 |
+| [Gemini-FastAPI](https://github.com/Nativu5/Gemini-FastAPI) | Nativu5 | 架构参考 |
 
 ## 许可证
 
-[MIT](LICENSE) — 免费使用、修改、分发，保留署名即可。
+[MIT](LICENSE)
 
 ---
 
-**🎀 Gemini API OneClick** by WanWan | [GitHub](https://github.com/shleeshlee/gemini-api-oneclick)
-
-觉得好用的话，给个 Star 支持一下！
+**🎀 Gemini API OneClick v2.0.0** by WanWan | [GitHub](https://github.com/shleeshlee/gemini-api-oneclick)

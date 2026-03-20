@@ -4,6 +4,8 @@
 Runs on host machine. Proxies all /v1/* requests to healthy containers
 with automatic failover. Provides status UI and management API.
 
+Version: 2.0.0
+
 Port: 9880 (configurable via GATEWAY_PORT env)
 """
 from __future__ import annotations
