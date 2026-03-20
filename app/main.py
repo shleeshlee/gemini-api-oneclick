@@ -469,7 +469,8 @@ class ImageGenerationRequest(BaseModel):
     style: Optional[str] = None
     negative_prompt: Optional[str] = None
     response_format: Optional[str] = "b64_json"
-    image: Optional[str] = None  # base64 encoded image for edit mode (first round)
+    image: Optional[str] = None  # base64 encoded media for edit mode (first round)
+    media_type: Optional[str] = "image"  # "image" or "video"
     session_id: Optional[str] = None  # continue editing in same session
 
 
@@ -520,10 +521,11 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
                 kwargs["model"] = model
 
             if request.image:
-                # Edit mode first round: upload image
+                # Edit mode first round: upload media (image or video)
                 try:
+                    suffix = ".mp4" if request.media_type == "video" else ".png"
                     image_data = base64.b64decode(request.image)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         tmp.write(image_data)
                         temp_files.append(tmp.name)
                     kwargs["files"] = temp_files
@@ -595,7 +597,8 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
 class VideoGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-2.0-flash"
-    image: Optional[str] = None  # base64 encoded image for image-to-video
+    image: Optional[str] = None  # base64 encoded media for image/video-to-video
+    media_type: Optional[str] = "image"  # "image" or "video"
 
 
 async def download_video_as_base64(video: GeneratedVideo) -> str | None:
@@ -647,12 +650,13 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
 
         if request.image:
             try:
+                suffix = ".mp4" if request.media_type == "video" else ".png"
                 image_data = base64.b64decode(request.image)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     tmp.write(image_data)
                     temp_files.append(tmp.name)
                 kwargs["files"] = temp_files
-                logger.info(f"Image-to-video: image decoded, {len(image_data)} bytes -> {temp_files[0]}")
+                logger.info(f"Media-to-video: {request.media_type} decoded, {len(image_data)} bytes -> {temp_files[0]}")
             except Exception as e:
                 logger.error(f"Failed to decode input image: {e}")
                 raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")

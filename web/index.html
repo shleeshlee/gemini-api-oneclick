@@ -706,15 +706,15 @@ body::before {
       </div>
       <!-- Row 3: Image area (upload + edit) left, buttons right -->
       <div>
-        <div class="studio-label" style="margin-bottom:0.3rem">图片（拖拽上传 / 从图库添加）</div>
+        <div class="studio-label" style="margin-bottom:0.3rem">素材（拖拽上传图片/视频）</div>
         <div id="imgEditRow" style="display:flex;gap:1.2rem;align-items:flex-start">
           <!-- Left: Image display + edit zone -->
           <div style="flex:1 1 0;min-width:0">
             <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.8rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:center" onclick="if(!uploadedImageB64)document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
               <div id="imgUploadEmpty" style="text-align:center;padding:1rem">
                 <div style="font-size:1.5rem;margin-bottom:0.3rem">🖼️</div>
-                <div>拖拽或点击上传图片</div>
-                <div style="font-size:0.72rem;margin-top:0.2rem">支持从项目图库拖入</div>
+                <div>拖拽或点击上传图片/视频</div>
+                <div style="font-size:0.72rem;margin-top:0.2rem">支持从图库拖入 · 图片或视频均可</div>
               </div>
               <div id="imgUploadPreview" style="display:none;width:100%">
                 <img id="imgPreviewImg" style="width:100%;max-height:500px;border-radius:6px;object-fit:contain;display:block">
@@ -722,7 +722,7 @@ body::before {
                 <div id="editSessionInfo" style="display:none;font-size:0.72rem;color:var(--success);text-align:center;margin-top:0.2rem">🔗 编辑会话进行中 — 继续输入指令修改图片</div>
               </div>
             </div>
-            <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
+            <input type="file" id="imgFileInput" accept="image/*,video/*" style="display:none" onchange="handleImageSelect(this)">
           </div>
           <!-- Right: Action buttons, fixed width, top-aligned compact -->
           <div id="imgBtnCol" style="flex:0 0 120px;display:flex;flex-direction:column;gap:0.4rem">
@@ -1637,6 +1637,7 @@ function downloadAllTemp() {
 
 // ── Image Upload + Edit ───────────────────────────────────
 let uploadedImageB64 = null;
+let uploadedMediaType = 'image'; // 'image' or 'video'
 let editSessionId = null;
 let activeAbortController = null;
 
@@ -1679,26 +1680,59 @@ function setEditImage(b64, info) {
   document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function readUploadFile(file) {
-  if (!file.type.startsWith('image/')) { toast('请上传图片文件', 'err'); return; }
+  const isImage = file.type.startsWith('image/');
+  const isVideo = file.type.startsWith('video/');
+  if (!isImage && !isVideo) { toast('请上传图片或视频文件', 'err'); return; }
   const reader = new FileReader();
   reader.onload = (e) => {
     const b64 = e.target.result.split(',')[1];
     const sizeMB = (file.size / 1024 / 1024).toFixed(2);
-    const tmpImg = new Image();
-    tmpImg.onload = () => {
-      setEditImage(b64, `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB`);
-    };
-    tmpImg.src = e.target.result;
+    if (isVideo) {
+      uploadedMediaType = 'video';
+      uploadedImageB64 = b64;
+      editSessionId = null;
+      const preview = document.getElementById('imgUploadPreview');
+      const img = document.getElementById('imgPreviewImg');
+      img.style.display = 'none';
+      // Remove old video preview if exists
+      const oldVid = document.getElementById('vidPreviewPlayer');
+      if (oldVid) oldVid.remove();
+      const vid = document.createElement('video');
+      vid.id = 'vidPreviewPlayer';
+      vid.controls = true;
+      vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
+      vid.src = e.target.result;
+      img.parentNode.insertBefore(vid, img);
+      preview.style.display = '';
+      document.getElementById('imgUploadEmpty').style.display = 'none';
+      document.getElementById('editSessionInfo').style.display = 'none';
+      document.getElementById('imgFileInfo').innerHTML = `<b>${esc(file.name)}</b><br>🎬 视频 · ${sizeMB} MB`;
+    } else {
+      uploadedMediaType = 'image';
+      const tmpImg = new Image();
+      tmpImg.onload = () => {
+        // Make sure image preview is visible, remove video preview
+        const oldVid = document.getElementById('vidPreviewPlayer');
+        if (oldVid) oldVid.remove();
+        document.getElementById('imgPreviewImg').style.display = '';
+        setEditImage(b64, `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB`);
+      };
+      tmpImg.src = e.target.result;
+    }
   };
   reader.readAsDataURL(file);
 }
 function clearUploadImage() {
   uploadedImageB64 = null;
+  uploadedMediaType = 'image';
   editSessionId = null;
   document.getElementById('imgUploadPreview').style.display = 'none';
   document.getElementById('imgUploadEmpty').style.display = '';
   document.getElementById('imgFileInput').value = '';
   document.getElementById('editSessionInfo').style.display = 'none';
+  document.getElementById('imgPreviewImg').style.display = '';
+  const oldVid = document.getElementById('vidPreviewPlayer');
+  if (oldVid) oldVid.remove();
 }
 
 // Load gallery image into edit zone
@@ -1751,7 +1785,7 @@ async function doImgEdit() {
   if (editSessionId) {
     body.session_id = editSessionId;
   } else {
-    body.image = uploadedImageB64;
+    body.image = uploadedImageB64; body.media_type = uploadedMediaType;
   }
 
   try {
@@ -2517,7 +2551,7 @@ async function doVidGen() {
 
   const start = Date.now();
   const body = { prompt, model };
-  if (hasImg) body.image = uploadedImageB64;
+  if (hasImg) body.image = uploadedImageB64; body.media_type = uploadedMediaType;
   try {
     const resp = await fetch('/v1/videos/generations', {
       method: 'POST',
