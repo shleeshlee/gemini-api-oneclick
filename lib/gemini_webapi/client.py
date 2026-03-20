@@ -172,50 +172,88 @@ def _parse_generated_images(candidate_data: list[Any], proxy: str | None, cookie
     return generated_images
 
 
+def _find_video_urls(data: Any, urls: list[str]) -> None:
+    """Recursively find all contribution.usercontent.google.com video URLs in nested data."""
+    if isinstance(data, str):
+        if "usercontent.google.com" in data and ("download" in data or "video" in data.lower()):
+            urls.append(data)
+    elif isinstance(data, list):
+        for item in data:
+            _find_video_urls(item, urls)
+    elif isinstance(data, dict):
+        for v in data.values():
+            _find_video_urls(v, urls)
+
+
+def _find_thumbnail_urls(data: Any, urls: list[str]) -> None:
+    """Recursively find lh3.googleusercontent.com thumbnail URLs in nested data."""
+    if isinstance(data, str):
+        if data.startswith("https://lh3.googleusercontent.com/"):
+            urls.append(data)
+    elif isinstance(data, list):
+        for item in data:
+            _find_thumbnail_urls(item, urls)
+    elif isinstance(data, dict):
+        for v in data.values():
+            _find_thumbnail_urls(v, urls)
+
+
 def _parse_generated_videos(candidate_data: list[Any], proxy: str | None, cookies: Cookies, account_index: int = 0, session_kwargs: dict | None = None) -> list[GeneratedVideo]:
-    """Extract generated videos from candidate data.
-
-    Video data is found at [12, 59, 0, 0, 0] in the candidate response.
-    The video object contains:
-    - [0, 6, 0]: thumbnail URL (lh3.googleusercontent.com/gg/...)
-    - [0, 6, 1]: download URL (contribution.usercontent.google.com/download?...)
-    """
+    """Extract generated videos from candidate data."""
     generated_videos = []
+    seen_urls = set()
 
-    # Path: candidate_data[12][59][0][0][0] contains video entries
+    # Path 1: known path candidate_data[12][59][0]
     video_entries = get_nested_value(candidate_data, [12, 59, 0], [])
-
     for video_entry in video_entries:
-        # Each video entry is at [0][0]
         video_data = get_nested_value(video_entry, [0, 0], None)
         if not video_data:
             continue
-
-        # Get the URLs array at [6]
         urls = get_nested_value(video_data, [6], [])
         if not urls or len(urls) < 2:
             continue
-
         thumbnail_url = urls[0] if urls else ""
         download_url = urls[1] if len(urls) > 1 else ""
-
-        # Only add if we have a download URL (contribution.usercontent.google.com)
         if download_url and "usercontent.google.com" in download_url:
-            # Unescape Unicode sequences like \u003d to =
             download_url = download_url.encode().decode("unicode_escape")
-
-            video_num = len(generated_videos) + 1
+            seen_urls.add(download_url)
             generated_videos.append(
                 GeneratedVideo(
                     url=download_url,
                     thumbnail_url=thumbnail_url,
-                    title=f"[Generated Video {video_num}]",
+                    title=f"[Generated Video {len(generated_videos) + 1}]",
                     proxy=proxy,
                     cookies=cookies,
                     account_index=account_index,
                     session_kwargs=session_kwargs or {},
                 )
             )
+
+    # Path 2: fallback — recursively scan for video download URLs
+    if not generated_videos:
+        candidate_12 = get_nested_value(candidate_data, [12])
+        if candidate_12:
+            vid_urls: list[str] = []
+            _find_video_urls(candidate_12, vid_urls)
+            thumb_urls: list[str] = []
+            _find_thumbnail_urls(candidate_12, thumb_urls)
+            for i, url in enumerate(vid_urls):
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    # Unescape if needed
+                    if "\\u" in url:
+                        url = url.encode().decode("unicode_escape")
+                    generated_videos.append(
+                        GeneratedVideo(
+                            url=url,
+                            thumbnail_url=thumb_urls[i] if i < len(thumb_urls) else "",
+                            title=f"[Generated Video {len(generated_videos) + 1}]",
+                            proxy=proxy,
+                            cookies=cookies,
+                            account_index=account_index,
+                            session_kwargs=session_kwargs or {},
+                        )
+                    )
 
     return generated_videos
 
@@ -234,8 +272,15 @@ _IMAGE_GEN_BLOCKED_PATTERNS = [
     r"I can search for images, but can't.*create",
 ]
 
-# Video generation pending pattern - must contain the placeholder URL
-_VIDEO_GEN_PENDING_PATTERN = r"http://googleusercontent\.com/video_gen_chip/\d+"
+# Video generation pending patterns
+_VIDEO_GEN_PENDING_PATTERNS = [
+    r"http://googleusercontent\.com/video_gen_chip/\d+",
+    r"正在生成视频",
+    r"视频已准备就绪",
+    r"generating.*video",
+    r"video.*ready",
+    r"I'm generating your video",
+]
 
 # Video generation rate limit / blocked patterns
 _VIDEO_GEN_BLOCKED_PATTERNS = [
@@ -243,6 +288,7 @@ _VIDEO_GEN_BLOCKED_PATTERNS = [
     r"come back tomorrow",
     r"video generation isn't available",
     r"unable to generate.*video",
+    r"无法.*生成.*视频",
 ]
 
 # Video polling configuration
@@ -277,8 +323,11 @@ def _is_video_generation_pending(text: str) -> bool:
     for pattern in _VIDEO_GEN_BLOCKED_PATTERNS:
         if re.search(pattern, text, re.IGNORECASE):
             return False
-    # Then check for the pending placeholder URL
-    return bool(re.search(_VIDEO_GEN_PENDING_PATTERN, text, re.IGNORECASE))
+    # Check any pending pattern
+    for pattern in _VIDEO_GEN_PENDING_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
 
 
 def _check_rate_limit_response(text: str) -> None:
