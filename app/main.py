@@ -349,6 +349,17 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                 reply_text += response.text
             else:
                 reply_text += str(response)
+
+            # If Gemini returned images (edit/generation), embed as base64 markdown
+            if hasattr(response, "images") and response.images:
+                logger.info(f"Response contains {len(response.images)} image(s), downloading...")
+                for idx, img in enumerate(response.images):
+                    b64 = await download_image_as_base64(img)
+                    if b64:
+                        reply_text += f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"
+                        logger.info(f"Image {idx} embedded, base64 length={len(b64)}")
+                    else:
+                        logger.warning(f"Failed to download response image {idx}")
             reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
             reply_text = reply_text.replace("\\#", "#").replace("\\!", "!").replace("\\|", "|")
             # Strip code fences wrapping HTML content (Gemini sometimes wraps HTML in ```)
@@ -457,6 +468,13 @@ class ImageGenerationRequest(BaseModel):
     style: Optional[str] = None
     negative_prompt: Optional[str] = None
     response_format: Optional[str] = "b64_json"
+    image: Optional[str] = None  # base64 encoded image for edit mode (first round)
+    session_id: Optional[str] = None  # continue editing in same session
+
+
+# Edit session store: session_id -> ChatSession
+_edit_sessions: dict[str, Any] = {}
+_SESSION_TTL = 600  # 10 minutes
 
 
 SIZE_TO_ASPECT = {
@@ -559,38 +577,81 @@ def build_image_prompt(request: ImageGenerationRequest) -> str:
     return f"{prefix}{request.prompt}{suffix}"
 
 
+def _cleanup_expired_sessions():
+    """Remove sessions older than TTL."""
+    now = time.time()
+    expired = [sid for sid, (_, ts) in _edit_sessions.items() if now - ts > _SESSION_TTL]
+    for sid in expired:
+        del _edit_sessions[sid]
+
+
 @app.post("/v1/images/generations")
 async def create_image(request: ImageGenerationRequest, api_key: str = Depends(verify_api_key)):
-    """DALL-E compatible image generation endpoint using Gemini ImageFX."""
+    """DALL-E compatible image generation endpoint using Gemini ImageFX.
+
+    Edit mode:
+    - First round: send `image` (base64) + `prompt` → returns `session_id`
+    - Subsequent rounds: send `session_id` + `prompt` (no image needed) → continues editing
+    """
+    temp_files = []
     try:
         client = await get_or_create_client()
-        logger.info(f"Image generation request: '{request.prompt[:100]}' style={request.style} quality={request.quality} size={request.size}")
+        _cleanup_expired_sessions()
+        logger.info(f"Image generation request: '{request.prompt[:100]}' style={request.style} has_image={request.image is not None} session={request.session_id}")
 
         model = map_model_name(request.model) if request.model else None
         prompt = build_image_prompt(request)
-        logger.info(f"Final prompt: '{prompt[:200]}' model={model}")
 
-        kwargs = {}
-        if model:
-            kwargs["model"] = model
+        chat = None
+        session_id = request.session_id
 
-        response = await client.generate_content(prompt, **kwargs)
+        # Continue existing edit session
+        if session_id and session_id in _edit_sessions:
+            chat, _ = _edit_sessions[session_id]
+            _edit_sessions[session_id] = (chat, time.time())  # refresh TTL
+            logger.info(f"Continuing edit session {session_id}, cid={chat.cid}")
+            response = await chat.send_message(prompt)
 
-        # Log what we got back for debugging
+        else:
+            # New request (text-to-image or first round of edit)
+            kwargs = {}
+            if model:
+                kwargs["model"] = model
+
+            if request.image:
+                # Edit mode first round: upload image
+                try:
+                    image_data = base64.b64decode(request.image)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                        tmp.write(image_data)
+                        temp_files.append(tmp.name)
+                    kwargs["files"] = temp_files
+                    logger.info(f"Edit mode: image decoded, {len(image_data)} bytes -> {temp_files[0]}")
+                except Exception as e:
+                    logger.error(f"Failed to decode input image: {e}")
+                    raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
+
+                # Start a ChatSession so subsequent edits stay in context
+                chat = client.start_chat()
+                response = await chat.send_message(prompt, files=temp_files)
+                session_id = str(uuid.uuid4())[:12]
+                _edit_sessions[session_id] = (chat, time.time())
+                logger.info(f"New edit session {session_id} created, cid={chat.cid}")
+
+            else:
+                # Pure text-to-image (no session needed)
+                response = await client.generate_content(prompt, **kwargs)
+
+        # Log what we got back
         logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
         logger.info(f"Response images: {response.images}")
-        logger.info(f"Generated images: {response.candidates[response.chosen].generated_images}")
-        logger.info(f"Web images: {response.candidates[response.chosen].web_images}")
 
         images = response.images
-        if not images:
-            # Try alternate prompt format
+        if not images and not chat:
+            # Retry only for pure text-to-image
             logger.info("No images with first prompt, trying alternate format...")
-            response = await client.generate_content(
-                f"Create a picture: {request.prompt}"
-            )
+            response = await client.generate_content(f"Create a picture: {request.prompt}")
             images = response.images
-            logger.info(f"Alternate attempt images: {images}")
 
         if not images:
             raise HTTPException(status_code=422, detail=f"Gemini did not generate images. Response: {response.text[:300] if response.text else 'empty'}")
@@ -608,8 +669,11 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
         if not result_data:
             raise HTTPException(status_code=500, detail="Images found but all downloads failed")
 
-        logger.info(f"Image generation complete: {len(result_data)} image(s)")
-        return {"created": int(time.time()), "data": result_data, "final_prompt": prompt}
+        logger.info(f"Image generation complete: {len(result_data)} image(s), session={session_id}")
+        result = {"created": int(time.time()), "data": result_data, "final_prompt": prompt}
+        if session_id:
+            result["session_id"] = session_id
+        return result
 
     except HTTPException:
         raise
@@ -619,6 +683,12 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
         if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+    finally:
+        for tf in temp_files:
+            try:
+                os.unlink(tf)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
