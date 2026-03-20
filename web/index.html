@@ -721,6 +721,7 @@ body::before {
             <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
             <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
             <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
+            <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
           </div>
         </div>
       </div>
@@ -738,6 +739,13 @@ body::before {
       <div id="imgTempInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
       <details id="imgPromptPreview" style="margin-bottom:0.5rem;display:none"><summary style="cursor:pointer;font-size:0.72rem;color:var(--text-light);user-select:none">📝 查看发送的提示词</summary><pre id="imgPromptText" onclick="navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="margin-top:0.3rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.72rem;line-height:1.4;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border:1px solid var(--border);cursor:pointer"></pre></details>
       <div id="imgTempGrid" class="img-grid cols-2"></div>
+    </div>
+
+    <!-- Zone 2b: Video Results -->
+    <div class="studio-section" id="vidResultZone" style="display:none">
+      <div class="studio-section-title"><span>🎬 视频结果</span></div>
+      <div id="vidResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
+      <div id="vidResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
     </div>
 
     <!-- Zone 3: Project Gallery -->
@@ -2454,6 +2462,78 @@ function gmSavePicker() {
 document.getElementById('newGroupName').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); createGroup(); }
 });
+
+// ========== Video Generation ==========
+async function doVidGen() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) return;
+  const model = document.getElementById('imgModel').value;
+  const btn = document.getElementById('vidGenBtn');
+  const zone = document.getElementById('vidResultZone');
+  const grid = document.getElementById('vidResultGrid');
+  const info = document.getElementById('vidResultInfo');
+
+  btn.disabled = true; btn.innerHTML = '🎬 生成中...';
+  zone.style.display = '';
+  info.textContent = '正在生成视频，Veo 需要 1-5 分钟，请耐心等待...';
+  grid.innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
+
+  const start = Date.now();
+  try {
+    const resp = await fetch('/v1/videos/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, model })
+    });
+    const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
+
+    if (data.data && data.data.length > 0) {
+      info.textContent = `${sec}s · ${data.data.length} 个视频`;
+      grid.innerHTML = '';
+      data.data.forEach((v, i) => {
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border)';
+        let html = '';
+        if (v.b64_json) {
+          html += `<video controls style="width:100%;border-radius:6px;max-height:400px" src="data:video/mp4;base64,${v.b64_json}"></video>`;
+        } else if (v.url) {
+          html += `<div style="padding:1rem;text-align:center;color:var(--text-muted)">视频已生成但无法内联播放</div>`;
+        }
+        html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
+        if (v.b64_json) {
+          html += `<button class="img-action-btn dl" onclick="downloadVideo(${i})" style="flex:1">⬇ 下载</button>`;
+        }
+        if (v.url) {
+          html += `<button class="img-action-btn save" onclick="window.open('${v.url}','_blank')" style="flex:1">🔗 源链接</button>`;
+        }
+        html += '</div>';
+        if (data.text) {
+          html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
+        }
+        card.innerHTML = html;
+        grid.appendChild(card);
+      });
+      // Store for download
+      window._vidResults = data.data;
+    } else {
+      const errMsg = data.detail || data.error?.message || '未生成视频';
+      grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">${esc(errMsg)}</div>`;
+    }
+  } catch(e) {
+    grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.innerHTML = '🎬 生成视频';
+}
+
+function downloadVideo(idx) {
+  const v = window._vidResults?.[idx];
+  if (!v?.b64_json) return;
+  const a = document.createElement('a');
+  a.href = 'data:video/mp4;base64,' + v.b64_json;
+  a.download = `video_${Date.now()}.mp4`;
+  a.click();
+}
 
 </script>
 </body>
