@@ -94,168 +94,79 @@ def _raise_for_error_code(error_code: int, model_name: str) -> None:
             raise APIError(f"Failed to generate contents (stream). Unknown API error code: {error_code}. This might be a temporary Google service issue.")
 
 
-def _parse_web_images(candidate_data: list[Any], proxy: str | None, session_kwargs: dict | None = None) -> list[WebImage]:
-    """Extract web images from candidate data."""
-    web_images = []
-    for web_img_data in get_nested_value(candidate_data, [12, 1], []):
-        url = get_nested_value(web_img_data, [0, 0, 0])
-        if url:
-            web_images.append(
-                WebImage(
-                    url=url,
-                    title=get_nested_value(web_img_data, [7, 0], ""),
-                    alt=get_nested_value(web_img_data, [0, 4], ""),
-                    proxy=proxy,
-                    session_kwargs=session_kwargs or {},
-                )
-            )
-    return web_images
-
-
-def _find_image_urls(data: Any, urls: list[str]) -> None:
-    """Recursively find all lh3.googleusercontent.com image URLs in nested data."""
+def _collect_all_urls(data: Any, result: dict[str, list[str]]) -> None:
+    """Recursively scan nested data and classify all URLs by type."""
     if isinstance(data, str):
-        if data.startswith("https://lh3.googleusercontent.com/"):
-            urls.append(data)
+        if not data.startswith("http"):
+            return
+        if "usercontent.google.com" in data and ("download" in data or "video" in data.lower()):
+            result["video"].append(data)
+        elif data.startswith("https://lh3.googleusercontent.com/"):
+            result["image"].append(data)
+        elif data.startswith("https://encrypted-tbn") or data.startswith("https://www.google.com/imgres"):
+            result["web_image"].append(data)
     elif isinstance(data, list):
         for item in data:
-            _find_image_urls(item, urls)
+            _collect_all_urls(item, result)
     elif isinstance(data, dict):
         for v in data.values():
-            _find_image_urls(v, urls)
+            _collect_all_urls(v, result)
 
 
-def _parse_generated_images(candidate_data: list[Any], proxy: str | None, cookies: Cookies, account_index: int = 0, session_kwargs: dict | None = None) -> list[GeneratedImage]:
-    """Extract generated images from candidate data."""
-    generated_images = []
-    seen_urls = set()
+def _parse_all_media(
+    candidate_data: list[Any],
+    proxy: str | None,
+    cookies: Cookies,
+    account_index: int = 0,
+    session_kwargs: dict | None = None,
+) -> tuple[list[WebImage], list[GeneratedImage], list[GeneratedVideo]]:
+    """Extract all media from candidate data by recursively scanning for URLs."""
+    sk = session_kwargs or {}
 
-    # Path 1: ImageFX generated images (candidate_data[12][7][0])
-    for gen_img_data in get_nested_value(candidate_data, [12, 7, 0], []):
-        url = get_nested_value(gen_img_data, [0, 3, 3])
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            img_num = get_nested_value(gen_img_data, [3, 6])
+    # Collect every URL from the entire candidate_data
+    url_map: dict[str, list[str]] = {"image": [], "video": [], "web_image": []}
+    _collect_all_urls(candidate_data, url_map)
+
+    # Deduplicate
+    seen: set[str] = set()
+
+    # Web images
+    web_images: list[WebImage] = []
+    for url in url_map["web_image"]:
+        if url not in seen:
+            seen.add(url)
+            web_images.append(WebImage(url=url, title="", alt="", proxy=proxy, session_kwargs=sk))
+
+    # Generated images (lh3.googleusercontent.com)
+    generated_images: list[GeneratedImage] = []
+    for url in url_map["image"]:
+        if url not in seen:
+            seen.add(url)
             generated_images.append(
                 GeneratedImage(
-                    url=url,
-                    title=f"[Generated Image {img_num}]" if img_num else "[Generated Image]",
-                    alt=get_nested_value(gen_img_data, [3, 5, 0], ""),
-                    proxy=proxy,
-                    cookies=cookies,
-                    account_index=account_index,
-                    session_kwargs=session_kwargs or {},
+                    url=url, title="[Generated Image]", alt="",
+                    proxy=proxy, cookies=cookies, account_index=account_index, session_kwargs=sk,
                 )
             )
 
-    # Path 2: fallback — recursively scan candidate_data[12] for any image URLs
-    if not generated_images:
-        candidate_12 = get_nested_value(candidate_data, [12])
-        if candidate_12:
-            urls: list[str] = []
-            _find_image_urls(candidate_12, urls)
-            for url in urls:
-                if url not in seen_urls:
-                    seen_urls.add(url)
-                    generated_images.append(
-                        GeneratedImage(
-                            url=url,
-                            title="[Generated Image]",
-                            alt="",
-                            proxy=proxy,
-                            cookies=cookies,
-                            account_index=account_index,
-                            session_kwargs=session_kwargs or {},
-                        )
-                    )
-
-    return generated_images
-
-
-def _find_video_urls(data: Any, urls: list[str]) -> None:
-    """Recursively find all contribution.usercontent.google.com video URLs in nested data."""
-    if isinstance(data, str):
-        if "usercontent.google.com" in data and ("download" in data or "video" in data.lower()):
-            urls.append(data)
-    elif isinstance(data, list):
-        for item in data:
-            _find_video_urls(item, urls)
-    elif isinstance(data, dict):
-        for v in data.values():
-            _find_video_urls(v, urls)
-
-
-def _find_thumbnail_urls(data: Any, urls: list[str]) -> None:
-    """Recursively find lh3.googleusercontent.com thumbnail URLs in nested data."""
-    if isinstance(data, str):
-        if data.startswith("https://lh3.googleusercontent.com/"):
-            urls.append(data)
-    elif isinstance(data, list):
-        for item in data:
-            _find_thumbnail_urls(item, urls)
-    elif isinstance(data, dict):
-        for v in data.values():
-            _find_thumbnail_urls(v, urls)
-
-
-def _parse_generated_videos(candidate_data: list[Any], proxy: str | None, cookies: Cookies, account_index: int = 0, session_kwargs: dict | None = None) -> list[GeneratedVideo]:
-    """Extract generated videos from candidate data."""
-    generated_videos = []
-    seen_urls = set()
-
-    # Path 1: known path candidate_data[12][59][0]
-    video_entries = get_nested_value(candidate_data, [12, 59, 0], [])
-    for video_entry in video_entries:
-        video_data = get_nested_value(video_entry, [0, 0], None)
-        if not video_data:
-            continue
-        urls = get_nested_value(video_data, [6], [])
-        if not urls or len(urls) < 2:
-            continue
-        thumbnail_url = urls[0] if urls else ""
-        download_url = urls[1] if len(urls) > 1 else ""
-        if download_url and "usercontent.google.com" in download_url:
-            download_url = download_url.encode().decode("unicode_escape")
-            seen_urls.add(download_url)
+    # Generated videos (contribution.usercontent.google.com)
+    generated_videos: list[GeneratedVideo] = []
+    for url in url_map["video"]:
+        if url not in seen:
+            seen.add(url)
+            # Unescape if needed
+            clean_url = url.encode().decode("unicode_escape") if "\\u" in url else url
+            # Try to find a thumbnail from the image URLs
+            thumb = url_map["image"][len(generated_videos)] if len(generated_videos) < len(url_map["image"]) else ""
             generated_videos.append(
                 GeneratedVideo(
-                    url=download_url,
-                    thumbnail_url=thumbnail_url,
+                    url=clean_url, thumbnail_url=thumb,
                     title=f"[Generated Video {len(generated_videos) + 1}]",
-                    proxy=proxy,
-                    cookies=cookies,
-                    account_index=account_index,
-                    session_kwargs=session_kwargs or {},
+                    proxy=proxy, cookies=cookies, account_index=account_index, session_kwargs=sk,
                 )
             )
 
-    # Path 2: fallback — recursively scan for video download URLs
-    if not generated_videos:
-        candidate_12 = get_nested_value(candidate_data, [12])
-        if candidate_12:
-            vid_urls: list[str] = []
-            _find_video_urls(candidate_12, vid_urls)
-            thumb_urls: list[str] = []
-            _find_thumbnail_urls(candidate_12, thumb_urls)
-            for i, url in enumerate(vid_urls):
-                if url not in seen_urls:
-                    seen_urls.add(url)
-                    # Unescape if needed
-                    if "\\u" in url:
-                        url = url.encode().decode("unicode_escape")
-                    generated_videos.append(
-                        GeneratedVideo(
-                            url=url,
-                            thumbnail_url=thumb_urls[i] if i < len(thumb_urls) else "",
-                            title=f"[Generated Video {len(generated_videos) + 1}]",
-                            proxy=proxy,
-                            cookies=cookies,
-                            account_index=account_index,
-                            session_kwargs=session_kwargs or {},
-                        )
-                    )
-
-    return generated_videos
+    return web_images, generated_images, generated_videos
 
 
 # Patterns indicating rate limiting by Gemini
@@ -1157,9 +1068,9 @@ class GeminiClient(GemMixin):
 
         thoughts = get_nested_value(candidate_data, [37, 0, 0]) or ""
 
-        web_images = _parse_web_images(candidate_data, self.proxy, self.session_kwargs)
-        generated_images = _parse_generated_images(candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs)
-        generated_videos = _parse_generated_videos(candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs)
+        web_images, generated_images, generated_videos = _parse_all_media(
+            candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs
+        )
 
         # Determine if this frame represents the final state
         flags.is_final_chunk = isinstance(get_nested_value(candidate_data, [2]), list) or get_nested_value(candidate_data, [8, 0], 1) == 2
