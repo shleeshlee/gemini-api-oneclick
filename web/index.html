@@ -437,6 +437,14 @@ body::before {
   .studio-section { overflow: hidden; }
   .img-model-sel { flex: 1 1 100% !important; min-width: 0 !important; }
   .img-ctrl-row > div:last-child { flex: 1 1 100%; }
+  /* Mobile: hide edit/download on gallery image cards, keep prompt+delete */
+  .img-card .img-action-btn.mobile-hide { display: none !important; }
+  /* Mobile: gallery images get a tap-to-load overlay */
+  .img-card .mobile-load-btn {
+    display: block; position: absolute; top: 4px; left: 4px;
+    background: rgba(99,102,241,0.85); color: #fff; border: none;
+    border-radius: 4px; font-size: 0.65rem; padding: 2px 6px; cursor: pointer; z-index: 2;
+  }
 }
 
 /* --- GUARD SETTINGS MODAL --- */
@@ -2042,11 +2050,12 @@ function renderGallery() {
     const src = `/data/images/${img.filename}`;
     const date = new Date(img.created * 1000).toLocaleString();
     const fp = esc(img.final_prompt || img.prompt || '');
-    return `<div class="img-card" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','gallery:${img.filename}')">
+    return `<div class="img-card" style="position:relative" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','gallery:${img.filename}')">
+      <button class="mobile-load-btn" style="display:none" onclick="event.stopPropagation();loadGalleryImageToEdit('${img.filename}')">📥 载入</button>
       <img src="${src}" loading="lazy" onclick="window.open('${src}')" title="${fp}">
       <div class="img-card-actions">
-        <button class="img-action-btn save" onclick="event.stopPropagation();loadGalleryImageToEdit('${img.filename}')" title="编辑">✏️</button>
-        <a class="img-action-btn dl" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+        <button class="img-action-btn save mobile-hide" onclick="event.stopPropagation();loadGalleryImageToEdit('${img.filename}')" title="编辑">✏️</button>
+        <a class="img-action-btn dl mobile-hide" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
         <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteGalleryImage('${img.id}')">🗑</button>
       </div>
