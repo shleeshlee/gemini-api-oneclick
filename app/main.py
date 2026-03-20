@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
 from gemini_webapi.types.image import GeneratedImage
+from gemini_webapi.types.video import GeneratedVideo
 
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 # gemini_webapi's RotateCookies sends 401 and invalidates all cookies.
@@ -589,6 +590,101 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
                 os.unlink(tf)
             except Exception:
                 pass
+
+
+class VideoGenerationRequest(BaseModel):
+    prompt: str
+    model: Optional[str] = "gemini-2.0-flash"
+
+
+async def download_video_as_base64(video: GeneratedVideo) -> str | None:
+    """Download a video and return as raw base64 string."""
+    try:
+        url = video.url
+        # Build cookies for download
+        req_cookies = {}
+        if video.cookies:
+            if isinstance(video.cookies, dict):
+                req_cookies = video.cookies
+            elif hasattr(video.cookies, "jar"):
+                req_cookies = {c.name: c.value for c in video.cookies.jar}
+
+        async with AsyncClient(
+            http2=True, follow_redirects=True, cookies=req_cookies, timeout=60.0
+        ) as http_client:
+            # Add authuser for multi-account support
+            if "usercontent.google.com" in url and "authuser" not in url:
+                url += f"&authuser={video.account_index}" if "?" in url else f"?authuser={video.account_index}"
+            resp = await http_client.get(url)
+            if resp.status_code == 200:
+                return base64.b64encode(resp.content).decode("utf-8")
+            else:
+                logger.warning(f"Failed to download video: {resp.status_code} {url[:80]}")
+                return None
+    except Exception as e:
+        logger.error(f"Error downloading video: {e}")
+        return None
+
+
+@app.post("/v1/videos/generations")
+async def create_video(request: VideoGenerationRequest, api_key: str = Depends(verify_api_key)):
+    """Video generation endpoint using Gemini Veo.
+
+    Returns both download URL and base64 data.
+    Library handles video polling automatically (up to 5 minutes).
+    """
+    try:
+        client = await get_or_create_client()
+        logger.info(f"Video generation: '{request.prompt[:200]}'")
+
+        model = map_model_name(request.model) if request.model else None
+        kwargs = {}
+        if model:
+            kwargs["model"] = model
+
+        response = await client.generate_content(request.prompt, **kwargs)
+
+        logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
+        logger.info(f"Response videos: {response.videos}")
+
+        if not response.videos:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Gemini did not generate video. Response: {response.text[:300] if response.text else 'empty'}"
+            )
+
+        result_data = []
+        for idx, video in enumerate(response.videos):
+            logger.info(f"Downloading video {idx}: {video.url[:80]}...")
+            entry = {
+                "url": video.url,
+                "thumbnail_url": video.thumbnail_url or "",
+            }
+            b64 = await download_video_as_base64(video)
+            if b64:
+                entry["b64_json"] = b64
+                logger.info(f"Video {idx} downloaded OK, base64 length={len(b64)}")
+            else:
+                logger.warning(f"Video {idx} base64 download failed, URL still available")
+            result_data.append(entry)
+
+        logger.info(f"Video generation complete: {len(result_data)} video(s)")
+        return {
+            "created": int(time.time()),
+            "data": result_data,
+            "text": response.text or "",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video generation error: {e}", exc_info=True)
+        error_msg = str(e).lower()
+        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+            await reset_client()
+        if any(kw in error_msg for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
+            raise HTTPException(status_code=429, detail=f"Video rate limited: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
 
 
 if __name__ == "__main__":
