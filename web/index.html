@@ -691,33 +691,36 @@ body::before {
           </div>
         </div>
       </div>
-      <!-- Row 3: Reference image left + buttons right -->
+      <!-- Row 3: Image area (upload + edit) left, buttons right -->
       <div>
-        <div class="studio-label">参考图片（可选，用于风格解析）</div>
-        <div style="display:flex;gap:3rem;align-items:stretch;flex-wrap:wrap">
-          <!-- Left: Reference image -->
+        <div class="studio-label" style="margin-bottom:0.3rem">图片（拖拽上传 / 从图库添加）</div>
+        <div id="imgEditRow" style="display:flex;gap:1.2rem;align-items:flex-start">
+          <!-- Left: Image display + edit zone -->
           <div style="flex:1 1 0;min-width:0">
-            <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.6rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted);min-height:7rem;display:flex;align-items:center;justify-content:center" onclick="document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
-              <div id="imgUploadEmpty" style="text-align:center;padding:0.3rem">拖拽或点击上传图片</div>
-              <div id="imgUploadPreview" style="display:none">
-                <div style="display:flex;gap:0.8rem;align-items:start">
-                  <img id="imgPreviewImg" style="max-height:120px;max-width:200px;border-radius:6px;object-fit:contain">
-                  <div style="flex:1;min-width:0">
-                    <div id="imgFileInfo" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem"></div>
-                    <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
-                      <button onclick="event.stopPropagation();analyzeStyle()" style="border:none;background:var(--accent-light);color:#92610E;border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer" id="analyzeBtn">🔍 解析风格</button>
-                      <button onclick="event.stopPropagation();clearUploadImage()" style="border:none;background:var(--danger-light);color:var(--danger);border-radius:4px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer">✕ 移除</button>
-                    </div>
-                  </div>
-                </div>
+            <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.8rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:center" onclick="if(!uploadedImageB64)document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
+              <div id="imgUploadEmpty" style="text-align:center;padding:1rem">
+                <div style="font-size:1.5rem;margin-bottom:0.3rem">🖼️</div>
+                <div>拖拽或点击上传图片</div>
+                <div style="font-size:0.72rem;margin-top:0.2rem">支持从项目图库拖入</div>
+              </div>
+              <div id="imgUploadPreview" style="display:none;width:100%">
+                <img id="imgPreviewImg" style="width:100%;max-height:500px;border-radius:6px;object-fit:contain;display:block">
+                <div id="imgFileInfo" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;text-align:center"></div>
+                <div id="editSessionInfo" style="display:none;font-size:0.72rem;color:var(--success);text-align:center;margin-top:0.2rem">🔗 编辑会话进行中 — 继续输入指令修改图片</div>
               </div>
             </div>
             <input type="file" id="imgFileInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
           </div>
-          <!-- Right: Action buttons, top/bottom aligned with upload box -->
-          <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;gap:1.2rem;min-width:140px">
-            <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="padding:0.6rem 1rem;font-size:0.8rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap">✨ 优化提示词</button>
-            <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="padding:0.6rem 1rem;font-size:0.85rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm)">🎨 生成图片</button>
+          <!-- Right: Action buttons, fixed width, top-aligned compact -->
+          <div id="imgBtnCol" style="flex:0 0 120px;display:flex;flex-direction:column;gap:0.4rem">
+            <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
+            <button class="btn btn-primary" id="imgEditBtn" onclick="doImgEdit()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">✏️ 编辑图片</button>
+            <button class="btn btn-ghost" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入图库</button>
+            <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除</button>
+            <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消请求</button>
+            <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
+            <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+            <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
           </div>
         </div>
       </div>
@@ -788,7 +791,7 @@ body::before {
         <div class="log-header" style="font-size:0.85rem">容器日志</div>
         <span class="log-arrow" id="cLogArrow">&#x25BC;</span>
       </div>
-      <div class="log-body" id="cLogBody" style="max-height:0">
+      <div class="log-body" id="cLogBody">
         <div class="log-list" id="cLogList" style="font-size:0.72rem"></div>
       </div>
     </div>
@@ -1216,7 +1219,16 @@ async function loadContainerLog(num) {
     const resp = await fetch(`/gateway/container-log/${num}?tail=40`, { headers: authHeaders() });
     const data = await resp.json();
     if (data.ok && data.lines.length > 0) {
-      list.innerHTML = data.lines.map(l => `<div class="log-entry info">${esc(l)}</div>`).join('');
+      list.innerHTML = data.lines.map(l => {
+        // Parse docker timestamp: 2026-03-20T17:37:57.941696623Z ...
+        let time = '', msg = l;
+        const m = l.match(/^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2}))\.\d+Z\s*(.*)/);
+        if (m) { time = m[2]; msg = m[3]; }
+        const isErr = /error|fail|exception|traceback|500|blocked/i.test(msg);
+        const cls = isErr ? 'error' : 'info';
+        const timeHtml = time ? `<span class="time">${time}</span>` : '';
+        return `<div class="log-entry ${cls}">${timeHtml}${esc(msg)}</div>`;
+      }).join('');
       list.parentElement.scrollTop = list.parentElement.scrollHeight;
     } else {
       list.innerHTML = '<div class="log-entry info">暂无日志</div>';
@@ -1275,7 +1287,15 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   document.getElementById('tabContent' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
-  if (tab === 'studio') loadGallery();
+  if (tab === 'studio') {
+    loadGallery();
+    // Sync upload area height with button column (must be visible to measure)
+    requestAnimationFrame(() => {
+      const col = document.getElementById('imgBtnCol');
+      const area = document.getElementById('imgUploadArea');
+      if (col && area && !uploadedImageB64) area.style.minHeight = col.offsetHeight + 'px';
+    });
+  }
 }
 
 // ── Image Studio ──────────────────────────────────────────
@@ -1326,6 +1346,12 @@ function renderStyleChips() {
 }
 
 function initImgStudio() {
+  // Sync upload area min-height with button column height
+  requestAnimationFrame(() => {
+    const col = document.getElementById('imgBtnCol');
+    const area = document.getElementById('imgUploadArea');
+    if (col && area) area.style.minHeight = col.offsetHeight + 'px';
+  });
   renderStyleChips();
   const ratiosEl = document.getElementById('imgRatios');
   ratiosEl.innerHTML = IMG_RATIOS.map(r =>
@@ -1466,12 +1492,13 @@ async function doImgGen() {
   const zone = document.getElementById('imgTempZone');
 
   btn.disabled = true; btn.innerHTML = '🍪 生成中...';
+  activeAbortController = new AbortController();
+  showCancelBtn();
   zone.style.display = '';
   document.getElementById('imgTempInfo').textContent = `正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...`;
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
 
   const start = Date.now();
-  // Append active dimension descriptors to prompt
   const dimsPrompt = getActiveDimsPrompt();
   const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
   const body = { prompt: finalPrompt, model, n, size, quality };
@@ -1482,6 +1509,7 @@ async function doImgGen() {
     const resp = await fetch('/v1/images/generations', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      signal: activeAbortController.signal,
       body: JSON.stringify(body)
     });
     const data = await resp.json();
@@ -1509,9 +1537,12 @@ async function doImgGen() {
       tempImages = [];
     }
   } catch(e) {
-    document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`;
+    if (e.name === 'AbortError') { document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">已取消</div>'; }
+    else { document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`; }
     tempImages = [];
   }
+  activeAbortController = null;
+  hideCancelBtn();
   btn.disabled = false; btn.innerHTML = '🎨 生成图片';
 }
 
@@ -1564,27 +1595,56 @@ function downloadAllTemp() {
 
 // ── Image Upload + Edit ───────────────────────────────────
 let uploadedImageB64 = null;
+let editSessionId = null;
+let activeAbortController = null;
+
+function showCancelBtn() { document.getElementById('imgCancelBtn').style.display = ''; }
+function hideCancelBtn() { document.getElementById('imgCancelBtn').style.display = 'none'; }
+function cancelImgRequest() {
+  if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
+  hideCancelBtn();
+  toast('已取消请求', 'ok');
+  // Reset button states
+  document.getElementById('imgEditBtn').disabled = false;
+  document.getElementById('imgEditBtn').innerHTML = '✏️ 编辑图片';
+  document.getElementById('imgGenBtn').disabled = false;
+  document.getElementById('imgGenBtn').innerHTML = '🎨 生成图片';
+}
 
 function handleImageSelect(input) {
   if (input.files && input.files[0]) readUploadFile(input.files[0]);
 }
 function handleImageDrop(e) {
+  // Support drag from gallery
+  const galleryData = e.dataTransfer.getData('text/plain');
+  if (galleryData && galleryData.startsWith('gallery:')) {
+    const filename = galleryData.replace('gallery:', '');
+    loadGalleryImageToEdit(filename);
+    return;
+  }
   if (e.dataTransfer.files && e.dataTransfer.files[0]) readUploadFile(e.dataTransfer.files[0]);
+}
+function setEditImage(b64, info) {
+  uploadedImageB64 = b64;
+  editSessionId = null;
+  const img = document.getElementById('imgPreviewImg');
+  img.src = 'data:image/png;base64,' + b64;
+  document.getElementById('imgUploadPreview').style.display = '';
+  document.getElementById('imgUploadEmpty').style.display = 'none';
+  document.getElementById('editSessionInfo').style.display = 'none';
+  document.getElementById('imgFileInfo').innerHTML = info || '';
+  // Scroll to edit area
+  document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function readUploadFile(file) {
   if (!file.type.startsWith('image/')) { toast('请上传图片文件', 'err'); return; }
   const reader = new FileReader();
   reader.onload = (e) => {
-    uploadedImageB64 = e.target.result.split(',')[1];
-    const img = document.getElementById('imgPreviewImg');
-    img.src = e.target.result;
-    document.getElementById('imgUploadPreview').style.display = '';
-    document.getElementById('imgUploadEmpty').style.display = 'none';
-    // Show original file info
+    const b64 = e.target.result.split(',')[1];
     const sizeMB = (file.size / 1024 / 1024).toFixed(2);
     const tmpImg = new Image();
     tmpImg.onload = () => {
-      document.getElementById('imgFileInfo').innerHTML = `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB · ${file.type}`;
+      setEditImage(b64, `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB`);
     };
     tmpImg.src = e.target.result;
   };
@@ -1592,9 +1652,107 @@ function readUploadFile(file) {
 }
 function clearUploadImage() {
   uploadedImageB64 = null;
+  editSessionId = null;
   document.getElementById('imgUploadPreview').style.display = 'none';
   document.getElementById('imgUploadEmpty').style.display = '';
   document.getElementById('imgFileInput').value = '';
+  document.getElementById('editSessionInfo').style.display = 'none';
+}
+
+// Load gallery image into edit zone
+async function loadGalleryImageToEdit(filename) {
+  try {
+    const resp = await fetch(`/data/images/${filename}`);
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const b64 = e.target.result.split(',')[1];
+      const tmpImg = new Image();
+      tmpImg.onload = () => {
+        setEditImage(b64, `从图库加载 · ${tmpImg.naturalWidth} × ${tmpImg.naturalHeight}`);
+        toast('已加载到编辑区', 'ok');
+      };
+      tmpImg.src = e.target.result;
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) { toast('加载失败: ' + e.message, 'err'); }
+}
+
+// Save currently displayed image to gallery
+async function saveUploadedToGallery() {
+  if (!uploadedImageB64) { toast('没有图片可保存', 'err'); return; }
+  try {
+    const prompt = document.getElementById('imgPrompt').value.trim() || '手动上传';
+    const resp = await fetch('/gateway/images/save', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ b64: uploadedImageB64, prompt, final_prompt: '', style: '', size: '', quality: '', channel: '' })
+    });
+    const data = await resp.json();
+    if (data.ok) { toast('已保存到图库', 'ok'); loadGallery(); }
+    else { toast(data.detail || '保存失败', 'err'); }
+  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+}
+
+// Edit image: send image + prompt, continue with session
+async function doImgEdit() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请输入编辑指令', 'err'); return; }
+  if (!uploadedImageB64) { toast('请先上传或选择图片', 'err'); return; }
+
+  const btn = document.getElementById('imgEditBtn');
+  const model = document.getElementById('imgModel').value;
+  btn.disabled = true; btn.innerHTML = '✏️ 编辑中...';
+  activeAbortController = new AbortController();
+  showCancelBtn();
+
+  const body = { prompt, model };
+  if (editSessionId) {
+    body.session_id = editSessionId;
+  } else {
+    body.image = uploadedImageB64;
+  }
+
+  try {
+    const resp = await fetch('/v1/images/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: activeAbortController.signal
+    });
+    const data = await resp.json();
+
+    if (data.data && data.data.length > 0 && data.data[0].b64_json) {
+      // Update the edit zone with the new image
+      const newB64 = data.data[0].b64_json;
+      uploadedImageB64 = newB64;
+      document.getElementById('imgPreviewImg').src = 'data:image/png;base64,' + newB64;
+
+      // Save session for subsequent edits
+      if (data.session_id) {
+        editSessionId = data.session_id;
+        document.getElementById('editSessionInfo').style.display = '';
+      }
+
+      // Also show in temp grid
+      tempImages = data.data.map((d, i) => ({
+        b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: '', size: '', quality: '', channel: model, index: i
+      }));
+      document.getElementById('imgTempZone').style.display = '';
+      document.getElementById('imgTempInfo').textContent = `编辑完成 · ${tempImages.length} 张`;
+      renderTempGrid();
+
+      toast('编辑完成', 'ok');
+    } else {
+      const errMsg = data.detail || data.error?.message || '编辑失败';
+      toast(errMsg, 'err');
+    }
+  } catch(e) {
+    if (e.name === 'AbortError') { /* cancelled by user */ }
+    else { toast('编辑失败: ' + e.message, 'err'); }
+  }
+  activeAbortController = null;
+  hideCancelBtn();
+  btn.disabled = false; btn.innerHTML = '✏️ 编辑图片';
 }
 
 // ── Style Templates ────────────────────────────────────────
@@ -1790,9 +1948,10 @@ function renderGallery() {
     const src = `/data/images/${img.filename}`;
     const date = new Date(img.created * 1000).toLocaleString();
     const fp = esc(img.final_prompt || img.prompt || '');
-    return `<div class="img-card">
+    return `<div class="img-card" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','gallery:${img.filename}')">
       <img src="${src}" loading="lazy" onclick="window.open('${src}')" title="${fp}">
       <div class="img-card-actions">
+        <button class="img-action-btn save" onclick="event.stopPropagation();loadGalleryImageToEdit('${img.filename}')" title="编辑">✏️</button>
         <a class="img-action-btn dl" download="${img.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
         <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteGalleryImage('${img.id}')">🗑</button>
