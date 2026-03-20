@@ -595,6 +595,7 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
 class VideoGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-2.0-flash"
+    image: Optional[str] = None  # base64 encoded image for image-to-video
 
 
 async def download_video_as_base64(video: GeneratedVideo) -> str | None:
@@ -633,14 +634,28 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
     Returns both download URL and base64 data.
     Library handles video polling automatically (up to 5 minutes).
     """
+    temp_files = []
     try:
         client = await get_or_create_client()
-        logger.info(f"Video generation: '{request.prompt[:200]}'")
+        has_image = request.image is not None
+        logger.info(f"Video generation: '{request.prompt[:200]}' has_image={has_image}")
 
         model = map_model_name(request.model) if request.model else None
         kwargs = {}
         if model:
             kwargs["model"] = model
+
+        if request.image:
+            try:
+                image_data = base64.b64decode(request.image)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                    tmp.write(image_data)
+                    temp_files.append(tmp.name)
+                kwargs["files"] = temp_files
+                logger.info(f"Image-to-video: image decoded, {len(image_data)} bytes -> {temp_files[0]}")
+            except Exception as e:
+                logger.error(f"Failed to decode input image: {e}")
+                raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
 
         response = await client.generate_content(request.prompt, **kwargs)
 
@@ -685,6 +700,12 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
         if any(kw in error_msg for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
             raise HTTPException(status_code=429, detail=f"Video rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
+    finally:
+        for tf in temp_files:
+            try:
+                os.unlink(tf)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

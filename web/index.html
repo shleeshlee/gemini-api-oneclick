@@ -2475,15 +2475,20 @@ async function doVidGen() {
 
   btn.disabled = true; btn.innerHTML = '🎬 生成中...';
   zone.style.display = '';
-  info.textContent = '正在生成视频，Veo 需要 1-5 分钟，请耐心等待...';
+  const hasImg = !!uploadedImageB64;
+  info.textContent = hasImg
+    ? '正在根据图片生成视频，Veo 需要 1-5 分钟，请耐心等待...'
+    : '正在生成视频，Veo 需要 1-5 分钟，请耐心等待...';
   grid.innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
 
   const start = Date.now();
+  const body = { prompt, model };
+  if (hasImg) body.image = uploadedImageB64;
   try {
     const resp = await fetch('/v1/videos/generations', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, model })
+      body: JSON.stringify(body)
     });
     const data = await resp.json();
     const sec = ((Date.now() - start) / 1000).toFixed(1);
