@@ -889,6 +889,13 @@ class GeminiClient(GemMixin):
                     if result:
                         yield result
                         got_update = True
+                        # If video generation is pending, break out of stream immediately
+                        # so the caller can start polling instead of waiting for timeout
+                        if result.candidates and any(
+                            c.text and _is_video_generation_pending(c.text) for c in result.candidates
+                        ):
+                            logger.info("Video generation pending detected, breaking stream to start polling.")
+                            return
 
                 if got_update or flags.is_thinking:
                     last_progress_time = time.time()
