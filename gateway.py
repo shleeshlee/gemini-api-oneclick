@@ -63,20 +63,29 @@ def _safe_compare(a: str, b: str) -> bool:
 
 
 # ── Rate Limiter ───────────────────────────────────────────────────
-_login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_attempts: dict[str, list[float]] = {}
+_login_attempts_cleanup = 0.0
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 5  # max attempts per window
 
 
 def _check_rate_limit(ip: str):
     """Raise 429 if IP exceeds login attempt limit."""
+    global _login_attempts_cleanup
     now = time.time()
-    attempts = _login_attempts[ip]
-    # Clean old entries
-    _login_attempts[ip] = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
-    if len(_login_attempts[ip]) >= RATE_LIMIT_MAX:
+    # Periodic full cleanup to prevent memory leak from distributed IPs
+    if now - _login_attempts_cleanup > RATE_LIMIT_WINDOW * 5:
+        _login_attempts_cleanup = now
+        stale = [k for k, v in _login_attempts.items() if not v or v[-1] < now - RATE_LIMIT_WINDOW]
+        for k in stale:
+            del _login_attempts[k]
+    attempts = _login_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+    if len(attempts) >= RATE_LIMIT_MAX:
+        _login_attempts[ip] = attempts
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
-    _login_attempts[ip].append(now)
+    attempts.append(now)
+    _login_attempts[ip] = attempts
 
 
 def _get_client_ip(request: Request) -> str:
@@ -191,7 +200,9 @@ def load_account_names():
 
 def save_account_names():
     ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ACCOUNTS_FILE.write_text(json.dumps(account_names, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = ACCOUNTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(account_names, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(ACCOUNTS_FILE)
 
 
 def load_groups():
@@ -217,15 +228,19 @@ def load_groups():
 
 def save_groups():
     GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GROUPS_FILE.write_text(
+    tmp = GROUPS_FILE.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps({str(k): v for k, v in container_groups.items()}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    tmp.rename(GROUPS_FILE)
 
 
 def save_group_defs():
     GROUP_DEFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GROUP_DEFS_FILE.write_text(json.dumps(sorted(group_defs), ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = GROUP_DEFS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(group_defs), ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(GROUP_DEFS_FILE)
 
 
 def get_all_group_names() -> set[str]:
@@ -244,13 +259,12 @@ def load_gateway_state():
 
 
 def save_gateway_state():
-    """Persist disabled container list."""
+    """Persist disabled container list (atomic write)."""
     disabled = [c.num for c in containers.values() if not c.enabled]
     GATEWAY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GATEWAY_STATE_FILE.write_text(
-        json.dumps({"disabled": sorted(disabled)}, indent=2),
-        encoding="utf-8",
-    )
+    tmp = GATEWAY_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"disabled": sorted(disabled)}, indent=2), encoding="utf-8")
+    tmp.rename(GATEWAY_STATE_FILE)
 
 
 def add_log(level: str, container_num: int | None, message: str):
@@ -392,9 +406,12 @@ _log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
 
 
 async def sample_container_logs():
-    """Read recent docker logs from all containers, surface new important entries only."""
+    """Read recent docker logs from containers with issues, surface new important entries only."""
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - HEALTH_INTERVAL - 5))
     for c in containers.values():
+        # Only sample containers that are unhealthy, have recent errors, or need cookies
+        if c.healthy and c.error_count == 0 and not c.needs_cookie:
+            continue
         cname = f"gemini_api_account_{c.num}"
         try:
             # Only read logs since last check interval
@@ -1147,7 +1164,9 @@ def load_saved_models() -> list[dict]:
 
 def save_models(models: list[dict]):
     MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MODELS_FILE.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = MODELS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(MODELS_FILE)
 
 
 @app.post("/gateway/refresh-models", dependencies=[Depends(verify_panel_auth)])
@@ -1277,206 +1296,144 @@ async def api_health():
     return {"status": "ok"}
 
 
-# ── Image Gallery (persistent storage) ─────────────────────────────────
+# ── Media Gallery (shared logic for images & videos) ───────────────────
 
-IMAGES_DIR = ROOT_DIR / "data" / "images"
-IMAGES_META = ROOT_DIR / "data" / "images" / "meta.json"
+class MediaGallery:
+    """Reusable gallery: load/save meta, save/delete/serve files with path traversal protection."""
+
+    def __init__(self, media_dir: Path, suffix: str, media_type: str):
+        self.media_dir = media_dir
+        self.meta_path = media_dir / "meta.json"
+        self.suffix = suffix
+        self.media_type = media_type
+
+    def load_meta(self) -> list[dict]:
+        try:
+            if self.meta_path.exists():
+                return json.loads(self.meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return []
+
+    def _save_meta(self, meta: list[dict]):
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.meta_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.rename(self.meta_path)
+
+    def save_file(self, b64_data: str, extra_fields: dict) -> dict:
+        """Decode base64, write file, append meta entry. Returns the entry."""
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        file_id = _uuid.uuid4().hex[:12]
+        filename = f"{file_id}{self.suffix}"
+        filepath = self.media_dir / filename
+        try:
+            filepath.write_bytes(base64.b64decode(b64_data))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+        entry = {"id": file_id, "filename": filename, "created": int(time.time()), **extra_fields}
+        meta = self.load_meta()
+        meta.insert(0, entry)
+        self._save_meta(meta)
+        return entry
+
+    def delete_file(self, file_id: str):
+        """Remove file + meta entry. Raises 404 if not found."""
+        meta = self.load_meta()
+        entry = next((m for m in meta if m["id"] == file_id), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail=f"{self.media_type} not found")
+        fn = entry["filename"]
+        if "/" in fn or "\\" in fn or ".." in fn:
+            raise HTTPException(status_code=400, detail="Invalid filename in metadata")
+        filepath = (self.media_dir / fn).resolve()
+        if filepath.parent != self.media_dir.resolve():
+            raise HTTPException(status_code=400, detail="Invalid filename in metadata")
+        if filepath.exists():
+            filepath.unlink()
+        self._save_meta([m for m in meta if m["id"] != file_id])
+
+    def serve_file(self, filename: str):
+        """Return FileResponse with path traversal protection."""
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        filepath = (self.media_dir / filename).resolve()
+        if filepath.parent != self.media_dir.resolve():
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        if not filepath.exists() or not filepath.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(filepath, media_type=self.media_type)
 
 
-def _load_image_meta() -> list[dict]:
-    try:
-        if IMAGES_META.exists():
-            return json.loads(IMAGES_META.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return []
-
-
-def _save_image_meta(meta: list[dict]):
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    IMAGES_META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+_image_gallery = MediaGallery(ROOT_DIR / "data" / "images", ".png", "image/png")
+_video_gallery = MediaGallery(ROOT_DIR / "data" / "videos", ".mp4", "video/mp4")
 
 
 @app.post("/gateway/images/save", dependencies=[Depends(verify_panel_auth)])
 async def save_image(request: Request):
-    """Save a base64 image to the project gallery."""
     body = await request.json()
-    b64 = body.get("b64", "")
-    if not b64:
+    if not body.get("b64"):
         raise HTTPException(status_code=400, detail="b64 data required")
-
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    img_id = _uuid.uuid4().hex[:12]
-    filename = f"{img_id}.png"
-    filepath = IMAGES_DIR / filename
-
-    try:
-        img_data = base64.b64decode(b64)
-        filepath.write_bytes(img_data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
-
-    entry = {
-        "id": img_id,
-        "filename": filename,
-        "prompt": body.get("prompt", ""),
-        "final_prompt": body.get("final_prompt", ""),
-        "style": body.get("style", ""),
-        "size": body.get("size", ""),
-        "quality": body.get("quality", ""),
-        "channel": body.get("channel", ""),
-        "created": int(time.time()),
-    }
-
-    meta = _load_image_meta()
-    meta.insert(0, entry)
-    _save_image_meta(meta)
-
-    return {"ok": True, "id": img_id, "filename": filename}
+    entry = _image_gallery.save_file(body["b64"], {
+        "prompt": body.get("prompt", ""), "final_prompt": body.get("final_prompt", ""),
+        "style": body.get("style", ""), "size": body.get("size", ""),
+        "quality": body.get("quality", ""), "channel": body.get("channel", ""),
+    })
+    return {"ok": True, "id": entry["id"], "filename": entry["filename"]}
 
 
 @app.get("/gateway/images", dependencies=[Depends(verify_panel_auth)])
 async def list_images(offset: int = 0, limit: int = 50):
-    """List saved images with metadata."""
-    meta = _load_image_meta()
-    total = len(meta)
-    items = meta[offset:offset + limit]
-    return {"images": items, "total": total}
+    meta = _image_gallery.load_meta()
+    return {"images": meta[offset:offset + limit], "total": len(meta)}
 
 
 @app.delete("/gateway/images/{img_id}", dependencies=[Depends(verify_panel_auth)])
 async def delete_image(img_id: str):
-    """Delete a saved image."""
-    meta = _load_image_meta()
-    entry = next((m for m in meta if m["id"] == img_id), None)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    fn = entry["filename"]
-    if "/" in fn or "\\" in fn or ".." in fn:
-        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
-    filepath = (IMAGES_DIR / fn).resolve()
-    if filepath.parent != IMAGES_DIR.resolve():
-        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
-    if filepath.exists():
-        filepath.unlink()
-
-    meta = [m for m in meta if m["id"] != img_id]
-    _save_image_meta(meta)
+    _image_gallery.delete_file(img_id)
     return {"ok": True}
 
 
 @app.get("/data/images/{filename}")
 async def serve_image(filename: str):
-    """Serve saved image files (path-safe, no auth — images are user-facing)."""
-    # Reject path traversal attempts
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    filepath = (IMAGES_DIR / filename).resolve()
-    if not filepath.parent == IMAGES_DIR.resolve():
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not filepath.exists() or not filepath.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(filepath, media_type="image/png")
-
-
-# ── Video Gallery ──────────────────────────────────────────────────────
-
-VIDEOS_DIR = ROOT_DIR / "data" / "videos"
-VIDEOS_META = ROOT_DIR / "data" / "videos" / "meta.json"
-
-
-def _load_video_meta() -> list[dict]:
-    try:
-        if VIDEOS_META.exists():
-            return json.loads(VIDEOS_META.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return []
-
-
-def _save_video_meta(meta: list[dict]):
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    VIDEOS_META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return _image_gallery.serve_file(filename)
 
 
 @app.post("/gateway/videos/save", dependencies=[Depends(verify_panel_auth)])
 async def save_video(request: Request):
-    """Save a base64 video to the project gallery."""
     body = await request.json()
-    b64 = body.get("b64", "")
-    if not b64:
+    if not body.get("b64"):
         raise HTTPException(status_code=400, detail="b64 data required")
-
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    vid_id = _uuid.uuid4().hex[:12]
-    filename = f"{vid_id}.mp4"
-    filepath = VIDEOS_DIR / filename
-
-    try:
-        vid_data = base64.b64decode(b64)
-        filepath.write_bytes(vid_data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
-
-    entry = {
-        "id": vid_id,
-        "filename": filename,
-        "prompt": body.get("prompt", ""),
-        "model": body.get("model", ""),
-        "url": body.get("url", ""),
-        "created": int(time.time()),
-    }
-
-    meta = _load_video_meta()
-    meta.insert(0, entry)
-    _save_video_meta(meta)
-
-    return {"ok": True, "id": vid_id, "filename": filename}
+    entry = _video_gallery.save_file(body["b64"], {
+        "prompt": body.get("prompt", ""), "model": body.get("model", ""), "url": body.get("url", ""),
+    })
+    return {"ok": True, "id": entry["id"], "filename": entry["filename"]}
 
 
 @app.get("/gateway/videos", dependencies=[Depends(verify_panel_auth)])
 async def list_videos(offset: int = 0, limit: int = 50):
-    """List saved videos with metadata."""
-    meta = _load_video_meta()
-    total = len(meta)
-    items = meta[offset:offset + limit]
-    return {"videos": items, "total": total}
+    meta = _video_gallery.load_meta()
+    return {"videos": meta[offset:offset + limit], "total": len(meta)}
 
 
 @app.delete("/gateway/videos/{vid_id}", dependencies=[Depends(verify_panel_auth)])
 async def delete_video(vid_id: str):
-    """Delete a saved video."""
-    meta = _load_video_meta()
-    entry = next((m for m in meta if m["id"] == vid_id), None)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    fn = entry["filename"]
-    if "/" in fn or "\\" in fn or ".." in fn:
-        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
-    filepath = (VIDEOS_DIR / fn).resolve()
-    if filepath.parent != VIDEOS_DIR.resolve():
-        raise HTTPException(status_code=400, detail="Invalid filename in metadata")
-    if filepath.exists():
-        filepath.unlink()
-
-    meta = [m for m in meta if m["id"] != vid_id]
-    _save_video_meta(meta)
+    _video_gallery.delete_file(vid_id)
     return {"ok": True}
 
 
 @app.get("/data/videos/{filename}")
 async def serve_video(filename: str):
-    """Serve saved video files (path-safe, no auth — videos are user-facing)."""
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    filepath = (VIDEOS_DIR / filename).resolve()
-    if not filepath.parent == VIDEOS_DIR.resolve():
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not filepath.exists() or not filepath.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(filepath, media_type="video/mp4")
+    return _video_gallery.serve_file(filename)
+
+
+# Note: /data/images/ and /data/videos/ are intentionally unauthenticated.
+# Filenames are UUIDs, making them unguessable. This allows embedding in Discord etc.
+# If the gateway is exposed to untrusted networks, consider adding token-based access.
+
+# Legacy compat aliases (used internally)
+IMAGES_DIR = _image_gallery.media_dir
+VIDEOS_DIR = _video_gallery.media_dir
 
 
 # ── Style Templates ────────────────────────────────────────────────────
@@ -1496,7 +1453,9 @@ def _load_styles() -> list[dict]:
 
 def _save_styles(styles: list[dict]):
     STYLES_DIR.mkdir(parents=True, exist_ok=True)
-    STYLES_META.write_text(json.dumps(styles, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = STYLES_META.with_suffix(".tmp")
+    tmp.write_text(json.dumps(styles, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(STYLES_META)
 
 
 @app.post("/gateway/styles/save", dependencies=[Depends(verify_panel_auth)])
@@ -1564,8 +1523,8 @@ async def ecosystem_info(request: Request):
         raise HTTPException(403, "仅内部网络可访问")
 
     available = sum(1 for c in containers.values() if c.available)
-    models = ["gemini-2.5-pro-preview-05-06", "gemini-2.5-flash-preview-05-20",
-              "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    cached = _models_cache or load_saved_models()
+    models = [m["id"] for m in cached if m.get("id") and m["id"] != "unspecified"] if cached else []
 
     return {
         "service": "oneclick",

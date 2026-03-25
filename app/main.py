@@ -243,6 +243,12 @@ def map_model_name(openai_model_name: str) -> Model:
         if name_lower in model_name.lower():
             return m
 
+    logger.warning(f"Unknown model '{openai_model_name}', using default")
+    # Return first non-unspecified model, or fallback to first
+    for m in Model:
+        mn = m.model_name if hasattr(m, "model_name") else str(m)
+        if mn != "unspecified":
+            return m
     return next(iter(Model))
 
 
@@ -480,14 +486,20 @@ class ImageGenerationRequest(BaseModel):
 # Edit session store: session_id -> ChatSession
 _edit_sessions: dict[str, Any] = {}
 _SESSION_TTL = 600  # 10 minutes
+_MAX_SESSIONS = 50  # prevent unbounded memory growth
 
 
 def _cleanup_expired_sessions():
-    """Remove sessions older than TTL."""
+    """Remove sessions older than TTL. If still over limit, evict oldest."""
     now = time.time()
     expired = [sid for sid, (_, ts) in _edit_sessions.items() if now - ts > _SESSION_TTL]
     for sid in expired:
         del _edit_sessions[sid]
+    # Hard cap: evict oldest sessions if still over limit
+    if len(_edit_sessions) > _MAX_SESSIONS:
+        by_age = sorted(_edit_sessions.items(), key=lambda x: x[1][1])
+        for sid, _ in by_age[:len(_edit_sessions) - _MAX_SESSIONS]:
+            del _edit_sessions[sid]
 
 
 @app.post("/v1/images/generations")
