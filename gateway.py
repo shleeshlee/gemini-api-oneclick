@@ -1045,6 +1045,9 @@ async def deploy_cookie(num: int, request: Request):
     c = containers[num]
     c.needs_cookie = False
     c.health_fail_count = 0
+    c.img_blocked = False
+    c.error_count = 0
+    c.total_errors = 0
     c.healthy = False  # wait for health check to confirm
 
     add_log("info", num, "容器已重建")
@@ -1549,6 +1552,31 @@ async def index():
 async def health():
     available = sum(1 for c in containers.values() if c.available)
     return {"status": "ok" if available > 0 else "degraded", "available": available}
+
+
+@app.get("/internal/ecosystem-info")
+async def ecosystem_info(request: Request):
+    """Wana 生态内部端点 — 只允许 Docker 网络/本机访问，返回服务信息和 API key"""
+    client_ip = request.client.host if request.client else ""
+    # 只允许本机和 Docker 网络
+    allowed_prefixes = ("127.", "172.", "10.", "192.168.", "::1")
+    if not any(client_ip.startswith(p) for p in allowed_prefixes):
+        raise HTTPException(403, "仅内部网络可访问")
+
+    available = sum(1 for c in containers.values() if c.available)
+    models = ["gemini-2.5-pro-preview-05-06", "gemini-2.5-flash-preview-05-20",
+              "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+
+    return {
+        "service": "oneclick",
+        "name": "Gemini API OneClick",
+        "version": "2.0.0",
+        "api_base": "/v1",
+        "api_key": API_KEY,
+        "available_accounts": available,
+        "models": models,
+        "ecosystem_protocol": "wana-ecosystem-v1"
+    }
 
 
 # ── Main ────────────────────────────────────────────────────────────────
