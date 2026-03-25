@@ -67,7 +67,7 @@ def main() -> int:
                 "      - ./app/main.py:/app/main.py:ro",
                 "    ports:",
                 f"      - \"{port}:8000\"",
-                "    restart: unless-stopped",
+                "    restart: no",
                 "    healthcheck:",
                 "      test: [\"CMD\", \"curl\", \"-fsS\", \"http://localhost:8000/health\"]",
                 "      interval: 30s",
