@@ -1,6 +1,7 @@
 import asyncio
 import codecs
 import io
+import os
 import random
 import re
 import time
@@ -879,7 +880,8 @@ class GeminiClient(GemMixin):
 
                 last_texts = streaming_state.last_texts
                 last_thoughts = streaming_state.last_thoughts
-                last_progress_time = streaming_state.last_progress_time
+                last_progress_time = time.time()  # reset per polling iteration to avoid false stall detection
+                streaming_state.last_progress_time = last_progress_time
                 flags = _StreamFlags()
 
                 async for chunk in response.aiter_content():
@@ -910,7 +912,6 @@ class GeminiClient(GemMixin):
                     stall_threshold = min(self.timeout, self.watchdog_timeout)
                     if (time.time() - last_progress_time) > stall_threshold:
                         logger.warning(f"Response stalled (active connection but no progress for {stall_threshold}s). Queueing={flags.is_queueing}. Retrying...")
-                        await self.close()
                         raise APIError("Response stalled (zombie stream).")
 
                 # Final flush
@@ -1068,15 +1069,16 @@ class GeminiClient(GemMixin):
         flags: _StreamFlags,
     ) -> Candidate | None:
         """Parse a single candidate from the response."""
-        # Dump raw candidate data for debugging image edit responses
-        try:
-            dump_dir = Path("/tmp/gemini_debug")
-            dump_dir.mkdir(exist_ok=True)
-            dump_file = dump_dir / f"candidate_{index}_{rcid}.json"
-            dump_file.write_bytes(json.dumps(candidate_data, default=str, option=json.OPT_INDENT_2))
-            logger.info(f"[RAW_CANDIDATE] dumped to {dump_file}")
-        except Exception as e:
-            logger.warning(f"[RAW_CANDIDATE] dump failed: {e}")
+        # Debug dump disabled in production — set GEMINI_DEBUG_DUMP=1 to enable
+        if os.environ.get("GEMINI_DEBUG_DUMP"):
+            try:
+                dump_dir = Path("/tmp/gemini_debug")
+                dump_dir.mkdir(exist_ok=True)
+                dump_file = dump_dir / f"candidate_{index}_{rcid}.json"
+                dump_file.write_bytes(json.dumps(candidate_data, default=str, option=json.OPT_INDENT_2))
+                logger.info(f"[RAW_CANDIDATE] dumped to {dump_file}")
+            except Exception as e:
+                logger.warning(f"[RAW_CANDIDATE] dump failed: {e}")
 
         text = _extract_candidate_text(candidate_data)
 

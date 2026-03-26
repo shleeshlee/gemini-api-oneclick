@@ -1593,7 +1593,9 @@ async function doImgGen() {
 function openImageFull(dataUrl) {
   fetch(dataUrl).then(r => r.blob()).then(blob => {
     const url = URL.createObjectURL(blob);
-    window.open(url);
+    const win = window.open(url);
+    if (win) win.addEventListener('load', () => URL.revokeObjectURL(url), {once: true});
+    else URL.revokeObjectURL(url);
   });
 }
 

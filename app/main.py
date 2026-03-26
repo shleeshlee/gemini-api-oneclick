@@ -353,9 +353,9 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                     logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
 
             reply_text = ""
-            if hasattr(response, "thoughts"):
+            if getattr(response, "thoughts", None):
                 reply_text += f"<think>{response.thoughts}</think>"
-            if hasattr(response, "text"):
+            if getattr(response, "text", None):
                 reply_text += response.text
             else:
                 reply_text += str(response)
@@ -428,9 +428,9 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                     "model": request.model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
                     "usage": {
-                        "prompt_tokens": len(conversation.split()),
-                        "completion_tokens": len(reply_text.split()),
-                        "total_tokens": len(conversation.split()) + len(reply_text.split()),
+                        "prompt_tokens": len(conversation) // 4,
+                        "completion_tokens": len(reply_text) // 4,
+                        "total_tokens": (len(conversation) + len(reply_text)) // 4,
                     },
                 }
 

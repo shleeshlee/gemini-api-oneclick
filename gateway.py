@@ -1517,8 +1517,8 @@ async def health():
 async def ecosystem_info(request: Request):
     """Wana 生态内部端点 — 只允许 Docker 网络/本机访问，返回服务信息和 API key"""
     client_ip = request.client.host if request.client else ""
-    # 只允许本机和 Docker 网络
-    allowed_prefixes = ("127.", "172.", "10.", "192.168.", "::1")
+    # 只允许本机和 Docker 网络（严格限制 Docker bridge 范围）
+    allowed_prefixes = ("127.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "10.", "192.168.", "::1")
     if not any(client_ip.startswith(p) for p in allowed_prefixes):
         raise HTTPException(403, "仅内部网络可访问")
 
