@@ -923,12 +923,13 @@ class GeminiClient(GemMixin):
                             yield result
 
                 if not (flags.is_completed or flags.is_final_chunk) or flags.is_thinking or flags.is_queueing:
-                    _elapsed = time.time() - _poll_start
-                    if _elapsed < _MAX_POLL_TIME:
+                    # Only poll when Gemini is actively working (queueing/thinking = image gen)
+                    # Otherwise fail fast and let the decorator retry
+                    if (flags.is_queueing or flags.is_thinking) and (time.time() - _poll_start) < _MAX_POLL_TIME:
+                        _elapsed = time.time() - _poll_start
                         logger.info(f"Stream incomplete (queueing={flags.is_queueing}, thinking={flags.is_thinking}), polling in {_POLL_INTERVAL}s ({_elapsed:.0f}s elapsed)...")
                         await asyncio.sleep(_POLL_INTERVAL)
                         continue  # retry within polling loop
-                    logger.warning(f"Stream interrupted after {_elapsed:.0f}s polling (completed={flags.is_completed}, final_chunk={flags.is_final_chunk}, thinking={flags.is_thinking}, queueing={flags.is_queueing})")
                     raise APIError("Stream interrupted or truncated.")
                 break  # stream completed, exit polling loop
 
