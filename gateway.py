@@ -751,13 +751,13 @@ async def proxy(request: Request, path: str):
         c.busy = True
 
         try:
-            # 视频 330s（轮询最多300s），图片 100s，聊天 120s
+            # 视频 330s（轮询最多300s），图片 100s，聊天 300s（Pro thinking 可能超 2 分钟）
             if "videos" in path:
                 read_timeout = 330.0
             elif "images" in path:
                 read_timeout = 100.0
             else:
-                read_timeout = 120.0
+                read_timeout = 300.0
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
