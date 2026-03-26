@@ -65,6 +65,7 @@ def main() -> int:
                 "    volumes:",
                 f"      - ./cookie-cache/account{account_id}:/app/cookie-cache",
                 "      - ./app/main.py:/app/main.py:ro",
+                "      - ./app/client.py:/app/gemini_webapi/client.py:ro",
                 "    ports:",
                 f"      - \"{port}:8000\"",
                 "    restart: no",
