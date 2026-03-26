@@ -2,7 +2,7 @@
 
 一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、图片/视频生成与编辑，一个端口搞定。
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/shleeshlee/gemini-api-oneclick/releases)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE) [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/shleeshlee/gemini-api-oneclick/releases)
 
 > **👤 作者:** WanWan
 > **📦 开源协议:** MIT (免费使用，保留署名)
