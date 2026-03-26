@@ -799,7 +799,7 @@ async def proxy(request: Request, path: str):
 
         except Exception as e:
             c.busy = False
-            error_msg = str(e)[:200]
+            error_msg = str(e)[:200] or f"{type(e).__name__}"
             c.total_errors += 1
             c.error_count += 1
             c.last_error = error_msg
