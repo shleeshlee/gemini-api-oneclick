@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 ROOT_DIR = Path(__file__).resolve().parent
 ENVS_DIR = ROOT_DIR / "envs"
 GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
+STATE_DIR = ROOT_DIR / "state"
 
 
 def _read_dotenv() -> dict:
@@ -179,6 +180,9 @@ ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
 GATEWAY_STATE_FILE = ROOT_DIR / "state" / "gateway-state.json"
 GROUPS_FILE = ROOT_DIR / "state" / "groups.json"
 GROUP_DEFS_FILE = ROOT_DIR / "state" / "group-defs.json"
+MODELS_FILE = ROOT_DIR / "state" / "models.json"
+MODEL_PROFILES_FILE = ROOT_DIR / "state" / "model-profiles.json"
+MODEL_TRUTH_FILE = ROOT_DIR / "state" / "model-truth.json"
 
 container_groups: dict[int, str] = {}  # num -> group name (e.g. "pro", "was")
 group_defs: list[str] = []  # defined group names, created by user
@@ -186,6 +190,44 @@ group_round_robin: dict[str, int] = {}  # group -> round robin index
 _models_cache: list[dict] = []
 _models_cache_time: float = 0
 MODELS_CACHE_TTL = 300  # seconds
+MODEL_PROFILE_SLOTS = {
+    "chat_fast": "生文快速",
+    "chat_pro": "生文 Pro",
+    "chat_thinking": "生文思考",
+    "prompt_optimize": "提示词优化",
+    "image_default": "生图默认",
+    "image_edit": "编辑默认",
+    "video_default": "生视频默认",
+}
+TRACE_HEADER_NAMES = (
+    "X-OneClick-Requested-Model",
+    "X-OneClick-Resolved-Model",
+    "X-OneClick-Header-Family",
+    "X-OneClick-Header-Token",
+    "X-OneClick-Model-Resolution",
+    "X-OneClick-Endpoint",
+    "X-OneClick-Worker-Event-ID",
+)
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def _read_json_file(path: Path, default):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return default
+
+
+def _write_json_file(path: Path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(path)
 
 
 def load_account_names():
@@ -302,6 +344,7 @@ def get_next_available(group: str | None = None, is_image: bool = False) -> Cont
                        and (not is_image or not containers[n].img_blocked))
     else:
         nums = sorted(n for n in containers if containers[n].available
+                       and n not in container_groups
                        and (not is_image or not containers[n].img_blocked))
 
     if not nums:
@@ -395,14 +438,95 @@ async def _maybe_restart(c: Container):
 
 _last_log_ts: dict[int, str] = {}  # container num -> last seen log timestamp
 _LOG_KEYWORDS = {"error", "exception", "failed", "cookie", "expired", "traceback",
-                 "credentials", "401", "403", "500", "timeout", "client_ready"}
+                 "credentials", "401", "403", "500", "timeout", "client_ready", "unknown model"}
 _LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "waiting for"}
+_LOG_NOISE_MARKERS = {
+    "cookie debug",
+    "stream incomplete (queueing=",
+    "polling in 5s",
+    "[firewall: off]",
+    "secure_1psid:",
+    "secure_1psidts:",
+}
+LEGACY_STATIC_MODEL_IDS = {
+    "gemini-3.0-pro",
+    "gemini-3.0-flash",
+    "gemini-3.0-flash-thinking",
+}
 
 
 # count_container_requests removed — proxy tracks total_requests/total_errors in real time
 
 
 _log_seen: dict[int, set] = {}  # container num -> set of seen log hashes
+
+
+CORE_INFO_PREFIXES = (
+    "Health check:",
+    "模型列表已刷新:",
+)
+CORE_INFO_EXACT = {
+    "认证错误，需要更换 Cookie（重启无效）",
+}
+CORE_INFO_CONTAINS = (
+    "模型刷新拿到的是旧的静态",
+    "容器已重建",
+    "容器重建失败",
+    "容器重建超时",
+    "Auto-disabled",
+    "Manually ",
+)
+
+
+def classify_container_log(line: str) -> tuple[str, str] | None:
+    """Return (level, text) for actionable container logs, or None for noise."""
+    lower = line.lower()
+    if any(sk in lower for sk in _LOG_SKIP):
+        return None
+    if any(marker in lower for marker in _LOG_NOISE_MARKERS):
+        return None
+
+    text = line.split(" ", 1)[-1].strip()[:150] if " " in line else line.strip()[:150]
+    if not text:
+        return None
+
+    if text.startswith('File "/app/'):
+        return None
+
+    if "unknown model" in lower:
+        return "warn", text
+
+    if not any(kw in lower for kw in _LOG_KEYWORDS):
+        return None
+
+    level = "error" if any(k in lower for k in {"error", "exception", "failed", "traceback"}) else "warn"
+    return level, text
+
+
+def is_core_log_entry(entry: dict) -> bool:
+    """Keep only actionable logs in the gateway overview panel."""
+    level = entry.get("level", "")
+    message = entry.get("message", "")
+    if not message:
+        return False
+
+    lower = message.lower()
+    if any(marker in lower for marker in _LOG_NOISE_MARKERS):
+        return False
+
+    if level in {"warn", "error"}:
+        return True
+
+    if level != "info":
+        return False
+
+    if message in CORE_INFO_EXACT:
+        return True
+    if any(message.startswith(prefix) for prefix in CORE_INFO_PREFIXES):
+        return True
+    if any(token in message for token in CORE_INFO_CONTAINS):
+        return True
+    return False
 
 
 async def sample_container_logs():
@@ -426,20 +550,15 @@ async def sample_container_logs():
                 _log_seen[c.num] = set()
             seen = _log_seen[c.num]
             for line in lines:
-                lower = line.lower()
-                if not any(kw in lower for kw in _LOG_KEYWORDS):
+                classified = classify_container_log(line)
+                if not classified:
                     continue
-                if any(sk in lower for sk in _LOG_SKIP):
-                    continue
+                level, text = classified
                 # Deduplicate by content hash
-                text = line.split(" ", 1)[-1].strip()[:150] if " " in line else line.strip()[:150]
-                if not text:
-                    continue
                 h = hashlib.md5(text.encode()).hexdigest()
                 if h in seen:
                     continue
                 seen.add(h)
-                level = "error" if any(k in lower for k in {"error", "exception", "failed", "traceback"}) else "warn"
                 add_log(level, c.num, text)
             # Keep seen set bounded
             if len(seen) > 500:
@@ -518,21 +637,16 @@ def parse_group_from_model(model: str) -> tuple[str | None, str]:
     return None, model
 
 
-async def fetch_base_models() -> list[dict]:
-    """Return model list from saved state, or fetch from container."""
+def is_legacy_static_model_list(models: list[dict]) -> bool:
+    """Detect the old vendored 3.0-only model list so it can be flagged in logs."""
+    ids = {m.get("id", "") for m in models if m.get("id")}
+    return ids == LEGACY_STATIC_MODEL_IDS
+
+
+async def fetch_live_models(*, persist: bool = False) -> tuple[list[dict], int | None]:
+    """Fetch model list from a healthy container."""
     global _models_cache, _models_cache_time
     now = time.time()
-    if _models_cache and (now - _models_cache_time) < MODELS_CACHE_TTL:
-        return _models_cache
-
-    # Try saved models first
-    saved = load_saved_models()
-    if saved:
-        _models_cache = saved
-        _models_cache_time = now
-        return _models_cache
-
-    # Fallback: fetch from a healthy container
     for c in containers.values():
         if not c.available:
             continue
@@ -541,12 +655,35 @@ async def fetch_base_models() -> list[dict]:
                 resp = await client.get(f"{c.url}/v1/models")
                 if resp.status_code == 200:
                     data = resp.json().get("data", [])
+                    if not data:
+                        continue
                     _models_cache = data
                     _models_cache_time = now
-                    save_models(data)
-                    return _models_cache
+                    if persist:
+                        save_models(data)
+                    return data, c.num
         except Exception:
             continue
+    return [], None
+
+
+async def fetch_base_models() -> list[dict]:
+    """Return model list, preferring live container data over saved state."""
+    global _models_cache, _models_cache_time
+    now = time.time()
+    if _models_cache and (now - _models_cache_time) < MODELS_CACHE_TTL:
+        return _models_cache
+
+    live_models, _ = await fetch_live_models()
+    if live_models:
+        return live_models
+
+    saved = load_saved_models()
+    if saved:
+        _models_cache = saved
+        _models_cache_time = now
+        return _models_cache
+
     return _models_cache
 
 
@@ -729,7 +866,8 @@ async def proxy(request: Request, path: str):
                              if g == target_group and n in containers and containers[n].available
                              and (not is_image_req or not containers[n].img_blocked))
     else:
-        pool_available = sum(1 for c in containers.values() if c.available
+        pool_available = sum(1 for n, c in containers.items() if c.available
+                             and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
 
     retries = min(MAX_RETRIES, pool_available)
@@ -751,11 +889,11 @@ async def proxy(request: Request, path: str):
         c.busy = True
 
         try:
-            # 视频 330s（轮询最多300s），图片 100s，聊天 300s（Pro thinking 可能超 2 分钟）
+            # 视频 330s（轮询最多300s），图片 180s（编辑首轮 + 下载 base64 更慢），聊天 300s。
             if "videos" in path:
                 read_timeout = 330.0
             elif "images" in path:
-                read_timeout = 100.0
+                read_timeout = 180.0
             else:
                 read_timeout = 300.0
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
@@ -778,6 +916,16 @@ async def proxy(request: Request, path: str):
                         request=resp.request, response=resp
                     )
                 c.error_count = 0
+                c.last_error = ""
+                c.cooldown_until = 0
+                trace_headers = {
+                    name: resp.headers.get(name, "")
+                    for name in TRACE_HEADER_NAMES
+                    if resp.headers.get(name)
+                }
+                if trace_headers:
+                    record_model_truth(c.num, f"/v1/{path}", target_group, resp.headers)
+                    trace_headers["Access-Control-Expose-Headers"] = ", ".join(TRACE_HEADER_NAMES)
 
                 async def stream_generator():
                     try:
@@ -792,6 +940,7 @@ async def proxy(request: Request, path: str):
                     stream_generator(),
                     status_code=resp.status_code,
                     media_type=resp.headers.get("content-type", "application/json"),
+                    headers=trace_headers,
                 )
             except Exception:
                 await client.aclose()
@@ -809,7 +958,7 @@ async def proxy(request: Request, path: str):
             # 超时的容器冷却60秒，防止积压
             if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
                 c.cooldown_until = time.time() + 60
-                add_log("warning", c.num, f"Container timed out, cooling down 60s")
+                add_log("warn", c.num, "Container timed out, cooling down 60s")
 
             if is_auth_error(error_msg):
                 c.healthy = False
@@ -836,9 +985,12 @@ async def gateway_status():
 
 
 @app.get("/gateway/logs", dependencies=[Depends(verify_panel_auth)])
-async def gateway_logs(limit: int = 50):
-    """Return recent gateway logs."""
-    return {"logs": list(logs)[:limit]}
+async def gateway_logs(limit: int = 50, raw: bool = False):
+    """Return recent gateway logs, filtered to core items by default."""
+    entries = list(logs)
+    if not raw:
+        entries = [entry for entry in entries if is_core_log_entry(entry)]
+    return {"logs": entries[:limit]}
 
 
 @app.post("/gateway/enable/{num}", dependencies=[Depends(verify_panel_auth)])
@@ -1150,45 +1302,229 @@ async def test_container(num: int):
 
 # ── Model List Management ──────────────────────────────────────────────
 
-MODELS_FILE = ROOT_DIR / "state" / "models.json"
-
 
 def load_saved_models() -> list[dict]:
-    try:
-        if MODELS_FILE.exists():
-            return json.loads(MODELS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return []
+    data = _read_json_file(MODELS_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def save_models(models: list[dict]):
-    MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = MODELS_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.rename(MODELS_FILE)
+    _write_json_file(MODELS_FILE, models)
+
+
+def _first_matching_model(model_ids: list[str], include: tuple[str, ...], exclude: tuple[str, ...] = ()) -> str:
+    for model_id in model_ids:
+        lower = model_id.lower()
+        if include and not all(token in lower for token in include):
+            continue
+        if any(token in lower for token in exclude):
+            continue
+        return model_id
+    return ""
+
+
+def suggest_model_for_slot(slot: str, model_ids: list[str]) -> str:
+    """Pick the best current runtime model for a stable slot."""
+    if not model_ids:
+        return ""
+
+    if slot in {"chat_fast", "prompt_optimize"}:
+        return (
+            _first_matching_model(model_ids, ("flash",), ("image-preview", "tts", "veo", "video"))
+            or _first_matching_model(model_ids, ("flash",), ("veo", "video"))
+            or model_ids[0]
+        )
+    if slot == "chat_pro":
+        return (
+            _first_matching_model(model_ids, ("pro",), ("image-preview", "veo", "video"))
+            or _first_matching_model(model_ids, ("pro",), ())
+            or suggest_model_for_slot("chat_fast", model_ids)
+        )
+    if slot == "chat_thinking":
+        return _first_matching_model(model_ids, ("thinking",), ()) or suggest_model_for_slot("chat_pro", model_ids)
+    if slot in {"image_default", "image_edit"}:
+        return (
+            _first_matching_model(model_ids, ("image-preview",), ("veo", "video"))
+            or _first_matching_model(model_ids, ("flash",), ("tts", "veo", "video"))
+            or model_ids[0]
+        )
+    if slot == "video_default":
+        return (
+            _first_matching_model(model_ids, ("veo",), ())
+            or _first_matching_model(model_ids, ("video",), ())
+            or suggest_model_for_slot("chat_fast", model_ids)
+        )
+    return model_ids[0]
+
+
+def normalize_model_profiles(models: list[dict], saved: dict | None = None) -> dict:
+    """Keep a stable slot -> model mapping and auto-heal when runtime ids change."""
+    model_ids = [m["id"] for m in models if m.get("id") and m["id"] != "unspecified"]
+    saved_slots = (saved or {}).get("slots", {})
+    slots = {}
+
+    for slot, label in MODEL_PROFILE_SLOTS.items():
+        current = saved_slots.get(slot, {}) if isinstance(saved_slots, dict) else {}
+        current_model = (current.get("model") or "").strip()
+        if current_model and current_model in model_ids:
+            slots[slot] = {
+                "label": label,
+                "model": current_model,
+                "source": current.get("source") or "manual",
+            }
+            continue
+
+        auto_model = suggest_model_for_slot(slot, model_ids)
+        slots[slot] = {
+            "label": label,
+            "model": auto_model,
+            "source": "auto" if auto_model else "empty",
+        }
+
+    return {
+        "updated_at": _now_iso(),
+        "slots": slots,
+    }
+
+
+def load_model_profiles_state() -> dict:
+    data = _read_json_file(MODEL_PROFILES_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_model_profiles_state(state: dict):
+    _write_json_file(MODEL_PROFILES_FILE, state)
+
+
+def ensure_model_profiles(models: list[dict]) -> dict:
+    current = load_model_profiles_state()
+    normalized = normalize_model_profiles(models, current)
+    if normalized != current:
+        save_model_profiles_state(normalized)
+    return normalized
+
+
+def load_model_truth_state() -> dict:
+    data = _read_json_file(MODEL_TRUTH_FILE, {})
+    if not isinstance(data, dict):
+        return {"updated_at": "", "entries": {}}
+    data.setdefault("updated_at", "")
+    data.setdefault("entries", {})
+    return data
+
+
+def save_model_truth_state(state: dict):
+    _write_json_file(MODEL_TRUTH_FILE, state)
+
+
+def list_model_truth_entries() -> list[dict]:
+    state = load_model_truth_state()
+    entries = state.get("entries", {})
+    if not isinstance(entries, dict):
+        return []
+    return sorted(entries.values(), key=lambda item: item.get("last_seen", ""), reverse=True)
+
+
+def record_model_truth(container_num: int, request_path: str, group: str | None, response_headers) -> None:
+    """Persist the latest observed requested-model -> header-family mapping."""
+    requested_model = response_headers.get("x-oneclick-requested-model", "")
+    if not requested_model:
+        return
+
+    endpoint = response_headers.get("x-oneclick-endpoint", "")
+    state = load_model_truth_state()
+    entries = state.setdefault("entries", {})
+    key = f"{endpoint}:{requested_model}"
+    current = entries.get(key, {})
+    entries[key] = {
+        "requested_model": requested_model,
+        "resolved_model": response_headers.get("x-oneclick-resolved-model", ""),
+        "header_family": response_headers.get("x-oneclick-header-family", ""),
+        "header_token": response_headers.get("x-oneclick-header-token", ""),
+        "resolution": response_headers.get("x-oneclick-model-resolution", ""),
+        "endpoint": endpoint,
+        "path": request_path,
+        "container": container_num,
+        "group": group or "",
+        "last_seen": _now_iso(),
+        "count": int(current.get("count", 0)) + 1,
+    }
+    state["updated_at"] = _now_iso()
+    save_model_truth_state(state)
 
 
 @app.post("/gateway/refresh-models", dependencies=[Depends(verify_panel_auth)])
 async def refresh_models():
     """Fetch model list from a healthy container and save to state."""
     global _models_cache, _models_cache_time
-    for c in containers.values():
-        if not c.available:
-            continue
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{c.url}/v1/models")
-                if resp.status_code == 200:
-                    data = resp.json().get("data", [])
-                    save_models(data)
-                    _models_cache = data
-                    _models_cache_time = time.time()
-                    add_log("info", c.num, f"模型列表已刷新: {len(data)} 个模型")
-                    return {"ok": True, "models": data, "source": f"container #{c.num}"}
-        except Exception:
-            continue
+    data, source_num = await fetch_live_models(persist=True)
+    if data:
+        ensure_model_profiles(data)
+        if is_legacy_static_model_list(data):
+            add_log("warn", source_num, "模型刷新拿到的是旧的静态 3.0 列表，容器侧模型发现仍未修复")
+        add_log("info", source_num, f"模型列表已刷新: {len(data)} 个模型")
+        return {"ok": True, "models": data, "source": f"container #{source_num}"}
     raise HTTPException(status_code=503, detail="无可用容器获取模型列表")
+
+
+@app.get("/gateway/model-profiles", dependencies=[Depends(verify_panel_auth)])
+async def get_model_profiles():
+    """Return stable model slots and the current runtime model list."""
+    models = await fetch_base_models()
+    profiles = ensure_model_profiles(models)
+    return {
+        "updated_at": profiles.get("updated_at", ""),
+        "slots": profiles.get("slots", {}),
+        "models": [m["id"] for m in models if m.get("id") and m["id"] != "unspecified"],
+    }
+
+
+@app.post("/gateway/model-profiles", dependencies=[Depends(verify_panel_auth)])
+async def save_model_profiles(request: Request):
+    """Persist manual slot selections against the current runtime model list."""
+    body = await request.json()
+    updates = body.get("slots", {})
+    if not isinstance(updates, dict):
+        raise HTTPException(status_code=400, detail="slots must be an object")
+
+    models = await fetch_base_models()
+    model_ids = [m["id"] for m in models if m.get("id") and m["id"] != "unspecified"]
+    current = load_model_profiles_state()
+    saved_slots = current.get("slots", {}) if isinstance(current.get("slots", {}), dict) else {}
+
+    for slot, raw_value in updates.items():
+        if slot not in MODEL_PROFILE_SLOTS:
+            raise HTTPException(status_code=400, detail=f"unknown slot: {slot}")
+        model_name = raw_value.get("model", "") if isinstance(raw_value, dict) else str(raw_value or "")
+        model_name = model_name.strip()
+        if model_name and model_name not in model_ids:
+            raise HTTPException(status_code=400, detail=f"invalid model for {slot}: {model_name}")
+        saved_slots[slot] = {
+            "label": MODEL_PROFILE_SLOTS[slot],
+            "model": model_name,
+            "source": "manual" if model_name else "empty",
+        }
+
+    next_state = normalize_model_profiles(models, {"slots": saved_slots})
+    save_model_profiles_state(next_state)
+    add_log("info", None, "模型槽位已更新")
+    return {
+        "ok": True,
+        "updated_at": next_state.get("updated_at", ""),
+        "slots": next_state.get("slots", {}),
+        "models": model_ids,
+    }
+
+
+@app.get("/gateway/model-truth", dependencies=[Depends(verify_panel_auth)])
+async def get_model_truth(limit: int = 30):
+    """Return recently observed model resolution records."""
+    state = load_model_truth_state()
+    entries = list_model_truth_entries()
+    return {
+        "updated_at": state.get("updated_at", ""),
+        "entries": entries[:limit],
+    }
 
 
 # ── Cookie Manager APIs (merged from cookie-manager.py) ────────────────

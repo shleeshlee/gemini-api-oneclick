@@ -17,5 +17,14 @@ __pycache__/
 # local overrides
 docker-compose.override.yml
 docker-compose.accounts.yml
+docker-compose.test.yml
 CLAUDE.md
+MEMORY.md
+memory/
 data/
+
+# internal — not for public repo
+ops/
+vendor/
+*.killed
+web/demo-redesign.html

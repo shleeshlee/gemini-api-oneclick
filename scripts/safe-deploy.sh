@@ -10,10 +10,12 @@ BATCH_DELAY="${BATCH_DELAY:-120}"  # 秒
 cd "$(dirname "$0")/.."
 
 # 解析参数
-BUILD=false
+# 默认 --build：lib/ 改动在镜像内，不 build 就吃不到
+BUILD=true
 for arg in "$@"; do
     case "$arg" in
         --build) BUILD=true ;;
+        --no-build) BUILD=false ;;
         *) echo "Unknown arg: $arg"; exit 1 ;;
     esac
 done

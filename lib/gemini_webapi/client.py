@@ -1,6 +1,7 @@
 import asyncio
 import codecs
 import io
+import os
 import random
 import re
 import time
@@ -16,7 +17,16 @@ from curl_cffi.requests import AsyncSession, Cookies, Response
 from curl_cffi.requests.errors import RequestsError
 
 from .components import GemMixin
-from .constants import GRPC, Endpoint, ErrorCode, Headers, Model
+from .tracer import Tracer, sanitize_headers
+from .constants import (
+    AccountStatus,
+    GRPC,
+    Endpoint,
+    ErrorCode,
+    Headers,
+    MODEL_HEADER_KEY,
+    Model,
+)
 from .exceptions import (
     APIError,
     AuthError,
@@ -30,6 +40,7 @@ from .exceptions import (
     UsageLimitExceeded,
 )
 from .types import (
+    AvailableModel,
     Candidate,
     Gem,
     GeneratedImage,
@@ -39,6 +50,7 @@ from .types import (
     WebImage,
 )
 from .utils import (
+    extract_json_from_response,
     get_access_token,
     get_delta_by_fp_len,
     get_nested_value,
@@ -294,9 +306,11 @@ class GeminiClient(GemMixin):
     __slots__ = [
         "_gems",  # From GemMixin
         "_lock",
+        "_model_registry",
         "_reqid",
         "_running",
         "access_token",
+        "account_status",
         "account_index",
         "auto_close",
         "auto_refresh",
@@ -343,7 +357,9 @@ class GeminiClient(GemMixin):
         self.verbose: bool = True
         self.watchdog_timeout: float = 60  # ≤ DELAY_FACTOR × retry × (retry + 1) / 2
         self._lock = asyncio.Lock()
+        self._model_registry: dict[str, AvailableModel] = {}
         self._reqid: int = random.randint(10000, 99999)
+        self.account_status: AccountStatus = AccountStatus.AVAILABLE
         self.kwargs = kwargs
 
         if secure_1psid:
@@ -420,6 +436,7 @@ class GeminiClient(GemMixin):
                 self.build_label = build_label
                 self.session_id = session_id
                 self._running = True
+                self._reqid = random.randint(10000, 99999)
 
                 self.timeout = timeout
                 self.auto_close = auto_close
@@ -436,6 +453,8 @@ class GeminiClient(GemMixin):
 
                 if self.auto_refresh:
                     self.refresh_task = asyncio.create_task(self.start_auto_refresh())
+
+                await self._init_rpc()
 
                 if self.verbose:
                     logger.success("Gemini client initialized successfully.")
@@ -516,14 +535,197 @@ class GeminiClient(GemMixin):
             except Exception as e:
                 logger.warning(f"Unexpected error while refreshing cookies: {e}")
 
+    async def _init_rpc(self) -> None:
+        """
+        Warm up the session and populate dynamic model metadata when possible.
+        """
+
+        steps = (
+            ("user status", self._fetch_user_status),
+            ("bard settings", self._send_bard_settings),
+            ("bard activity", self._send_bard_activity),
+        )
+        for label, func in steps:
+            try:
+                await func()
+            except Exception as exc:
+                logger.warning(f"Failed to initialize {label}: {exc}")
+
+    async def _fetch_user_status(self) -> None:
+        """
+        Fetch account status and derive dynamic models from Gemini RPC metadata.
+        """
+
+        response = await self._batch_execute(
+            [
+                RPCData(
+                    rpcid=GRPC.GET_USER_STATUS,
+                    payload="[]",
+                )
+            ]
+        )
+
+        response_json = extract_json_from_response(response.text)
+
+        for part in response_json:
+            part_body_str = get_nested_value(part, [2])
+            if not part_body_str:
+                continue
+
+            try:
+                part_body = json.loads(part_body_str)
+            except json.JSONDecodeError:
+                continue
+
+            status_code = get_nested_value(part_body, [14])
+            self.account_status = AccountStatus.from_status_code(status_code)
+
+            if self.account_status == AccountStatus.AVAILABLE:
+                logger.info(
+                    f"Account status: {self.account_status.name} - {self.account_status.description}"
+                )
+            else:
+                logger.warning(
+                    f"Account status: {self.account_status.name} - {self.account_status.description}"
+                )
+                if self.account_status in {
+                    AccountStatus.LOCATION_REJECTED,
+                    AccountStatus.ACCOUNT_REJECTED,
+                    AccountStatus.ACCESS_TEMPORARILY_UNAVAILABLE,
+                    AccountStatus.ACCOUNT_REJECTED_BY_GUARDIAN,
+                    AccountStatus.GUARDIAN_APPROVAL_REQUIRED,
+                }:
+                    logger.warning(
+                        f"Hard block detected ({self.account_status.name}). Skipping model discovery."
+                    )
+                    return
+
+            models_list = get_nested_value(part_body, [15])
+            if not isinstance(models_list, list):
+                continue
+
+            tier_flags = get_nested_value(part_body, [16], [])
+            capability_flags = get_nested_value(part_body, [17], [])
+            tier_flags = tier_flags if isinstance(tier_flags, list) else []
+            capability_flags = capability_flags if isinstance(capability_flags, list) else []
+            capacity, capacity_field = AvailableModel.compute_capacity(
+                tier_flags, capability_flags
+            )
+            id_name_mapping = AvailableModel.build_model_id_name_mapping()
+
+            registry: dict[str, AvailableModel] = {}
+            for model_data in models_list:
+                if not isinstance(model_data, list):
+                    continue
+
+                model_id = get_nested_value(model_data, [0], "")
+                display_name = get_nested_value(model_data, [1], "")
+                description = get_nested_value(model_data, [2], "")
+                if not model_id or not display_name:
+                    continue
+
+                is_model_available = True
+                if (
+                    self.account_status == AccountStatus.UNAUTHENTICATED
+                    and model_id != Model.BASIC_FLASH.model_id
+                ):
+                    is_model_available = False
+
+                registry[model_id] = AvailableModel(
+                    model_id=model_id,
+                    model_name=id_name_mapping.get(model_id, ""),
+                    display_name=display_name,
+                    description=description,
+                    capacity=capacity,
+                    capacity_field=capacity_field,
+                    is_available=is_model_available,
+                )
+
+            if registry:
+                self._model_registry = registry
+            return
+
+    async def _send_bard_settings(self) -> None:
+        """
+        Send required setup activity to Gemini.
+        """
+
+        await self._batch_execute(
+            [
+                RPCData(
+                    rpcid=GRPC.BARD_SETTINGS,
+                    payload='[[["adaptive_device_responses_enabled","advanced_mode_theme_override_triggered","advanced_zs_upsell_dismissal_count","advanced_zs_upsell_last_dismissed","ai_transparency_notice_dismissed","audio_overview_discovery_dismissal_count","audio_overview_discovery_last_dismissed","bard_in_chrome_link_sharing_enabled","bard_sticky_mode_disabled_count","canvas_create_discovery_tooltip_seen_count","combined_files_button_tag_seen_count","indigo_banner_explicit_dismissal_count","indigo_banner_impression_count","indigo_banner_last_seen_sec","current_popup_id","deep_research_has_seen_file_upload_tooltip","deep_research_model_update_disclaimer_display_count","default_bot_id","disabled_discovery_card_feature_ids","disabled_model_discovery_tooltip_feature_ids","disabled_mode_disclaimers","disabled_new_model_badge_mode_ids","disabled_settings_discovery_tooltip_feature_ids","disablement_disclaimer_last_dismissed_sec","disable_advanced_beta_dialog","disable_advanced_beta_non_en_banner","disable_advanced_resubscribe_ui","disable_at_mentions_discovery_tooltip","disable_autorun_fact_check_u18","disable_bot_create_tips_card","disable_bot_docs_in_gems_disclaimer","disable_bot_onboarding_dialog","disable_bot_save_reminder_tips_card","disable_bot_send_prompt_tips_card","disable_bot_shared_in_drive_disclaimer","disable_bot_try_create_tips_card","disable_colab_tooltip","disable_collapsed_tool_menu_tooltip","disable_continue_discovery_tooltip","disable_debug_info_moved_tooltip_v2","disable_enterprise_mode_dialog","disable_export_python_tooltip","disable_extensions_discovery_dialog","disable_extension_one_time_badge","disable_fact_check_tooltip_v2","disable_free_file_upload_tips_card","disable_generated_image_download_dialog","disable_get_app_banner","disable_get_app_desktop_dialog","disable_googler_in_enterprise_mode","disable_human_review_disclosure","disable_ice_open_vega_editor_tooltip","disable_image_upload_tooltip","disable_legal_concern_tooltip","disable_llm_history_import_disclaimer","disable_location_popup","disable_memory_discovery","disable_memory_extraction_discovery","disable_new_conversation_dialog","disable_onboarding_experience","disable_personal_context_tooltip","disable_photos_upload_disclaimer","disable_power_up_intro_tooltip","disable_scheduled_actions_mobile_notification_snackbar","disable_storybook_listen_button_tooltip","disable_streaming_settings_tooltip","disable_take_control_disclaimer","disable_teens_only_english_language_dialog","disable_tier1_rebranding_tooltip","disable_try_advanced_mode_dialog","enable_advanced_beta_mode","enable_advanced_mode","enable_googler_in_enterprise_mode","enable_memory","enable_memory_extraction","enable_personal_context","enable_personal_context_gemini","enable_personal_context_gemini_using_photos","enable_personal_context_gemini_using_workspace","enable_personal_context_search","enable_personal_context_youtube","enable_token_streaming","enforce_default_to_fast_version","mayo_discovery_banner_dismissal_count","mayo_discovery_banner_last_dismissed_sec","gempix_discovery_banner_dismissal_count","gempix_discovery_banner_last_dismissed","get_app_banner_ack_count","get_app_banner_seen_count","get_app_mobile_dialog_ack_count","guided_learning_banner_dismissal_count","guided_learning_banner_last_dismissed","has_accepted_agent_mode_fre_disclaimer","has_received_streaming_response","has_seen_agent_mode_tooltip","has_seen_bespoke_tooltip","has_seen_deepthink_mustard_tooltip","has_seen_deepthink_v2_tooltip","has_seen_deep_think_tooltip","has_seen_first_youtube_video_disclaimer","has_seen_ggo_tooltip","has_seen_image_grams_discovery_banner","has_seen_image_preview_in_input_area_tooltip","has_seen_kallo_discovery_banner","has_seen_kallo_tooltip","has_seen_model_picker_in_input_area_tooltip","has_seen_model_tooltip_in_input_area_for_gempix","has_seen_redo_with_gempix2_tooltip","has_seen_veograms_discovery_banner","has_seen_video_generation_discovery_banner","is_imported_chats_panel_open_by_default","jumpstart_onboarding_dismissal_count","last_dismissed_deep_research_implicit_invite","last_dismissed_discovery_feature_implicit_invites","last_dismissed_immersives_canvas_implicit_invite","last_dismissed_immersive_share_disclaimer_sec","last_dismissed_strike_timestamp_sec","last_dismissed_zs_student_aip_banner_sec","last_get_app_banner_ack_timestamp_sec","last_get_app_mobile_dialog_ack_timestamp_sec","last_human_review_disclosure_ack","last_selected_mode_id_in_embedded","last_selected_mode_id_on_web","last_two_up_activation_timestamp_sec","last_winter_olympics_interaction_timestamp_sec","memory_extracted_greeting_name","mini_gemini_tos_closed","mode_switcher_soft_badge_disabled_ids","mode_switcher_soft_badge_seen_count","personalization_first_party_onboarding_cross_surface_clicked","personalization_first_party_onboarding_cross_surface_seen_count","personalization_one_p_discovery_card_seen_count","personalization_one_p_discovery_last_consented","personalization_zero_state_card_last_interacted","personalization_zero_state_card_seen_count","popup_zs_visits_cooldown","require_reconsent_setting_for_personalization_banner_seen_count","show_debug_info","side_nav_open_by_default","student_verification_dismissal_count","student_verification_last_dismissed","task_viewer_cc_banner_dismissed_count","task_viewer_cc_banner_dismissed_time_sec","tool_menu_new_badge_disabled_ids","tool_menu_new_badge_impression_counts","tool_menu_soft_badge_disabled_ids","tool_menu_soft_badge_impression_counts","upload_disclaimer_last_consent_time_sec","viewed_student_aip_upsell_campaign_ids","voice_language","voice_name","web_and_app_activity_enabled","wellbeing_nudge_notice_last_dismissed_sec","zs_student_aip_banner_dismissal_count"]]]',
+                )
+            ]
+        )
+
+    async def _send_bard_activity(self) -> None:
+        """
+        Send warmup RPC calls before querying.
+        """
+
+        await self._batch_execute(
+            [
+                RPCData(
+                    rpcid=GRPC.BARD_SETTINGS,
+                    payload='[[["bard_activity_enabled"]]]',
+                )
+            ]
+        )
+
+    def list_models(self) -> list[AvailableModel] | None:
+        """
+        Return dynamically discovered models for the current account.
+        """
+
+        return list(self._model_registry.values()) if self._model_registry else None
+
+    def _resolve_model_by_name(self, name: str) -> Model | AvailableModel:
+        """
+        Resolve a user-facing model name to a dynamic model first, then enum fallback.
+        """
+
+        if name in self._model_registry:
+            return self._model_registry[name]
+
+        for model in self._model_registry.values():
+            if name in {model.model_name, model.display_name, model.model_id}:
+                return model
+
+        return Model.from_name(name)
+
+    def _resolve_enum_model(self, model: Model) -> Model | AvailableModel:
+        """
+        Upgrade enum models to their dynamic registry entry when possible.
+        """
+
+        if model is Model.UNSPECIFIED:
+            return model
+
+        header_value = model.model_header.get(MODEL_HEADER_KEY, "")
+        if not header_value:
+            return model
+
+        try:
+            parsed = json.loads(header_value)
+        except json.JSONDecodeError:
+            return model
+
+        model_id = get_nested_value(parsed, [4], "")
+        if model_id and model_id in self._model_registry:
+            return self._model_registry[model_id]
+
+        return model
+
     async def generate_content(
         self,
         prompt: str,
         files: list[str | Path | bytes | io.BytesIO] | None = None,
-        model: Model | str | dict = Model.UNSPECIFIED,
+        model: Model | AvailableModel | str | dict = Model.UNSPECIFIED,
         gem: Gem | str | None = None,
         chat: Optional["ChatSession"] = None,
         use_pro: bool = False,
+        tracer: Tracer | None = None,
         **kwargs,
     ) -> ModelOutput:
         """
@@ -547,6 +749,8 @@ class GeminiClient(GemMixin):
         use_pro: `bool`, optional
             If True, use Nano Banana Pro for image generation. This enables enhanced image generation
             capabilities. Default is False.
+        tracer: `Tracer`, optional
+            Per-request tracer for observing request lifecycle. Must be a fresh instance per call.
         kwargs: `dict`, optional
             Additional arguments which will be passed to the post request.
             Refer to `curl_cffi.requests.AsyncSession.request` for more information.
@@ -578,27 +782,13 @@ class GeminiClient(GemMixin):
 
         file_data = None
         if files:
-            await self._batch_execute(
-                [
-                    RPCData(
-                        rpcid=GRPC.BARD_ACTIVITY,
-                        payload='[[["bard_activity_enabled"]]]',
-                    )
-                ]
-            )
+            await self._send_bard_activity()
 
             uploaded_urls = await asyncio.gather(*(upload_file(file, self.proxy, session=self.client, account_index=self.account_index) for file in files))
             file_data = [[[url, 1, None, "image/jpeg"], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
 
         try:
-            await self._batch_execute(
-                [
-                    RPCData(
-                        rpcid=GRPC.BARD_ACTIVITY,
-                        payload='[[["bard_activity_enabled"]]]',
-                    )
-                ]
-            )
+            await self._send_bard_activity()
 
             streaming_state = _StreamingState()
             output: ModelOutput | None = None
@@ -610,6 +800,7 @@ class GeminiClient(GemMixin):
                 chat=chat,
                 streaming_state=streaming_state,
                 use_pro=use_pro,
+                tracer=tracer,
                 **kwargs,
             ):
                 pass  # Consume generator to get final output; 'output' is used after loop
@@ -655,10 +846,11 @@ class GeminiClient(GemMixin):
         self,
         prompt: str,
         files: list[str | Path | bytes | io.BytesIO] | None = None,
-        model: Model | str | dict = Model.UNSPECIFIED,
+        model: Model | AvailableModel | str | dict = Model.UNSPECIFIED,
         gem: Gem | str | None = None,
         chat: Optional["ChatSession"] = None,
         use_pro: bool = False,
+        tracer: Tracer | None = None,
         **kwargs,
     ) -> AsyncGenerator[ModelOutput, None]:
         """
@@ -682,6 +874,8 @@ class GeminiClient(GemMixin):
             Chat data to retrieve conversation history.
         use_pro: `bool`, optional
             If True, use Nano Banana Pro for image generation. Default is False.
+        tracer: `Tracer`, optional
+            Per-request tracer for observing request lifecycle.
         kwargs: `dict`, optional
             Additional arguments passed to `curl_cffi.requests.AsyncSession.request`.
 
@@ -707,27 +901,13 @@ class GeminiClient(GemMixin):
 
         file_data = None
         if files:
-            await self._batch_execute(
-                [
-                    RPCData(
-                        rpcid=GRPC.BARD_ACTIVITY,
-                        payload='[[["bard_activity_enabled"]]]',
-                    )
-                ]
-            )
+            await self._send_bard_activity()
 
             uploaded_urls = await asyncio.gather(*(upload_file(file, self.proxy, session=self.client, account_index=self.account_index) for file in files))
             file_data = [[[url, 1, None, "image/jpeg"], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
 
         try:
-            await self._batch_execute(
-                [
-                    RPCData(
-                        rpcid=GRPC.BARD_ACTIVITY,
-                        payload='[[["bard_activity_enabled"]]]',
-                    )
-                ]
-            )
+            await self._send_bard_activity()
 
             streaming_state = _StreamingState()
             output = None
@@ -739,6 +919,7 @@ class GeminiClient(GemMixin):
                 chat=chat,
                 streaming_state=streaming_state,
                 use_pro=use_pro,
+                tracer=tracer,
                 **kwargs,
             ):
                 yield output
@@ -782,11 +963,12 @@ class GeminiClient(GemMixin):
         self,
         prompt: str,
         req_file_data: list[list] | None = None,
-        model: Model | str | dict = Model.UNSPECIFIED,
+        model: Model | AvailableModel | str | dict = Model.UNSPECIFIED,
         gem: Gem | str | None = None,
         chat: Optional["ChatSession"] = None,
         streaming_state: _StreamingState | None = None,
         use_pro: bool = False,
+        tracer: Tracer | None = None,
         **kwargs,
     ) -> AsyncGenerator[ModelOutput, None]:
         """
@@ -796,11 +978,15 @@ class GeminiClient(GemMixin):
         assert prompt, "Prompt cannot be empty."
 
         if isinstance(model, str):
-            model = Model.from_name(model)
+            model = self._resolve_model_by_name(model)
         elif isinstance(model, dict):
             model = Model.from_dict(model)
-        elif not isinstance(model, Model):
-            raise TypeError(f"'model' must be a `gemini_webapi.constants.Model` instance, string, or dictionary; got `{type(model).__name__}`")
+        elif isinstance(model, Model):
+            model = self._resolve_enum_model(model)
+        elif not isinstance(model, AvailableModel):
+            raise TypeError(
+                f"'model' must be a `gemini_webapi.constants.Model`, `AvailableModel`, string, or dictionary; got `{type(model).__name__}`"
+            )
 
         _reqid = self._reqid
         self._reqid += 100000
@@ -848,89 +1034,154 @@ class GeminiClient(GemMixin):
                 ).decode("utf-8"),
             }
 
-            response = await self.client.request(
-                "POST",
-                Endpoint.get_generate_url(self.account_index),
-                params=params,
-                headers=model.model_header,
-                data=request_data,
-                stream=True,
-                **kwargs,
-            )
+            model_name = getattr(model, "model_name", str(model))
+            _poll_iterations = 0
 
-            if response.status_code != 200:
-                await self.close()
-                raise APIError(f"Failed to generate contents. Status: {response.status_code}")
+            if tracer:
+                tracer.on_request_start(
+                    prompt=prompt,
+                    model_name=model_name,
+                    params=params,
+                    request_data_preview=str(request_data.get("f.req", ""))[:300],
+                    chat_metadata=list(chat.metadata) if isinstance(chat, ChatSession) else [],
+                    use_pro=use_pro,
+                    file_count=len(req_file_data) if req_file_data else 0,
+                )
 
-            if self.client:
-                self.cookies.update(self.client.cookies)
+            _poll_start = time.time()
+            _MAX_POLL_TIME = 150  # max seconds to poll for image generation queueing
+            _POLL_INTERVAL = 5   # seconds between poll attempts
 
-            buffer = ""
-            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            while True:  # polling loop for queueing/thinking retries
+                _poll_iterations += 1
+                response = await self.client.request(
+                    "POST",
+                    Endpoint.get_generate_url(self.account_index),
+                    params=params,
+                    headers=model.model_header,
+                    data=request_data,
+                    stream=True,
+                    **kwargs,
+                )
 
-            # Track last seen content. streaming_state allows persistence across retries.
-            if streaming_state is None:
-                streaming_state = _StreamingState()
+                if tracer:
+                    tracer.on_response_meta(
+                        status_code=response.status_code,
+                        headers=sanitize_headers(dict(response.headers) if hasattr(response, "headers") else {}),
+                        poll_iteration=_poll_iterations,
+                    )
 
-            last_texts = streaming_state.last_texts
-            last_thoughts = streaming_state.last_thoughts
-            last_progress_time = streaming_state.last_progress_time
-            flags = _StreamFlags()
-
-            async for chunk in response.aiter_content():
-                buffer += decoder.decode(chunk, final=False)
-                if buffer.startswith(")]}'"):
-                    buffer = buffer[4:].lstrip()
-                parsed_parts, buffer = parse_response_by_frame(buffer)
-
-                got_update = False
-                for part in parsed_parts:
-                    result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro)
-                    if result:
-                        yield result
-                        got_update = True
-                        # If video generation is pending, break out of stream immediately
-                        # so the caller can start polling instead of waiting for timeout
-                        if result.candidates and any(
-                            c.text and _is_video_generation_pending(c.text) for c in result.candidates
-                        ):
-                            logger.info("Video generation pending detected, breaking stream to start polling.")
-                            return
-
-                if got_update or flags.is_thinking:
-                    last_progress_time = time.time()
-                    streaming_state.last_progress_time = last_progress_time
-                    continue
-
-                stall_threshold = min(self.timeout, self.watchdog_timeout)
-                if (time.time() - last_progress_time) > stall_threshold:
-                    logger.warning(f"Response stalled (active connection but no progress for {stall_threshold}s). Queueing={flags.is_queueing}. Retrying...")
+                if response.status_code != 200:
+                    if tracer:
+                        tracer.on_request_end(status="http_error", error=f"status={response.status_code}", final_flags=None, chat_metadata_after=None, poll_iterations=_poll_iterations)
                     await self.close()
-                    raise APIError("Response stalled (zombie stream).")
+                    raise APIError(f"Failed to generate contents. Status: {response.status_code}")
 
-            # Final flush
-            buffer += decoder.decode(b"", final=True)
-            if buffer:
-                parsed_parts, _ = parse_response_by_frame(buffer)
-                for part in parsed_parts:
-                    result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro)
-                    if result:
-                        yield result
+                if self.client:
+                    self.cookies.update(self.client.cookies)
 
-            if not (flags.is_completed or flags.is_final_chunk) or flags.is_thinking or flags.is_queueing:
-                logger.debug(f"Stream interrupted (completed={flags.is_completed}, final_chunk={flags.is_final_chunk}, thinking={flags.is_thinking}, queueing={flags.is_queueing}). Polling again...")
-                raise APIError("Stream interrupted or truncated.")
+                buffer = ""
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+                # Track last seen content. streaming_state allows persistence across retries.
+                if streaming_state is None:
+                    streaming_state = _StreamingState()
+
+                last_texts = streaming_state.last_texts
+                last_thoughts = streaming_state.last_thoughts
+                last_progress_time = time.time()  # reset per polling iteration to avoid false stall detection
+                streaming_state.last_progress_time = last_progress_time
+                flags = _StreamFlags()
+
+                async for chunk in response.aiter_content():
+                    buffer += decoder.decode(chunk, final=False)
+                    if buffer.startswith(")]}'"):
+                        buffer = buffer[4:].lstrip()
+                    parsed_parts, buffer = parse_response_by_frame(buffer)
+
+                    got_update = False
+                    for part in parsed_parts:
+                        result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro, tracer=tracer)
+                        if result:
+                            yield result
+                            got_update = True
+                            # If video generation is pending, break out of stream immediately
+                            # so the caller can start polling instead of waiting for timeout
+                            if result.candidates and any(
+                                c.text and _is_video_generation_pending(c.text) for c in result.candidates
+                            ):
+                                logger.info("Video generation pending detected, breaking stream to start polling.")
+                                return
+
+                    if got_update or flags.is_thinking:
+                        last_progress_time = time.time()
+                        streaming_state.last_progress_time = last_progress_time
+                        continue
+
+                    stall_threshold = min(self.timeout, self.watchdog_timeout)
+                    if (time.time() - last_progress_time) > stall_threshold:
+                        logger.warning(f"Response stalled (active connection but no progress for {stall_threshold}s). Queueing={flags.is_queueing}. Retrying...")
+                        if tracer:
+                            tracer.on_request_end(status="stalled", error="Response stalled (zombie stream).", final_flags=None, chat_metadata_after=None, poll_iterations=_poll_iterations)
+                        await self.close()
+                        raise APIError("Response stalled (zombie stream).")
+
+                # Final flush
+                buffer += decoder.decode(b"", final=True)
+                if buffer:
+                    parsed_parts, _ = parse_response_by_frame(buffer)
+                    for part in parsed_parts:
+                        result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro, tracer=tracer)
+                        if result:
+                            yield result
+
+                _flags_dict = {
+                    "is_completed": flags.is_completed,
+                    "is_final_chunk": flags.is_final_chunk,
+                    "is_thinking": flags.is_thinking,
+                    "is_queueing": flags.is_queueing,
+                }
+
+                if not (flags.is_completed or flags.is_final_chunk) or flags.is_thinking or flags.is_queueing:
+                    # Only poll when Gemini is actively working (queueing/thinking = image gen)
+                    # Otherwise fail fast and let the decorator retry
+                    if (flags.is_queueing or flags.is_thinking) and (time.time() - _poll_start) < _MAX_POLL_TIME:
+                        _elapsed = time.time() - _poll_start
+                        logger.info(f"Stream incomplete (queueing={flags.is_queueing}, thinking={flags.is_thinking}), polling in {_POLL_INTERVAL}s ({_elapsed:.0f}s elapsed)...")
+                        await asyncio.sleep(_POLL_INTERVAL)
+                        continue  # retry within polling loop
+                    if tracer:
+                        tracer.on_request_end(status="incomplete", error="Stream interrupted or truncated.", final_flags=_flags_dict, chat_metadata_after=None, poll_iterations=_poll_iterations)
+                    raise APIError("Stream interrupted or truncated.")
+
+                if tracer:
+                    tracer.on_request_end(
+                        status="ok",
+                        error=None,
+                        final_flags=_flags_dict,
+                        chat_metadata_after=list(chat.metadata) if isinstance(chat, ChatSession) else [],
+                        poll_iterations=_poll_iterations,
+                    )
+                break  # stream completed, exit polling loop
 
         except RequestsError as exc:
             if "timeout" in str(exc).lower():
+                if tracer:
+                    tracer.on_request_end(status="timeout", error=str(exc), final_flags=None, chat_metadata_after=None, poll_iterations=locals().get("_poll_iterations", 0))
                 raise RequestTimeoutError(
                     "The request timed out while waiting for Gemini to respond. This often happens with very long prompts "
                     "or complex file analysis. Try increasing the 'timeout' value when initializing GeminiClient."
                 ) from exc
+            if tracer:
+                tracer.on_request_end(status="request_error", error=str(exc), final_flags=None, chat_metadata_after=None, poll_iterations=locals().get("_poll_iterations", 0))
             raise
         except (GeminiError, APIError):
+            if tracer:
+                tracer.on_request_end(status="api_error", error="GeminiError/APIError raised", final_flags=None, chat_metadata_after=None, poll_iterations=locals().get("_poll_iterations", 0))
             raise
         except Exception as e:
+            if tracer:
+                tracer.on_request_end(status="parse_error", error=str(e), final_flags=None, chat_metadata_after=None, poll_iterations=locals().get("_poll_iterations", 0))
             logger.debug(f"{type(e).__name__}: {e}; Unexpected response or parsing error. Response: {locals().get('response', 'N/A')}")
             raise APIError(f"Failed to parse response body: {e}") from e
 
@@ -943,6 +1194,7 @@ class GeminiClient(GemMixin):
         last_thoughts: dict[str, str],
         flags: _StreamFlags,
         use_pro: bool = False,
+        tracer: Tracer | None = None,
     ) -> ModelOutput | None:
         """Process a single stream part and return ModelOutput if candidates found."""
         # Check for fatal error codes
@@ -975,12 +1227,19 @@ class GeminiClient(GemMixin):
 
         inner_json_str = get_nested_value(part, [2])
         if not inner_json_str:
+            if tracer:
+                tracer.on_stream_frame(part=part, part_json=None, flags={"is_thinking": flags.is_thinking, "is_queueing": flags.is_queueing, "has_candidates": flags.has_candidates, "is_completed": flags.is_completed, "is_final_chunk": flags.is_final_chunk, "detected_image_model": flags.detected_image_model})
             return None
 
         try:
             part_json = json.loads(inner_json_str)
         except json.JSONDecodeError:
+            if tracer:
+                tracer.on_stream_frame(part=part, part_json=None, flags={"is_thinking": flags.is_thinking, "is_queueing": flags.is_queueing, "has_candidates": flags.has_candidates, "is_completed": flags.is_completed, "is_final_chunk": flags.is_final_chunk, "detected_image_model": flags.detected_image_model})
             return None
+
+        if tracer:
+            tracer.on_stream_frame(part=part, part_json=part_json, flags={"is_thinking": flags.is_thinking, "is_queueing": flags.is_queueing, "has_candidates": flags.has_candidates, "is_completed": flags.is_completed, "is_final_chunk": flags.is_final_chunk, "detected_image_model": flags.detected_image_model})
 
         # Update chat metadata
         m_data = get_nested_value(part_json, [1])
@@ -1055,15 +1314,16 @@ class GeminiClient(GemMixin):
         flags: _StreamFlags,
     ) -> Candidate | None:
         """Parse a single candidate from the response."""
-        # Dump raw candidate data for debugging image edit responses
-        try:
-            dump_dir = Path("/tmp/gemini_debug")
-            dump_dir.mkdir(exist_ok=True)
-            dump_file = dump_dir / f"candidate_{index}_{rcid}.json"
-            dump_file.write_bytes(json.dumps(candidate_data, default=str, option=json.OPT_INDENT_2))
-            logger.info(f"[RAW_CANDIDATE] dumped to {dump_file}")
-        except Exception as e:
-            logger.warning(f"[RAW_CANDIDATE] dump failed: {e}")
+        # Debug dump disabled by default — set GEMINI_DEBUG_DUMP=1 to enable
+        if os.environ.get("GEMINI_DEBUG_DUMP"):
+            try:
+                dump_dir = Path("/tmp/gemini_debug")
+                dump_dir.mkdir(exist_ok=True)
+                dump_file = dump_dir / f"candidate_{index}_{rcid}.json"
+                dump_file.write_bytes(json.dumps(candidate_data, default=str, option=json.OPT_INDENT_2))
+                logger.info(f"[RAW_CANDIDATE] dumped to {dump_file}")
+            except Exception as e:
+                logger.warning(f"[RAW_CANDIDATE] dump failed: {e}")
 
         text = _extract_candidate_text(candidate_data)
 

@@ -1,4 +1,5 @@
 from .client import ChatSession, GeminiClient
+from .tracer import Tracer
 from .exceptions import (
     APIError,
     AuthError,
@@ -13,6 +14,7 @@ from .exceptions import (
     UsageLimitExceeded,
 )
 from .types import Candidate, Gem, GemJar, GeneratedImage, GeneratedVideo, Image, ModelOutput, RPCData, WebImage
+from .types import AvailableModel, ChatHistory, ChatInfo, ChatTurn
 from .utils import (
     load_netscape_cookies,
     load_netscape_cookies_as_dict,
@@ -23,8 +25,12 @@ from .utils import (
 __all__ = [
     "APIError",
     "AuthError",
+    "AvailableModel",
     "Candidate",
     "ChatSession",
+    "ChatHistory",
+    "ChatInfo",
+    "ChatTurn",
     "Gem",
     "GemJar",
     "GeminiClient",
@@ -41,6 +47,7 @@ __all__ = [
     "RateLimitExceeded",
     "RequestTimeoutError",
     "TemporarilyBlocked",
+    "Tracer",
     "UsageLimitExceeded",
     "WebImage",
     "load_netscape_cookies",

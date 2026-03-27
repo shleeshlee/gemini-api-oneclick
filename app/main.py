@@ -23,12 +23,26 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Request
+from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import AsyncClient
 from pydantic import BaseModel
 
+from parsers import (
+    build_chat_completion_payload,
+    build_chat_reply_text,
+    iter_chat_stream_chunks,
+    parse_image_generation_result,
+    parse_video_generation_result,
+)
+from worker_events import (
+    build_gemini_response_snapshot,
+    build_worker_event,
+    build_worker_event_headers,
+    persist_worker_event,
+)
+from raw_capture_tracer import RawCaptureTracer
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
 from gemini_webapi.types.image import GeneratedImage
@@ -49,6 +63,15 @@ set_log_level("INFO")
 # Global client and lock
 gemini_client = None
 client_lock = asyncio.Lock()
+runtime_models_cache: list[dict[str, Any]] = []
+runtime_models_cache_time = 0.0
+
+RUNTIME_MODELS_CACHE_TTL = 300
+RUNTIME_MODELS_EXCLUDE = {
+    "gemini-advanced",
+    "gemini-apps-while-signed-out",
+}
+IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "1024").strip() or "1024"
 
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
@@ -88,9 +111,11 @@ async def get_or_create_client():
 
 async def reset_client():
     """Reset client for error recovery."""
-    global gemini_client
+    global gemini_client, runtime_models_cache, runtime_models_cache_time
     async with client_lock:
         gemini_client = None
+        runtime_models_cache = []
+        runtime_models_cache_time = 0.0
         logger.warning("Gemini client has been reset.")
 
 
@@ -120,6 +145,182 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def build_model_payload(model_ids: list[str], owned_by: str = "google-gemini-web") -> list[dict[str, Any]]:
+    """Build OpenAI-style model list payload entries from model ids."""
+    now = int(datetime.now(tz=timezone.utc).timestamp())
+    seen = set()
+    data = []
+    for model_id in model_ids:
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        data.append(
+            {
+                "id": model_id,
+                "object": "model",
+                "created": now,
+                "owned_by": owned_by,
+            }
+        )
+    return data
+
+
+def get_enum_models() -> list[dict[str, Any]]:
+    """Return the vendored fallback model list."""
+    return build_model_payload([m.model_name for m in Model if m.model_name != "unspecified"])
+
+
+async def get_runtime_models() -> list[dict[str, Any]]:
+    """Extract currently exposed Gemini model ids from the live Gemini web app."""
+    global runtime_models_cache, runtime_models_cache_time
+
+    now = time.time()
+    if runtime_models_cache and (now - runtime_models_cache_time) < RUNTIME_MODELS_CACHE_TTL:
+        return runtime_models_cache
+
+    try:
+        client = await get_or_create_client()
+        if not getattr(client, "client", None):
+            raise RuntimeError("Gemini client session is unavailable")
+
+        resp = await client.client.get("https://gemini.google.com/app")
+        resp.raise_for_status()
+
+        raw_names = re.findall(r"gemini-[a-z0-9.-]+", resp.text.lower())
+        model_ids = []
+        seen = set()
+        for name in raw_names:
+            if name in RUNTIME_MODELS_EXCLUDE or name in seen:
+                continue
+            seen.add(name)
+            model_ids.append(name)
+
+        if model_ids:
+            runtime_models_cache = build_model_payload(model_ids)
+            runtime_models_cache_time = now
+            logger.info("Discovered runtime Gemini models: %s", model_ids)
+            return runtime_models_cache
+    except Exception as e:
+        logger.warning("Falling back to vendored model enum for /v1/models: %s", e)
+
+    runtime_models_cache = get_enum_models()
+    runtime_models_cache_time = now
+    return runtime_models_cache
+
+
+def build_custom_model(name: str, base_model: Model) -> dict[str, Any]:
+    """Build a custom model dict using a current runtime name with a known-good header."""
+    return {
+        "model_name": name,
+        "model_header": dict(base_model.model_header),
+    }
+
+
+def infer_model_alias(openai_model_name: str) -> Optional[dict[str, Any]]:
+    """Map newer runtime model names onto the closest supported vendored header."""
+    name_lower = openai_model_name.lower()
+
+    if "thinking" in name_lower:
+        return build_custom_model(openai_model_name, Model.G_3_0_FLASH_THINKING)
+    if "flash" in name_lower:
+        return build_custom_model(openai_model_name, Model.G_3_0_FLASH)
+    if "pro" in name_lower:
+        return build_custom_model(openai_model_name, Model.G_3_0_PRO)
+    return None
+
+
+def extract_header_token(model_header: dict[str, str]) -> str:
+    """Extract the active Google model token from the vendored header payload."""
+    header_value = model_header.get("x-goog-ext-525001261-jspb", "")
+    match = re.search(r'"([0-9a-f]{16})"', header_value)
+    return match.group(1) if match else ""
+
+
+def classify_model_family(model_name: str) -> str:
+    """Collapse model names into the currently supported header families."""
+    model_name = model_name.lower()
+    if "thinking" in model_name:
+        return "thinking"
+    if "flash" in model_name:
+        return "flash"
+    if "pro" in model_name:
+        return "pro"
+    return "unknown"
+
+
+def describe_model(model: Model | dict[str, Any]) -> dict[str, str]:
+    """Normalize the resolved model into trace-friendly metadata."""
+    if isinstance(model, dict):
+        model_name = model.get("model_name", "unspecified")
+        model_header = model.get("model_header", {})
+    else:
+        model_name = getattr(model, "model_name", str(model))
+        model_header = getattr(model, "model_header", {})
+    return {
+        "resolved_model": model_name,
+        "header_family": classify_model_family(model_name),
+        "header_token": extract_header_token(model_header),
+    }
+
+
+def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
+    """Resolve an incoming model name and keep trace metadata for the gateway."""
+    name_lower = openai_model_name.lower()
+
+    for m in Model:
+        model_name = m.model_name if hasattr(m, "model_name") else str(m)
+        if name_lower == model_name.lower():
+            trace = {"requested_model": openai_model_name, "resolution": "exact"}
+            trace.update(describe_model(m))
+            return m, trace
+
+    for m in Model:
+        model_name = m.model_name if hasattr(m, "model_name") else str(m)
+        if name_lower in model_name.lower():
+            trace = {"requested_model": openai_model_name, "resolution": "substring"}
+            trace.update(describe_model(m))
+            return m, trace
+
+    alias_model = infer_model_alias(openai_model_name)
+    if alias_model:
+        logger.info("Mapped runtime model alias '%s' to vendored header family", openai_model_name)
+        trace = {"requested_model": openai_model_name, "resolution": "alias"}
+        trace.update(describe_model(alias_model))
+        return alias_model, trace
+
+    logger.warning("Unknown model '%s', using default", openai_model_name)
+    for m in Model:
+        model_name = m.model_name if hasattr(m, "model_name") else str(m)
+        if model_name != "unspecified":
+            trace = {"requested_model": openai_model_name, "resolution": "default"}
+            trace.update(describe_model(m))
+            return m, trace
+
+    fallback = next(iter(Model))
+    trace = {"requested_model": openai_model_name, "resolution": "default"}
+    trace.update(describe_model(fallback))
+    return fallback, trace
+
+
+def build_model_trace_headers(trace: dict[str, str], endpoint: str) -> dict[str, str]:
+    """Expose the model resolution chain to the gateway and admin UI."""
+    return {
+        "X-OneClick-Requested-Model": trace.get("requested_model", ""),
+        "X-OneClick-Resolved-Model": trace.get("resolved_model", ""),
+        "X-OneClick-Header-Family": trace.get("header_family", ""),
+        "X-OneClick-Header-Token": trace.get("header_token", ""),
+        "X-OneClick-Model-Resolution": trace.get("resolution", ""),
+        "X-OneClick-Endpoint": endpoint,
+    }
+
+
+def log_worker_event(event, payload: dict[str, Any] | None = None):
+    """Persist and emit a structured worker event for later gateway/parser refactors."""
+    persisted = persist_worker_event(event, payload=payload)
+    logger.info("Worker event: %s", persisted.model_dump_json())
+    return persisted
 
 
 def correct_markdown(md_text: str) -> str:
@@ -212,44 +413,14 @@ async def health_check():
 
 @app.get("/v1/models")
 async def list_models():
-    """Return model list from gemini_webapi constants."""
-    now = int(datetime.now(tz=timezone.utc).timestamp())
-    data = [
-        {
-            "id": m.model_name,
-            "object": "model",
-            "created": now,
-            "owned_by": "google-gemini-web",
-        }
-        for m in Model
-        if m.model_name != "unspecified"
-    ]
-    return {"object": "list", "data": data}
+    """Return model list from live Gemini page data, falling back to vendored constants."""
+    return {"object": "list", "data": await get_runtime_models()}
 
 
-def map_model_name(openai_model_name: str) -> Model:
-    """Map OpenAI model name to Gemini Model enum."""
-    name_lower = openai_model_name.lower()
-
-    # Exact match first
-    for m in Model:
-        model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if name_lower == model_name.lower():
-            return m
-
-    # Substring match fallback
-    for m in Model:
-        model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if name_lower in model_name.lower():
-            return m
-
-    logger.warning(f"Unknown model '{openai_model_name}', using default")
-    # Return first non-unspecified model, or fallback to first
-    for m in Model:
-        mn = m.model_name if hasattr(m, "model_name") else str(m)
-        if mn != "unspecified":
-            return m
-    return next(iter(Model))
+def map_model_name(openai_model_name: str) -> Model | dict[str, Any]:
+    """Map OpenAI model name to a vendored enum or a custom runtime-compatible model dict."""
+    model, _ = resolve_model_selection(openai_model_name)
+    return model
 
 
 def prepare_conversation(messages: List[Message]) -> tuple:
@@ -299,7 +470,7 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 async def download_image_as_base64(image, cookies=None) -> str | None:
     """Download an image and return as raw base64 string (no data: prefix).
 
-    For GeneratedImage: appends =s2048 for full size, uses its cookies.
+    For GeneratedImage: append an explicit size suffix and use its cookies.
     For WebImage: downloads directly.
     """
     try:
@@ -307,11 +478,12 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
         req_cookies = cookies
 
         if isinstance(image, GeneratedImage):
-            url = url + "=s2048"  # full size instead of 512x512 preview
+            # 1024 keeps the studio responsive while remaining sharper than the preview.
+            url = url + f"=s{IMAGE_DOWNLOAD_SIZE}"
             req_cookies = image.cookies
 
         async with AsyncClient(
-            http2=True, follow_redirects=True, cookies=req_cookies, timeout=30.0
+            http2=True, follow_redirects=True, cookies=req_cookies, timeout=45.0
         ) as http_client:
             resp = await http_client.get(url)
             if resp.status_code == 200:
@@ -325,9 +497,17 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest, api_key: str = Depends(verify_api_key)):
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    response: Response,
+    api_key: str = Depends(verify_api_key),
+):
     """Handle chat completion requests with retry and streaming support."""
     max_retries = 3
+    trace_headers: dict[str, str] = {}
+    conversation = ""
+    client = None
+    tracer: RawCaptureTracer | None = None
 
     for attempt in range(max_retries):
         try:
@@ -337,14 +517,16 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
             logger.info(f"Prepared conversation: {conversation[:200]}...")
             logger.info(f"Temp files: {temp_files}")
 
-            model = map_model_name(request.model)
-            logger.info(f"Using model: {model}")
+            model, model_trace = resolve_model_selection(request.model)
+            trace_headers = build_model_trace_headers(model_trace, "chat")
+            logger.info("Using model trace: %s", model_trace)
 
+            tracer = RawCaptureTracer()
             logger.info("Sending request to Gemini...")
             if temp_files:
-                response = await client.generate_content(conversation, files=temp_files, model=model)
+                gemini_response = await client.generate_content(conversation, files=temp_files, model=model, tracer=tracer)
             else:
-                response = await client.generate_content(conversation, model=model)
+                gemini_response = await client.generate_content(conversation, model=model, tracer=tracer)
 
             for temp_file in temp_files:
                 try:
@@ -352,89 +534,60 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
                 except Exception as e:
                     logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
 
-            reply_text = ""
-            if getattr(response, "thoughts", None):
-                reply_text += f"<think>{response.thoughts}</think>"
-            if getattr(response, "text", None):
-                reply_text += response.text
-            else:
-                reply_text += str(response)
-
-            # If Gemini returned images (edit/generation), embed as base64 markdown
-            if hasattr(response, "images") and response.images:
-                logger.info(f"Response contains {len(response.images)} image(s), downloading...")
-                for idx, img in enumerate(response.images):
-                    b64 = await download_image_as_base64(img)
-                    if b64:
-                        reply_text += f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"
-                        logger.info(f"Image {idx} embedded, base64 length={len(b64)}")
-                    else:
-                        logger.warning(f"Failed to download response image {idx}")
-            reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
-            reply_text = reply_text.replace("\\#", "#").replace("\\!", "!").replace("\\|", "|")
-            # Strip code fences wrapping HTML content (Gemini sometimes wraps HTML in ```)
-            reply_text = re.sub(r'```\s*\n(<[a-zA-Z][\s\S]*?)\n```', r'\1', reply_text)
-            reply_text = correct_markdown(reply_text)
+            reply_text = await build_chat_reply_text(
+                gemini_response,
+                image_downloader=download_image_as_base64,
+                markdown_corrector=correct_markdown,
+                raw_capture=tracer.get_snapshot() if tracer else None,
+            )
+            worker_event = build_worker_event(
+                "chat",
+                trace_headers,
+                gemini_response,
+                chat_id=getattr(gemini_response, "cid", "") or "",
+            )
+            worker_event = log_worker_event(
+                worker_event,
+                payload={
+                    "request": {
+                        "model": request.model,
+                        "message_count": len(request.messages),
+                        "conversation": conversation,
+                        "has_temp_files": bool(temp_files),
+                    },
+                    "response": build_gemini_response_snapshot(gemini_response),
+                    "raw_capture": tracer.get_snapshot() if tracer else None,
+                },
+            )
+            trace_headers.update(build_worker_event_headers(worker_event))
 
             logger.info(f"Response: {reply_text[:200]}...")
-
-            if not reply_text or reply_text.strip() == "":
-                logger.warning("Empty response received from Gemini")
-                reply_text = "Empty response from Gemini. Please check if your cookie is still valid."
 
             completion_id = f"chatcmpl-{uuid.uuid4()}"
             created_time = int(time.time())
 
             if request.stream:
-                async def generate_stream():
-                    data = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_time,
-                        "model": request.model,
-                        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-
-                    chunk_size = 10
-                    for i in range(0, len(reply_text), chunk_size):
-                        chunk = reply_text[i:i + chunk_size]
-                        data = {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_time,
-                            "model": request.model,
-                            "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
-                        }
-                        yield f"data: {json.dumps(data)}\n\n"
-                        await asyncio.sleep(0.02)
-
-                    data = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_time,
-                        "model": request.model,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-                    yield "data: [DONE]\n\n"
-
-                return StreamingResponse(generate_stream(), media_type="text/event-stream")
+                return StreamingResponse(
+                    iter_chat_stream_chunks(
+                        completion_id=completion_id,
+                        created_time=created_time,
+                        model=request.model,
+                        reply_text=reply_text,
+                    ),
+                    media_type="text/event-stream",
+                    headers=trace_headers,
+                )
             else:
-                result = {
-                    "id": completion_id,
-                    "object": "chat.completion",
-                    "created": created_time,
-                    "model": request.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
-                    "usage": {
-                        "prompt_tokens": len(conversation) // 4,
-                        "completion_tokens": len(reply_text) // 4,
-                        "total_tokens": (len(conversation) + len(reply_text)) // 4,
-                    },
-                }
+                result = build_chat_completion_payload(
+                    completion_id=completion_id,
+                    created_time=created_time,
+                    model=request.model,
+                    reply_text=reply_text,
+                    conversation=conversation,
+                )
 
                 logger.info("Returning response successfully")
+                response.headers.update(trace_headers)
                 return result
 
         except HTTPException:
@@ -442,6 +595,26 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
         except Exception as e:
             error_msg = str(e).lower()
             logger.error(f"Error generating completion (attempt {attempt + 1}/{max_retries}): {str(e)}", exc_info=True)
+            error_event = build_worker_event(
+                "chat",
+                trace_headers,
+                None,
+                raw_response_preview=str(e),
+                error_summary=str(e),
+            )
+            log_worker_event(
+                error_event,
+                payload={
+                    "request": {
+                        "model": request.model,
+                        "message_count": len(request.messages),
+                        "conversation": conversation,
+                        "attempt": attempt + 1,
+                    },
+                    "error": str(e),
+                    "raw_capture": tracer.get_snapshot() if tracer else None,
+                },
+            )
 
             if any(keyword in error_msg for keyword in ['auth', 'cookie', 'expired', 'invalid', '401', '403']):
                 logger.warning("Detected possible authentication error, resetting client...")
@@ -503,7 +676,11 @@ def _cleanup_expired_sessions():
 
 
 @app.post("/v1/images/generations")
-async def create_image(request: ImageGenerationRequest, api_key: str = Depends(verify_api_key)):
+async def create_image(
+    request: ImageGenerationRequest,
+    response: Response,
+    api_key: str = Depends(verify_api_key),
+):
     """DALL-E compatible image generation endpoint using Gemini ImageFX.
 
     Edit mode:
@@ -511,23 +688,31 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
     - Subsequent rounds: send `session_id` + `prompt` (no image needed) → continues editing
     """
     temp_files = []
+    trace_headers: dict[str, str] = {}
+    session_id = request.session_id
+    chat = None
+    prompt = request.prompt
+    client = None
+    tracer: RawCaptureTracer | None = None
     try:
         client = await get_or_create_client()
         _cleanup_expired_sessions()
         logger.info(f"Image generation: '{request.prompt[:200]}' has_image={request.image is not None} session={request.session_id}")
 
-        model = map_model_name(request.model) if request.model else None
+        model = None
+        if request.model:
+            model, model_trace = resolve_model_selection(request.model)
+            trace_headers = build_model_trace_headers(model_trace, "image")
         prompt = request.prompt  # prompt building is done by gateway
 
-        chat = None
-        session_id = request.session_id
+        tracer = RawCaptureTracer()
 
         # Continue existing edit session
         if session_id and session_id in _edit_sessions:
             chat, _ = _edit_sessions[session_id]
             _edit_sessions[session_id] = (chat, time.time())  # refresh TTL
             logger.info(f"Continuing edit session {session_id}, cid={chat.cid}")
-            response = await chat.send_message(prompt)
+            gemini_response = await chat.send_message(prompt, tracer=tracer)
 
         else:
             # New request (text-to-image or first round of edit)
@@ -551,46 +736,81 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
 
                 # Start a ChatSession so subsequent edits stay in context
                 chat = client.start_chat()
-                response = await chat.send_message(prompt, files=temp_files)
+                if model:
+                    chat.model = model
+                gemini_response = await chat.send_message(prompt, files=temp_files, tracer=tracer)
                 session_id = str(uuid.uuid4())[:12]
                 _edit_sessions[session_id] = (chat, time.time())
                 logger.info(f"New edit session {session_id} created, cid={chat.cid}")
 
             else:
                 # Pure text-to-image (no session needed)
-                response = await client.generate_content(prompt, **kwargs)
+                gemini_response = await client.generate_content(prompt, tracer=tracer, **kwargs)
 
         # Log what we got back
-        logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
-        logger.info(f"Response images: {response.images}")
+        logger.info(f"Response text: '{gemini_response.text[:200] if gemini_response.text else 'None'}'")
+        logger.info(f"Response images: {gemini_response.images}")
 
-        images = response.images
+        images = gemini_response.images
         if not images and not chat:
             # Retry only for pure text-to-image
             logger.info("No images with first prompt, trying alternate format...")
-            response = await client.generate_content(f"Create a picture: {request.prompt}")
-            images = response.images
+            tracer = RawCaptureTracer()  # fresh tracer for retry
+            retry_kwargs = {}
+            if model:
+                retry_kwargs["model"] = model
+            gemini_response = await client.generate_content(f"Create a picture: {request.prompt}", tracer=tracer, **retry_kwargs)
+            images = gemini_response.images
 
         if not images:
-            raise HTTPException(status_code=422, detail=f"Gemini did not generate images. Response: {response.text[:300] if response.text else 'empty'}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Gemini did not generate images. Response: {gemini_response.text[:300] if gemini_response.text else 'empty'}",
+            )
 
-        result_data = []
-        for img in images[:request.n]:
-            logger.info(f"Downloading image: {type(img).__name__} url={img.url[:80]}...")
-            b64 = await download_image_as_base64(img)
-            if b64:
-                result_data.append({"b64_json": b64})
-                logger.info(f"Image downloaded OK, base64 length={len(b64)}")
-            else:
-                logger.warning(f"Failed to download image: {img.url[:80]}")
+        result_data, raw_image_urls = await parse_image_generation_result(
+            images,
+            limit=request.n,
+            image_downloader=download_image_as_base64,
+            raw_capture=tracer.get_snapshot() if tracer else None,
+        )
 
         if not result_data:
             raise HTTPException(status_code=500, detail="Images found but all downloads failed")
+
+        worker_event = build_worker_event(
+            "image",
+            trace_headers,
+            gemini_response,
+            chat_id=getattr(chat, "cid", "") if chat else "",
+            session_id=session_id or "",
+        )
+        worker_event = log_worker_event(
+            worker_event,
+            payload={
+                "request": {
+                    "model": request.model,
+                    "prompt": prompt,
+                    "count": request.n,
+                    "size": request.size,
+                    "quality": request.quality,
+                    "has_input_media": bool(request.image),
+                    "media_type": request.media_type,
+                    "session_id": session_id,
+                },
+                "response": build_gemini_response_snapshot(gemini_response),
+                "raw_capture": tracer.get_snapshot() if tracer else None,
+            },
+        )
+        trace_headers.update(build_worker_event_headers(worker_event))
 
         logger.info(f"Image generation complete: {len(result_data)} image(s), session={session_id}")
         result = {"created": int(time.time()), "data": result_data, "final_prompt": prompt}
         if session_id:
             result["session_id"] = session_id
+        if raw_image_urls:
+            result["raw_image_urls"] = raw_image_urls[:4]
+        response.headers.update(trace_headers)
         return result
 
     except HTTPException:
@@ -598,6 +818,32 @@ async def create_image(request: ImageGenerationRequest, api_key: str = Depends(v
     except Exception as e:
         logger.error(f"Image generation error: {e}", exc_info=True)
         error_msg = str(e).lower()
+        error_event = build_worker_event(
+            "image",
+            trace_headers,
+            None,
+            chat_id=getattr(chat, "cid", "") if chat else "",
+            session_id=session_id or "",
+            raw_response_preview=str(e),
+            error_summary=str(e),
+        )
+        log_worker_event(
+            error_event,
+            payload={
+                "request": {
+                    "model": request.model,
+                    "prompt": prompt,
+                    "count": request.n,
+                    "size": request.size,
+                    "quality": request.quality,
+                    "has_input_media": bool(request.image),
+                    "media_type": request.media_type,
+                    "session_id": session_id,
+                },
+                "error": str(e),
+                "raw_capture": tracer.get_snapshot() if tracer else None,
+            },
+        )
         if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
@@ -646,19 +892,29 @@ async def download_video_as_base64(video: GeneratedVideo) -> str | None:
 
 
 @app.post("/v1/videos/generations")
-async def create_video(request: VideoGenerationRequest, api_key: str = Depends(verify_api_key)):
+async def create_video(
+    request: VideoGenerationRequest,
+    response: Response,
+    api_key: str = Depends(verify_api_key),
+):
     """Video generation endpoint using Gemini Veo.
 
     Returns both download URL and base64 data.
     Library handles video polling automatically (up to 5 minutes).
     """
     temp_files = []
+    trace_headers: dict[str, str] = {}
+    client = None
+    tracer: RawCaptureTracer | None = None
     try:
         client = await get_or_create_client()
         has_image = request.image is not None
         logger.info(f"Video generation: '{request.prompt[:200]}' has_image={has_image}")
 
-        model = map_model_name(request.model) if request.model else None
+        model = None
+        if request.model:
+            model, model_trace = resolve_model_selection(request.model)
+            trace_headers = build_model_trace_headers(model_trace, "video")
         kwargs = {}
         if model:
             kwargs["model"] = model
@@ -676,44 +932,75 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
                 logger.error(f"Failed to decode input image: {e}")
                 raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
 
-        response = await client.generate_content(request.prompt, **kwargs)
+        tracer = RawCaptureTracer()
+        gemini_response = await client.generate_content(request.prompt, tracer=tracer, **kwargs)
 
-        logger.info(f"Response text: '{response.text[:200] if response.text else 'None'}'")
-        logger.info(f"Response videos: {response.videos}")
+        logger.info(f"Response text: '{gemini_response.text[:200] if gemini_response.text else 'None'}'")
+        logger.info(f"Response videos: {gemini_response.videos}")
 
-        if not response.videos:
+        if not gemini_response.videos:
             raise HTTPException(
                 status_code=422,
-                detail=f"Gemini did not generate video. Response: {response.text[:300] if response.text else 'empty'}"
+                detail=f"Gemini did not generate video. Response: {gemini_response.text[:300] if gemini_response.text else 'empty'}"
             )
 
-        result_data = []
-        for idx, video in enumerate(response.videos):
-            logger.info(f"Downloading video {idx}: {video.url[:80]}...")
-            entry = {
-                "url": video.url,
-                "thumbnail_url": video.thumbnail_url or "",
-            }
-            b64 = await download_video_as_base64(video)
-            if b64:
-                entry["b64_json"] = b64
-                logger.info(f"Video {idx} downloaded OK, base64 length={len(b64)}")
-            else:
-                logger.warning(f"Video {idx} base64 download failed, URL still available")
-            result_data.append(entry)
+        result_data, raw_video_urls = await parse_video_generation_result(
+            gemini_response.videos,
+            video_downloader=download_video_as_base64,
+            raw_capture=tracer.get_snapshot() if tracer else None,
+        )
+        worker_event = build_worker_event("video", trace_headers, gemini_response)
+        worker_event = log_worker_event(
+            worker_event,
+            payload={
+                "request": {
+                    "model": request.model,
+                    "prompt": request.prompt,
+                    "has_input_media": bool(request.image),
+                    "media_type": request.media_type,
+                },
+                "response": build_gemini_response_snapshot(gemini_response),
+                "raw_capture": tracer.get_snapshot() if tracer else None,
+            },
+        )
+        trace_headers.update(build_worker_event_headers(worker_event))
 
         logger.info(f"Video generation complete: {len(result_data)} video(s)")
-        return {
+        result = {
             "created": int(time.time()),
             "data": result_data,
-            "text": response.text or "",
+            "text": gemini_response.text or "",
         }
+        if raw_video_urls:
+            result["raw_video_urls"] = raw_video_urls[:4]
+        response.headers.update(trace_headers)
+        return result
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Video generation error: {e}", exc_info=True)
         error_msg = str(e).lower()
+        error_event = build_worker_event(
+            "video",
+            trace_headers,
+            None,
+            raw_response_preview=str(e),
+            error_summary=str(e),
+        )
+        log_worker_event(
+            error_event,
+            payload={
+                "request": {
+                    "model": request.model,
+                    "prompt": request.prompt,
+                    "has_input_media": bool(request.image),
+                    "media_type": request.media_type,
+                },
+                "error": str(e),
+                "raw_capture": tracer.get_snapshot() if tracer else None,
+            },
+        )
         if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         if any(kw in error_msg for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
@@ -727,6 +1014,5 @@ async def create_video(request: VideoGenerationRequest, api_key: str = Depends(v
                 pass
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, log_level="info")
+# Local dev:  PYTHONPATH=./lib:./app python3 -m uvicorn main:app --app-dir app
+# Container:  uvicorn main:app  (Dockerfile CMD)

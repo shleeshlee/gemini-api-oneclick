@@ -524,6 +524,48 @@ body::before {
 }
 .model-toggle:hover { text-decoration: underline; }
 .model-toggle.visible { display: block; }
+.model-slot-list {
+  display: grid; gap: 0.55rem; margin-top: 0.5rem;
+}
+.model-slot-row {
+  display: grid; grid-template-columns: 88px 1fr auto; gap: 0.5rem;
+  align-items: center;
+}
+.model-slot-label {
+  font-size: 0.78rem; color: var(--text-muted); font-weight: 700;
+}
+.model-slot-select {
+  min-width: 0; width: 100%;
+  padding: 0.45rem 0.6rem; border: 2px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-family: 'Outfit', sans-serif; font-size: 0.8rem;
+}
+.model-slot-source {
+  font-size: 0.72rem; color: var(--text-light); min-width: 32px; text-align: right;
+}
+.truth-list {
+  display: grid; gap: 0.45rem; margin-top: 0.55rem;
+}
+.truth-row {
+  padding: 0.55rem 0.7rem; border-radius: 10px; background: var(--bg);
+  border: 1px solid var(--border);
+}
+.truth-top {
+  display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+  font-size: 0.76rem; margin-bottom: 0.25rem;
+}
+.truth-endpoint {
+  display: inline-flex; align-items: center; padding: 0.1rem 0.45rem; border-radius: 999px;
+  background: var(--primary-light); color: var(--primary); font-weight: 700;
+}
+.truth-token {
+  font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text-muted);
+}
+.truth-main {
+  font-size: 0.82rem; color: var(--text); line-height: 1.45;
+}
+.truth-meta {
+  font-size: 0.72rem; color: var(--text-light); margin-top: 0.25rem;
+}
 
 .guard-hint {
   font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.4;
@@ -895,6 +937,25 @@ body::before {
       <div class="model-toggle" id="modelToggle" onclick="toggleModelChips()">展开全部</div>
     </div>
 
+    <div class="guard-section">
+      <div class="guard-section-title" style="justify-content:space-between">
+        模型槽位
+        <button class="btn btn-primary" onclick="saveModelProfiles()" style="padding:0.25rem 0.8rem;font-size:0.78rem">保存槽位</button>
+      </div>
+      <div id="modelSlotList" class="model-slot-list">
+        <div class="model-chip-empty">加载中...</div>
+      </div>
+      <div class="guard-hint">这里保存稳定槽位。Gemini 运行时模型名变化后，系统会优先保留人工选择，失效时再自动回退。</div>
+    </div>
+
+    <div class="guard-section">
+      <div class="guard-section-title">模型真相</div>
+      <div id="modelTruthList" class="truth-list">
+        <div class="model-chip-empty">暂无请求记录</div>
+      </div>
+      <div class="guard-hint">记录最近实际请求的 requested model、落到的 header 家族和 token，不再只看名字猜。</div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeGuardSettings()">取消</button>
       <button class="btn btn-primary" id="guardSaveBtn" onclick="saveGuardSettings()">保存</button>
@@ -952,6 +1013,8 @@ let gatewayStatus = null;
 let currentNum = null;
 let names = {};
 let autoRefreshTimer = null;
+let modelProfiles = null;
+let modelTruthEntries = [];
 
 // ── Helpers ────────────────────────────────────────────────
 function esc(s) {
@@ -1157,8 +1220,9 @@ function renderGrid() {
       statsLine = `<div class="card-stats">${gw.total_requests} 请求 / ${gw.total_errors} 错误</div>`;
     }
 
+    const showErrorLine = gw && gw.last_error && (!gw.healthy || gw.needs_cookie || gw.img_blocked);
     let errorLine = '';
-    if (gw && gw.last_error) {
+    if (showErrorLine) {
       errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
     }
 
@@ -1285,6 +1349,8 @@ async function refreshModels() {
     const data = await resp.json();
     if (resp.ok) {
       renderModelChips((data.models || []).map(m => m.id));
+      await loadModelInspector();
+      await loadModelSelect();
       toast('模型已刷新', 'ok');
     } else {
       toast(data.detail || '刷新失败', 'err');
@@ -1310,6 +1376,111 @@ function toggleModelChips() {
   const toggle = document.getElementById('modelToggle');
   const expanded = box.classList.toggle('expanded');
   toggle.textContent = expanded ? '收起' : '展开全部';
+}
+
+async function loadModelInspector() {
+  try {
+    const [profilesResp, truthResp] = await Promise.all([
+      fetch('/gateway/model-profiles', {headers: authHeaders()}),
+      fetch('/gateway/model-truth?limit=12', {headers: authHeaders()}),
+    ]);
+
+    if (profilesResp.ok) {
+      const data = await profilesResp.json();
+      modelProfiles = data;
+      renderModelProfiles(data.slots || {}, data.models || []);
+    }
+
+    if (truthResp.ok) {
+      const data = await truthResp.json();
+      modelTruthEntries = data.entries || [];
+      renderModelTruth(modelTruthEntries);
+    }
+  } catch(e) {
+    console.error('Failed to load model inspector:', e);
+  }
+}
+
+function renderModelProfiles(slots, models) {
+  const box = document.getElementById('modelSlotList');
+  if (!box) return;
+  const slotKeys = Object.keys(slots || {});
+  if (!slotKeys.length) {
+    box.innerHTML = '<div class="model-chip-empty">暂无槽位</div>';
+    return;
+  }
+
+  const optionHtml = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  box.innerHTML = slotKeys.map(slot => {
+    const info = slots[slot] || {};
+    const selected = info.model || '';
+    const selectedHtml = selected && !models.includes(selected)
+      ? `<option value="${esc(selected)}">${esc(selected)}（已失效）</option>`
+      : '';
+    return `
+      <div class="model-slot-row">
+        <div class="model-slot-label">${esc(info.label || slot)}</div>
+        <select class="model-slot-select" data-slot="${esc(slot)}">
+          <option value="">自动选择</option>
+          ${selectedHtml}
+          ${optionHtml}
+        </select>
+        <div class="model-slot-source">${esc(info.source || '')}</div>
+      </div>
+    `;
+  }).join('');
+
+  box.querySelectorAll('.model-slot-select').forEach(select => {
+    const slot = select.dataset.slot;
+    const selected = (slots[slot] || {}).model || '';
+    if (selected) select.value = selected;
+  });
+}
+
+function renderModelTruth(entries) {
+  const box = document.getElementById('modelTruthList');
+  if (!box) return;
+  if (!entries || !entries.length) {
+    box.innerHTML = '<div class="model-chip-empty">暂无请求记录</div>';
+    return;
+  }
+  box.innerHTML = entries.map(entry => `
+    <div class="truth-row">
+      <div class="truth-top">
+        <span class="truth-endpoint">${esc(entry.endpoint || 'unknown')}</span>
+        <span>${esc(entry.header_family || 'unknown')}</span>
+        <span class="truth-token">${esc(entry.header_token || '-')}</span>
+      </div>
+      <div class="truth-main">${esc(entry.requested_model || '')} → ${esc(entry.resolved_model || '')}</div>
+      <div class="truth-meta">#${esc(String(entry.container || ''))}${entry.group ? ' · [' + esc(entry.group) + ']' : ''} · ${esc(entry.resolution || '')} · ${esc(entry.last_seen || '')}</div>
+    </div>
+  `).join('');
+}
+
+async function saveModelProfiles() {
+  const box = document.getElementById('modelSlotList');
+  if (!box) return;
+  const slots = {};
+  box.querySelectorAll('.model-slot-select').forEach(select => {
+    slots[select.dataset.slot] = select.value || '';
+  });
+  try {
+    const resp = await fetch('/gateway/model-profiles', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ slots }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || '保存失败');
+    }
+    modelProfiles = data;
+    renderModelProfiles(data.slots || {}, data.models || []);
+    await loadModelSelect();
+    toast('模型槽位已保存', 'ok');
+  } catch(e) {
+    toast('保存槽位失败: ' + e.message, 'err');
+  }
 }
 
 // ── Logs ───────────────────────────────────────────────────
@@ -1432,25 +1603,36 @@ async function loadModelSelect() {
   const current = sel.value;
   const optCurrent = optSel ? optSel.value : '';
   try {
-    const resp = await fetch('/v1/models', {headers: authHeaders()});
-    const data = await resp.json();
+    const [modelResp, profileResp] = await Promise.all([
+      fetch('/v1/models', {headers: authHeaders()}),
+      fetch('/gateway/model-profiles', {headers: authHeaders()}),
+    ]);
+    const data = await modelResp.json();
+    const profileData = profileResp.ok ? await profileResp.json() : {slots:{}};
+    modelProfiles = profileData;
+    const imageDefault = profileData.slots?.image_default?.model || '';
+    const optimizeDefault = profileData.slots?.prompt_optimize?.model || profileData.slots?.chat_fast?.model || '';
     const models = (data.data || []).map(m => m.id).filter(id => id !== 'unspecified');
     const opts = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
     sel.innerHTML = opts;
     if (optSel) optSel.innerHTML = opts;
-    // Restore previous selection, or default to first flash model on first load
+    // Restore previous selection, or default to persisted slots on first load
     if (current && models.includes(current)) {
       sel.value = current;
     } else if (!_modelListLoaded) {
-      const flash = models.find(m => m.includes('flash'));
-      if (flash) sel.value = flash;
+      const fallback = imageDefault && models.includes(imageDefault)
+        ? imageDefault
+        : (models.find(m => m.includes('flash')) || models[0] || '');
+      if (fallback) sel.value = fallback;
     }
     if (optSel) {
       if (optCurrent && models.includes(optCurrent)) {
         optSel.value = optCurrent;
       } else if (!_modelListLoaded) {
-        const flash = models.find(m => m.includes('flash'));
-        if (flash) optSel.value = flash;
+        const fallback = optimizeDefault && models.includes(optimizeDefault)
+          ? optimizeDefault
+          : (models.find(m => m.includes('flash')) || models[0] || '');
+        if (fallback) optSel.value = fallback;
       }
     }
     _modelListLoaded = true;
@@ -2274,11 +2456,12 @@ function openGuardSettings() {
       document.getElementById('guardSaveBtn').disabled = false;
       document.getElementById('guardSaveBtn').textContent = '保存';
 
-      // load model chips
+      // load model chips + slot defaults + recent truth records
       fetch('/v1/models', {headers: authHeaders()}).then(r=>r.json()).then(d => {
         const ids = (d.data||[]).map(m=>m.id).filter(id=>id!=='unspecified');
         renderModelChips(ids);
       }).catch(()=>{});
+      loadModelInspector();
     })
     .catch(e => {
       document.getElementById('guardMsg').className = 'modal-msg err';

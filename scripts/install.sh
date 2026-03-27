@@ -284,6 +284,30 @@ GWEOF
         $SUDO systemctl enable gemini-gateway
         $SUDO systemctl restart gemini-gateway
         info "Gateway 已安装/更新为系统服务（端口 ${GATEWAY_PORT}）"
+
+        # 容器分批启动服务（更新模式也确保最新）
+        CONTAINERS_SERVICE="/etc/systemd/system/gemini-containers.service"
+        $SUDO tee "$CONTAINERS_SERVICE" > /dev/null <<CSEOF
+[Unit]
+Description=Gemini API 容器分批启动（延时等服务器稳定）
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 180
+ExecStart=${ROOT_DIR}/scripts/safe-deploy.sh
+WorkingDirectory=${ROOT_DIR}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+CSEOF
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable gemini-containers
+        info "容器分批启动服务已更新"
       fi
 
       echo ""
@@ -594,6 +618,35 @@ else
   warn "未找到 systemctl，后台启动 Gateway ..."
   GATEWAY_PORT=${GATEWAY_PORT} BASE_PORT=${START_PORT} nohup python3 gateway.py > /tmp/gemini-gateway.log 2>&1 &
   info "Gateway 已启动 (PID: $!)"
+fi
+
+# 容器分批启动服务（服务器重启时延时启动，防止抢资源触发机房防护）
+if command -v systemctl >/dev/null 2>&1; then
+  CONTAINERS_SERVICE="/etc/systemd/system/gemini-containers.service"
+
+  $SUDO tee "$CONTAINERS_SERVICE" > /dev/null <<EOF
+[Unit]
+Description=Gemini API 容器分批启动（延时等服务器稳定）
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 180
+ExecStart=${ROOT_DIR}/scripts/safe-deploy.sh
+WorkingDirectory=${ROOT_DIR}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable gemini-containers
+  info "容器分批启动服务已安装（服务器重启后延时 3 分钟自动启动）"
+  info "手动启动/重启容器请用: ${ROOT_DIR}/scripts/safe-deploy.sh"
 fi
 
 # Cookie Manager 独立服务已弃用（功能已合并到 Gateway）
