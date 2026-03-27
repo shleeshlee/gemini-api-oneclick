@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE) [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/shleeshlee/gemini-api-oneclick/releases)
 
 > **👤 作者:** WanWan
-> **📦 开源协议:** MIT (免费使用，保留署名)
+> **📦 开源协议:** AGPL-3.0
 > **⚠️ 声明:** 本项目完全免费开源，如果你是付费获取的，你被骗了！
 
 ---
@@ -141,7 +141,7 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE)
 
 ---
 
