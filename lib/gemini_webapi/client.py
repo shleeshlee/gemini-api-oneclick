@@ -1048,9 +1048,8 @@ class GeminiClient(GemMixin):
                     file_count=len(req_file_data) if req_file_data else 0,
                 )
 
-            _poll_start = time.time()
-            _MAX_POLL_TIME = 150  # max seconds to poll for image generation queueing
-            _POLL_INTERVAL = 5   # seconds between poll attempts
+            _empty_retries = 0
+            _MAX_EMPTY_RETRIES = 2  # retry up to 2 times on empty stream
 
             while True:  # polling loop for queueing/thinking retries
                 _poll_iterations += 1
@@ -1092,8 +1091,25 @@ class GeminiClient(GemMixin):
                 last_progress_time = time.time()  # reset per polling iteration to avoid false stall detection
                 streaming_state.last_progress_time = last_progress_time
                 flags = _StreamFlags()
+                _FIRST_CHUNK_TIMEOUT = 30  # seconds to wait for first chunk
 
-                async for chunk in response.aiter_content():
+                # Wrap aiter_content with first-chunk timeout detection
+                content_iter = response.aiter_content().__aiter__()
+                _got_first_chunk = False
+                while True:
+                    try:
+                        if not _got_first_chunk:
+                            chunk = await asyncio.wait_for(content_iter.__anext__(), timeout=_FIRST_CHUNK_TIMEOUT)
+                            _got_first_chunk = True
+                        else:
+                            chunk = await content_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning(f"No data received from Gemini within {_FIRST_CHUNK_TIMEOUT}s (zombie connection)")
+                        raise APIError(f"No response from Gemini within {_FIRST_CHUNK_TIMEOUT}s")
+
+                    # — original loop body below —
                     buffer += decoder.decode(chunk, final=False)
                     if buffer.startswith(")]}'"):
                         buffer = buffer[4:].lstrip()
@@ -1143,8 +1159,12 @@ class GeminiClient(GemMixin):
                 }
 
                 if not (flags.is_completed or flags.is_final_chunk or flags.has_candidates):
-                    # Stream ended without any usable content — log and break
-                    logger.warning(f"Stream ended with no content (flags={_flags_dict})")
+                    _empty_retries += 1
+                    if _empty_retries <= _MAX_EMPTY_RETRIES:
+                        logger.info(f"Empty stream (attempt {_empty_retries}/{_MAX_EMPTY_RETRIES}), retrying in 2s...")
+                        await asyncio.sleep(2)
+                        continue  # retry within polling loop
+                    logger.warning(f"Stream ended with no content after {_empty_retries} attempts (flags={_flags_dict})")
                     if tracer:
                         tracer.on_request_end(status="empty", error="Stream ended with no content.", final_flags=_flags_dict, chat_metadata_after=None, poll_iterations=_poll_iterations)
                 elif tracer:
