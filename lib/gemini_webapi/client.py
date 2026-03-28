@@ -958,7 +958,7 @@ class GeminiClient(GemMixin):
                     if isinstance(file, io.BytesIO):
                         file.close()
 
-    @running(retry=5)
+    @running(retry=0)
     async def _generate(
         self,
         prompt: str,
@@ -1142,19 +1142,12 @@ class GeminiClient(GemMixin):
                     "is_queueing": flags.is_queueing,
                 }
 
-                if not (flags.is_completed or flags.is_final_chunk) or flags.is_thinking or flags.is_queueing:
-                    # Only poll when Gemini is actively working (queueing/thinking = image gen)
-                    # Otherwise fail fast and let the decorator retry
-                    if (flags.is_queueing or flags.is_thinking) and (time.time() - _poll_start) < _MAX_POLL_TIME:
-                        _elapsed = time.time() - _poll_start
-                        logger.info(f"Stream incomplete (queueing={flags.is_queueing}, thinking={flags.is_thinking}), polling in {_POLL_INTERVAL}s ({_elapsed:.0f}s elapsed)...")
-                        await asyncio.sleep(_POLL_INTERVAL)
-                        continue  # retry within polling loop
+                if not (flags.is_completed or flags.is_final_chunk or flags.has_candidates):
+                    # Stream ended without any usable content — log and break
+                    logger.warning(f"Stream ended with no content (flags={_flags_dict})")
                     if tracer:
-                        tracer.on_request_end(status="incomplete", error="Stream interrupted or truncated.", final_flags=_flags_dict, chat_metadata_after=None, poll_iterations=_poll_iterations)
-                    raise APIError("Stream interrupted or truncated.")
-
-                if tracer:
+                        tracer.on_request_end(status="empty", error="Stream ended with no content.", final_flags=_flags_dict, chat_metadata_after=None, poll_iterations=_poll_iterations)
+                elif tracer:
                     tracer.on_request_end(
                         status="ok",
                         error=None,

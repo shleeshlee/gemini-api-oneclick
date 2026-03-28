@@ -502,139 +502,216 @@ async def create_chat_completion(
     response: Response,
     api_key: str = Depends(verify_api_key),
 ):
-    """Handle chat completion requests with retry and streaming support."""
-    max_retries = 3
+    """Handle chat completion requests — transparent stream relay, no retries."""
     trace_headers: dict[str, str] = {}
-    conversation = ""
-    client = None
-    tracer: RawCaptureTracer | None = None
 
-    for attempt in range(max_retries):
-        try:
-            client = await get_or_create_client()
+    try:
+        client = await get_or_create_client()
 
-            conversation, temp_files = prepare_conversation(request.messages)
-            logger.info(f"Prepared conversation: {conversation[:200]}...")
-            logger.info(f"Temp files: {temp_files}")
+        conversation, temp_files = prepare_conversation(request.messages)
+        logger.info(f"Prepared conversation: {conversation[:200]}...")
+        logger.info(f"Temp files: {temp_files}")
 
-            model, model_trace = resolve_model_selection(request.model)
-            trace_headers = build_model_trace_headers(model_trace, "chat")
-            logger.info("Using model trace: %s", model_trace)
+        model, model_trace = resolve_model_selection(request.model)
+        trace_headers = build_model_trace_headers(model_trace, "chat")
+        logger.info("Using model trace: %s", model_trace)
 
-            tracer = RawCaptureTracer()
-            logger.info("Sending request to Gemini...")
-            if temp_files:
-                gemini_response = await client.generate_content(conversation, files=temp_files, model=model, tracer=tracer)
-            else:
-                gemini_response = await client.generate_content(conversation, model=model, tracer=tracer)
+        tracer = RawCaptureTracer()
+        logger.info("Sending request to Gemini...")
 
-            for temp_file in temp_files:
+        completion_id = f"chatcmpl-{uuid.uuid4()}"
+        created_time = int(time.time())
+
+        if request.stream:
+            # ── True streaming: relay Gemini deltas as they arrive ──
+            async def stream_relay():
+                full_text = ""
+                full_thoughts = ""
+                last_output = None
+                first = True
                 try:
-                    os.unlink(temp_file)
-                except Exception as e:
-                    logger.warning(f"Failed to delete temp file {temp_file}: {str(e)}")
+                    stream_gen = client.generate_content_stream(
+                        conversation,
+                        files=temp_files if temp_files else None,
+                        model=model,
+                        tracer=tracer,
+                    )
+                    async for output in stream_gen:
+                        last_output = output
+                        text_delta = output.text_delta or ""
+                        thoughts_delta = output.thoughts_delta or ""
 
-            reply_text = await build_chat_reply_text(
-                gemini_response,
-                image_downloader=download_image_as_base64,
-                markdown_corrector=correct_markdown,
-                raw_capture=tracer.get_snapshot() if tracer else None,
-            )
-            worker_event = build_worker_event(
-                "chat",
-                trace_headers,
-                gemini_response,
-                chat_id=getattr(gemini_response, "cid", "") or "",
-            )
-            worker_event = log_worker_event(
-                worker_event,
-                payload={
-                    "request": {
+                        # Build content delta
+                        content = ""
+                        if thoughts_delta:
+                            if not full_thoughts:
+                                content += "<think>"
+                            content += thoughts_delta
+                            full_thoughts += thoughts_delta
+                        if text_delta:
+                            if full_thoughts and not full_text:
+                                content += "</think>"
+                            content += text_delta
+                            full_text += text_delta
+
+                        if not content:
+                            continue
+
+                        if first:
+                            role_chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                            }
+                            yield f"data: {json.dumps(role_chunk)}\n\n"
+                            first = False
+
+                        chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": request.model,
+                            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
+                    # Close thinking tag if still open
+                    if full_thoughts and not full_text:
+                        close_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": request.model,
+                            "choices": [{"index": 0, "delta": {"content": "</think>"}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(close_chunk)}\n\n"
+
+                    # Download and embed images from the last output
+                    if last_output and hasattr(last_output, 'images') and last_output.images:
+                        for idx, img in enumerate(last_output.images):
+                            b64 = await download_image_as_base64(img)
+                            if b64:
+                                img_chunk = {
+                                    "id": completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created_time,
+                                    "model": request.model,
+                                    "choices": [{"index": 0, "delta": {"content": f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"}, "finish_reason": None}],
+                                }
+                                yield f"data: {json.dumps(img_chunk)}\n\n"
+
+                except Exception as e:
+                    logger.error(f"Stream error: {e}", exc_info=True)
+                    error_msg = str(e).lower()
+                    if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+                        await reset_client()
+                    # Send error as final content chunk so caller sees it
+                    if first:
+                        role_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": request.model,
+                            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(role_chunk)}\n\n"
+                    err_chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_time,
                         "model": request.model,
-                        "message_count": len(request.messages),
-                        "conversation": conversation,
-                        "has_temp_files": bool(temp_files),
-                    },
-                    "response": build_gemini_response_snapshot(gemini_response),
-                    "raw_capture": tracer.get_snapshot() if tracer else None,
-                },
-            )
-            trace_headers.update(build_worker_event_headers(worker_event))
+                        "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)[:200]}]"}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(err_chunk)}\n\n"
+                finally:
+                    # Clean up temp files
+                    for tf in temp_files:
+                        try:
+                            os.unlink(tf)
+                        except Exception:
+                            pass
+
+                    # Finish SSE stream
+                    done_chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_time,
+                        "model": request.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    }
+                    yield f"data: {json.dumps(done_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+            return StreamingResponse(stream_relay(), media_type="text/event-stream", headers=trace_headers)
+
+        else:
+            # ── Non-streaming: consume stream, return complete JSON ──
+            full_text = ""
+            full_thoughts = ""
+            last_output = None
+
+            if temp_files:
+                stream_gen = client.generate_content_stream(conversation, files=temp_files, model=model, tracer=tracer)
+            else:
+                stream_gen = client.generate_content_stream(conversation, model=model, tracer=tracer)
+
+            async for output in stream_gen:
+                full_text += output.text_delta or ""
+                full_thoughts += output.thoughts_delta or ""
+                last_output = output
+
+            for tf in temp_files:
+                try:
+                    os.unlink(tf)
+                except Exception:
+                    pass
+
+            reply_text = ""
+            if full_thoughts:
+                reply_text += f"<think>{full_thoughts}</think>"
+            reply_text += full_text
+
+            # Download images if present
+            if last_output and hasattr(last_output, 'images') and last_output.images:
+                for idx, img in enumerate(last_output.images):
+                    b64 = await download_image_as_base64(img)
+                    if b64:
+                        reply_text += f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"
+
+            # Normalize escaped markdown chars
+            reply_text = reply_text.replace("&lt;", "<").replace("\\<", "<").replace("\\_", "_").replace("\\>", ">")
+            reply_text = reply_text.replace("\\#", "#").replace("\\!", "!").replace("\\|", "|")
+            reply_text = re.sub(r"```\s*\n(<[a-zA-Z][\s\S]*?)\n```", r"\1", reply_text)
+            reply_text = correct_markdown(reply_text)
+            if not reply_text.strip():
+                reply_text = "Empty response from Gemini."
 
             logger.info(f"Response: {reply_text[:200]}...")
 
-            completion_id = f"chatcmpl-{uuid.uuid4()}"
-            created_time = int(time.time())
-
-            if request.stream:
-                return StreamingResponse(
-                    iter_chat_stream_chunks(
-                        completion_id=completion_id,
-                        created_time=created_time,
-                        model=request.model,
-                        reply_text=reply_text,
-                    ),
-                    media_type="text/event-stream",
-                    headers=trace_headers,
-                )
-            else:
-                result = build_chat_completion_payload(
-                    completion_id=completion_id,
-                    created_time=created_time,
-                    model=request.model,
-                    reply_text=reply_text,
-                    conversation=conversation,
-                )
-
-                logger.info("Returning response successfully")
-                response.headers.update(trace_headers)
-                return result
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            error_msg = str(e).lower()
-            logger.error(f"Error generating completion (attempt {attempt + 1}/{max_retries}): {str(e)}", exc_info=True)
-            error_event = build_worker_event(
-                "chat",
-                trace_headers,
-                None,
-                raw_response_preview=str(e),
-                error_summary=str(e),
+            result = build_chat_completion_payload(
+                completion_id=completion_id,
+                created_time=created_time,
+                model=request.model,
+                reply_text=reply_text,
+                conversation=conversation,
             )
-            log_worker_event(
-                error_event,
-                payload={
-                    "request": {
-                        "model": request.model,
-                        "message_count": len(request.messages),
-                        "conversation": conversation,
-                        "attempt": attempt + 1,
-                    },
-                    "error": str(e),
-                    "raw_capture": tracer.get_snapshot() if tracer else None,
-                },
-            )
+            response.headers.update(trace_headers)
+            return result
 
-            if any(keyword in error_msg for keyword in ['auth', 'cookie', 'expired', 'invalid', '401', '403']):
-                logger.warning("Detected possible authentication error, resetting client...")
-                await reset_client()
-                if attempt < max_retries - 1:
-                    continue
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        logger.error(f"Error in chat completion: {e}", exc_info=True)
 
-            if any(keyword in error_msg for keyword in ['429', 'rate limit', 'resource exhausted', 'quota']):
-                raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
+        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+            await reset_client()
+        if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
+            raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
 
-            # Stream interrupted / truncated — retryable
-            if any(keyword in error_msg for keyword in ['stream', 'interrupted', 'truncated', 'incomplete']):
-                logger.warning(f"Stream error, retrying... ({attempt + 1}/{max_retries})")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
-                    continue
-
-            raise HTTPException(status_code=500, detail=f"Error generating completion: {str(e)}")
-
-    raise HTTPException(status_code=500, detail="Max retries exceeded")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.get("/")
