@@ -149,7 +149,7 @@ class Container:
 
     @property
     def available(self):
-        return self.healthy and self.enabled and time.time() > self.cooldown_until and not self.busy
+        return self.healthy and self.enabled and not self.needs_cookie and time.time() > self.cooldown_until and not self.busy
 
     def to_dict(self):
         return {
@@ -443,6 +443,7 @@ _LOG_SKIP = {"/health", "health check", "uvicorn running", "started server", "wa
 _LOG_NOISE_MARKERS = {
     "cookie debug",
     "stream incomplete (queueing=",
+    "stream ended with no content",
     "polling in 5s",
     "[firewall: off]",
     "secure_1psid:",
