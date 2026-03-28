@@ -534,7 +534,6 @@ async def create_chat_completion(
                         conversation,
                         files=temp_files if temp_files else None,
                         model=model,
-                        tracer=tracer,
                     )
                     async for output in stream_gen:
                         last_output = output
@@ -653,9 +652,9 @@ async def create_chat_completion(
             last_output = None
 
             if temp_files:
-                stream_gen = client.generate_content_stream(conversation, files=temp_files, model=model, tracer=tracer)
+                stream_gen = client.generate_content_stream(conversation, files=temp_files, model=model)
             else:
-                stream_gen = client.generate_content_stream(conversation, model=model, tracer=tracer)
+                stream_gen = client.generate_content_stream(conversation, model=model)
 
             async for output in stream_gen:
                 full_text += output.text_delta or ""
