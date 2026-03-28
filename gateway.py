@@ -377,9 +377,8 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
         if ok:
             c.health_fail_count = 0
-            if not c.healthy:
+            if not c.healthy and not c.needs_cookie:
                 c.healthy = True
-                c.needs_cookie = False
                 add_log("info", c.num, "恢复正常")
         else:
             c.health_fail_count += 1
@@ -414,6 +413,7 @@ async def _maybe_restart(c: Container):
         if any(kw in recent for kw in _AUTH_KEYWORDS):
             if not c.needs_cookie:
                 c.needs_cookie = True
+                c.healthy = False
                 add_log("error", c.num, "认证错误，需要更换 Cookie（重启无效）")
             c.health_fail_count = 0  # stop retrying restart
             return
