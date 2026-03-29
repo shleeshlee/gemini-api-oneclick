@@ -131,13 +131,21 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 
 > ⚠️ **禁止全量重启**（`docker compose restart`），务必用 `safe-deploy.sh` 分批操作。
 
+## Discord Bot
+
+配套的 Discord Bot —— [Gemini 体验站 (gem-bot)](https://github.com/shleeshlee/gem-bot)，接入 Gateway 即可让 Discord 用户直接生图和写作。
+
 ## 致谢
 
-| 项目 | 作者 | 说明 |
+底层 Gemini Web API 通信基于以下项目，已深度定制（新增视频/图片编辑、raw 响应追踪、Cookie 管理等）：
+
+| 项目 | 作者 | 用途 |
 |------|------|------|
-| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | gemini-webapi 库 |
-| [xob0t/Gemini-API](https://github.com/xob0t/Gemini-API) | xob0t | curl_cffi 分支 |
-| [Gemini-FastAPI](https://github.com/Nativu5/Gemini-FastAPI) | Nativu5 | 架构参考 |
+| [Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) | HanaokaYuzu | Gemini Web API 通信库原版 |
+| [xob0t/Gemini-API](https://github.com/xob0t/Gemini-API) | xob0t | curl_cffi 适配分支，本项目的 fork 基础 |
+| [Gemini-FastAPI](https://github.com/Nativu5/Gemini-FastAPI) | Nativu5 | 早期架构启发 |
+
+Gateway、分组路由、管理面板、创作工作室、部署工具链等为本项目独立开发。
 
 ## 许可证
 
