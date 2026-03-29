@@ -2843,7 +2843,7 @@ async function saveVideoToGallery(idx) {
   const prompt = document.getElementById('imgPrompt').value.trim();
   const model = document.getElementById('imgModel').value;
   const body = { prompt, model };
-  if (v.b64_json) body.b64_json = v.b64_json;
+  if (v.b64_json) body.b64 = v.b64_json;
   if (v.url) body.url = v.url;
   try {
     const resp = await fetch('/gateway/videos/save', {

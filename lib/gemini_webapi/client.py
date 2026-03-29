@@ -977,6 +977,9 @@ class GeminiClient(GemMixin):
 
         assert prompt, "Prompt cannot be empty."
 
+        # Pop tracer from kwargs so it doesn't get passed to curl_cffi's request()
+        kwargs.pop("tracer", None)
+
         if isinstance(model, str):
             model = self._resolve_model_by_name(model)
         elif isinstance(model, dict):
