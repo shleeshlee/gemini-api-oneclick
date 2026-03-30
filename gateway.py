@@ -392,14 +392,6 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             await _do_restart(c)
             return
 
-        # ── Decision: unauthenticated = cookie expired ──
-        if status == "unauthenticated" or auth_status == "UNAUTHENTICATED":
-            if not c.needs_cookie:
-                c.needs_cookie = True
-                c.healthy = False
-                add_log("error", c.num, "Cookie 无效（UNAUTHENTICATED），需更换")
-            return
-
         # ── Decision: initializing = wait ──
         if status == "initializing":
             c.healthy = False

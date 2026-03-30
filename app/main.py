@@ -543,9 +543,10 @@ async def health_check():
         status = "initializing"
     elif not client_ready:
         status = "no_client"
-    elif auth == "UNAUTHENTICATED":
-        status = "unauthenticated"
-    elif auth == "AVAILABLE":
+    elif client_ready:
+        # Client initialized = functional. auth_status is informational,
+        # not a health gate. Free accounts often report UNAUTHENTICATED
+        # but work fine for chat and image generation.
         status = "healthy"
     else:
         status = "degraded"
