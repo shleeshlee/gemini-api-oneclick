@@ -181,12 +181,13 @@ def _build_model_name(m) -> str:
     if ver_match:
         ver, family = ver_match.group(1), ver_match.group(2).lower()
         return f"gemini-{ver}-{family}"
-    # Fall back: display_name often is "Fast"/"Thinking"/"Pro"
+    # Fall back: display_name is "Fast"/"Thinking"/"Pro"
+    # Models without version in desc self-report as generation 3 (e.g. "Gemini 3 Flash")
     display_lower = display.lower()
     family_map = {"fast": "flash", "thinking": "flash-thinking"}
     family = family_map.get(display_lower, display_lower)
     if family:
-        return f"gemini-{family}"
+        return f"gemini-3-{family}"
     return getattr(m, "model_id", "") or ""
 
 
