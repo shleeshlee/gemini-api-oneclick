@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# safe-deploy.sh — 分批启动容器，防止触发机房 DDoS 防护
-# ⚠️ 禁止一次性启动全部容器！RackNerd 机房会封网络！
+# safe-deploy.sh — Rolling restart in batches to avoid triggering
+# datacenter DDoS protection when many containers reconnect at once.
 set -euo pipefail
 
 COMPOSE_FILE="docker-compose.accounts.yml"
