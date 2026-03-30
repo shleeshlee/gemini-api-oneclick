@@ -382,13 +382,6 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             tier_info = data.get("tier")
             if isinstance(tier_info, dict):
                 c.tier = tier_info.get("label", "")
-                acct_status = tier_info.get("account_status", "")
-                if acct_status == "UNAUTHENTICATED" and not c.img_blocked:
-                    c.img_blocked = True
-                    add_log("warn", c.num, "Cookie 过期（UNAUTHENTICATED），仅可生文")
-                elif acct_status != "UNAUTHENTICATED" and c.img_blocked:
-                    c.img_blocked = False
-                    add_log("info", c.num, "Cookie 恢复，生图已启用")
             if c.needs_cookie:
                 c.needs_cookie = False
                 add_log("info", c.num, "认证已恢复")
