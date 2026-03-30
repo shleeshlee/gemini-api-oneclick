@@ -621,6 +621,10 @@ class GeminiClient(GemMixin):
                 model_id = get_nested_value(model_data, [0], "")
                 display_name = get_nested_value(model_data, [1], "")
                 description = get_nested_value(model_data, [2], "")
+                # Extended description at index 12 often has version info (e.g. "with 3.1 Pro")
+                ext_desc = get_nested_value(model_data, [12], "")
+                if isinstance(ext_desc, str) and ext_desc:
+                    description = ext_desc
                 if not model_id or not display_name:
                     continue
 
