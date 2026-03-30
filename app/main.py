@@ -462,7 +462,13 @@ def _detect_tier() -> dict:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Auto-reinitializes if client was reset."""
+    if gemini_client is None and SECURE_1PSID and SECURE_1PSIDTS:
+        try:
+            await get_or_create_client()
+            logger.info("Client re-initialized via health check.")
+        except Exception as e:
+            logger.warning(f"Health check re-init failed: {e}")
     return {
         "status": "healthy" if gemini_client else "degraded",
         "client_ready": gemini_client is not None,
