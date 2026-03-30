@@ -45,6 +45,7 @@ from worker_events import (
 from raw_capture_tracer import RawCaptureTracer
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import AccountStatus, Model
+from gemini_webapi.exceptions import ImageGenerationBlocked
 from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
 
@@ -670,7 +671,7 @@ async def create_chat_completion(
                 except Exception as e:
                     logger.error(f"Stream error: {e}", exc_info=True)
                     error_msg = str(e).lower()
-                    if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+                    if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
                         await reset_client()
                     # Send error as final content chunk so caller sees it
                     if first:
@@ -771,7 +772,7 @@ async def create_chat_completion(
         error_msg = str(e).lower()
         logger.error(f"Error in chat completion: {e}", exc_info=True)
 
-        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
             raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
@@ -987,7 +988,7 @@ async def create_image(
                 "raw_capture": tracer.get_snapshot() if tracer else None,
             },
         )
-        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
     finally:
@@ -1144,7 +1145,7 @@ async def create_video(
                 "raw_capture": tracer.get_snapshot() if tracer else None,
             },
         )
-        if any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
+        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
             await reset_client()
         if any(kw in error_msg for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
             raise HTTPException(status_code=429, detail=f"Video rate limited: {str(e)}")
