@@ -1754,9 +1754,12 @@ async function doImgGen() {
   btn.disabled = true; btn.innerHTML = '🍪 生成中...';
   activeAbortController = new AbortController();
   showCancelBtn();
+  tempImages = [];
   zone.style.display = '';
   document.getElementById('imgTempInfo').textContent = `正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...`;
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
+  const promptPreview = document.getElementById('imgPromptPreview');
+  if (promptPreview) promptPreview.style.display = 'none';
 
   const start = Date.now();
   const dimsPrompt = getActiveDimsPrompt();
