@@ -141,6 +141,8 @@ class Container:
         self.last_check = 0
         self.total_requests = 0
         self.total_errors = 0
+        self.chat_requests = 0
+        self.image_requests = 0
         self.health_fail_count = 0  # consecutive health check failures
         self.needs_cookie = False   # True = auth error, restart won't help
         self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
@@ -166,6 +168,8 @@ class Container:
             "last_check": self.last_check,
             "total_requests": self.total_requests,
             "total_errors": self.total_errors,
+            "chat_requests": self.chat_requests,
+            "image_requests": self.image_requests,
             "needs_cookie": self.needs_cookie,
             "img_blocked": self.img_blocked,
             "busy": self.busy,
@@ -895,6 +899,10 @@ async def proxy(request: Request, path: str):
 
         target_url = f"{c.url}/v1/{path}"
         c.total_requests += 1
+        if "images" in path or "videos" in path:
+            c.image_requests += 1
+        else:
+            c.chat_requests += 1
         c.busy = True
 
         try:

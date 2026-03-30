@@ -796,6 +796,7 @@ class ImageGenerationRequest(BaseModel):
     image: Optional[str] = None  # base64 encoded media for edit mode (first round)
     media_type: Optional[str] = "image"  # "image" or "video"
     session_id: Optional[str] = None  # continue editing in same session
+    use_pro: Optional[bool] = False  # True = Nano Banana Pro (paid accounts, "Redo with Pro")
 
 
 # Edit session store: session_id -> ChatSession
@@ -839,7 +840,7 @@ async def create_image(
     try:
         client = await get_or_create_client()
         _cleanup_expired_sessions()
-        logger.info(f"Image generation: '{request.prompt[:200]}' has_image={request.image is not None} session={request.session_id}")
+        logger.info(f"Image generation: '{request.prompt[:200]}' has_image={request.image is not None} session={request.session_id} use_pro={request.use_pro}")
 
         model = None
         if request.model:
@@ -854,7 +855,7 @@ async def create_image(
             chat, _ = _edit_sessions[session_id]
             _edit_sessions[session_id] = (chat, time.time())  # refresh TTL
             logger.info(f"Continuing edit session {session_id}, cid={chat.cid}")
-            gemini_response = await chat.send_message(prompt, tracer=tracer)
+            gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
 
         else:
             # New request (text-to-image or first round of edit)
@@ -880,14 +881,14 @@ async def create_image(
                 chat = client.start_chat()
                 if model:
                     chat.model = model
-                gemini_response = await chat.send_message(prompt, files=temp_files, tracer=tracer)
+                gemini_response = await chat.send_message(prompt, files=temp_files, tracer=tracer, use_pro=request.use_pro)
                 session_id = str(uuid.uuid4())[:12]
                 _edit_sessions[session_id] = (chat, time.time())
                 logger.info(f"New edit session {session_id} created, cid={chat.cid}")
 
             else:
                 # Pure text-to-image (no session needed)
-                gemini_response = await client.generate_content(prompt, tracer=tracer, **kwargs)
+                gemini_response = await client.generate_content(prompt, tracer=tracer, use_pro=request.use_pro, **kwargs)
 
         # Log what we got back
         logger.info(f"Response text: '{gemini_response.text[:200] if gemini_response.text else 'None'}'")
@@ -901,7 +902,7 @@ async def create_image(
             retry_kwargs = {}
             if model:
                 retry_kwargs["model"] = model
-            gemini_response = await client.generate_content(f"Create a picture: {request.prompt}", tracer=tracer, **retry_kwargs)
+            gemini_response = await client.generate_content(f"Create a picture: {request.prompt}", tracer=tracer, use_pro=request.use_pro, **retry_kwargs)
             images = gemini_response.images
 
         if not images:
