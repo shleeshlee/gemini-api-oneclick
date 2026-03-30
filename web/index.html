@@ -1235,7 +1235,7 @@ function renderGrid() {
       statsLine = `<div class="card-stats"><span class="stat-item">聊天 ${chat}</span><span class="stat-item">图片 ${img}</span>${errs ? `<span class="stat-item stat-err">错误 ${errs}</span>` : ''}</div>`;
     }
 
-    const showErrorLine = gw && gw.last_error && (!gw.healthy || gw.needs_cookie || gw.img_blocked);
+    const showErrorLine = gw && gw.last_error && (!gw.healthy || gw.needs_cookie);
     let errorLine = '';
     if (showErrorLine) {
       errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
