@@ -622,6 +622,10 @@ async def lifespan(app):
     load_account_names()
     load_groups()
     discover_containers()
+    # Clear stale model cache — always fetch fresh from containers
+    global _models_cache, _models_cache_time
+    _models_cache = []
+    _models_cache_time = 0
     asyncio.create_task(health_loop())
     yield
 
