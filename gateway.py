@@ -919,10 +919,6 @@ async def proxy(request: Request, path: str):
 
         target_url = f"{c.url}/v1/{path}"
         c.total_requests += 1
-        if "images" in path or "videos" in path:
-            c.image_requests += 1
-        else:
-            c.chat_requests += 1
         c.busy = True
 
         try:
@@ -955,6 +951,10 @@ async def proxy(request: Request, path: str):
                 c.error_count = 0
                 c.last_error = ""
                 c.cooldown_until = 0
+                if "images" in path or "videos" in path:
+                    c.image_requests += 1
+                else:
+                    c.chat_requests += 1
                 trace_headers = {
                     name: resp.headers.get(name, "")
                     for name in TRACE_HEADER_NAMES
