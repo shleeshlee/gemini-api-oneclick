@@ -401,13 +401,29 @@ async def check_health(c: Container, client: httpx.AsyncClient):
         # ── Decision: healthy ──
         if status == "healthy" and data.get("client_ready", False):
             c.health_fail_count = 0
-            if c.needs_cookie:
-                c.needs_cookie = False
-                add_log("info", c.num, "认证已恢复")
             if not c.healthy:
                 c.healthy = True
                 add_log("info", c.num, "恢复正常")
-            # Store last error type for routing (e.g. image_blocked)
+
+            # ── React to actual request errors reported by container ──
+            if last_error_type == "cookie_expired":
+                # Chat also broken → disable entirely
+                c.needs_cookie = True
+                c.healthy = False
+                add_log("error", c.num, "Cookie 过期，已禁用")
+            elif last_error_type == "image_blocked":
+                # Chat works, images don't → mark img_blocked
+                if not c.img_blocked:
+                    c.img_blocked = True
+                    add_log("warn", c.num, "仅生文，需更新 Cookie")
+            else:
+                # No error or transient error → clear blocked states
+                if c.needs_cookie:
+                    c.needs_cookie = False
+                    add_log("info", c.num, "认证已恢复")
+                if c.img_blocked and last_error_type == "":
+                    c.img_blocked = False
+
             c.last_error = last_error_type
             return
 
