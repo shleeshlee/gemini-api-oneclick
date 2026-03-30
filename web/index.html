@@ -1216,7 +1216,7 @@ function renderGrid() {
     let actionBtn = '';
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
-      const restartBtn = `<button class="card-btn" onclick="event.stopPropagation();restartContainer(${num})" title="重启容器" style="font-size:.8rem">🔄</button>`;
+      const restartBtn = `<button class="card-btn" onclick="event.stopPropagation();restartContainer(${num})">重启</button>`;
       if (gw.enabled) {
         actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
@@ -1250,8 +1250,9 @@ function renderGrid() {
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
-        ${gw && gw.img_blocked ? '<div class="card-warn">⚠ 仅生文，需更新Cookie</div>' : ''}
-        ${gw && gw.busy ? '<div class="card-busy">⏳ 处理中</div>' : ''}
+        ${gw && gw.needs_cookie ? '<div class="card-warn">Cookie 无效，需更新</div>' : ''}
+        ${gw && gw.img_blocked && !gw.needs_cookie ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
+        ${gw && gw.busy ? '<div class="card-busy">处理中</div>' : ''}
         ${statsLine}
         ${errorLine}
         <div class="card-actions">${actionBtn}</div>
