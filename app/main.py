@@ -172,6 +172,24 @@ def get_enum_models() -> list[dict[str, Any]]:
     return build_model_payload([m.model_name for m in Model if m.model_name != "unspecified"])
 
 
+def _build_model_name(m) -> str:
+    """Build a model name from registry data. Extracts version from description."""
+    desc = getattr(m, "description", "") or ""
+    display = getattr(m, "display_name", "") or ""
+    # Try to extract version+family from description, e.g. "3.1 Pro" or "3 Flash"
+    ver_match = re.search(r"(\d+(?:\.\d+)?)\s+(Pro|Flash|Thinking)", desc, re.IGNORECASE)
+    if ver_match:
+        ver, family = ver_match.group(1), ver_match.group(2).lower()
+        return f"gemini-{ver}-{family}"
+    # Fall back: display_name often is "Fast"/"Thinking"/"Pro"
+    display_lower = display.lower()
+    family_map = {"fast": "flash", "thinking": "flash-thinking"}
+    family = family_map.get(display_lower, display_lower)
+    if family:
+        return f"gemini-{family}"
+    return getattr(m, "model_id", "") or ""
+
+
 async def get_runtime_models() -> list[dict[str, Any]]:
     """Return models from the live model registry, falling back to vendored enum."""
     global runtime_models_cache, runtime_models_cache_time
@@ -186,7 +204,7 @@ async def get_runtime_models() -> list[dict[str, Any]]:
         if registry:
             model_ids = []
             for m in registry.values():
-                name = m.model_name or m.display_name or m.model_id
+                name = _build_model_name(m)
                 if name:
                     model_ids.append(name)
             if model_ids:
