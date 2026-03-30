@@ -636,7 +636,15 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
         if isinstance(image, GeneratedImage):
             # 1024 keeps the studio responsive while remaining sharper than the preview.
             url = url + f"=s{IMAGE_DOWNLOAD_SIZE}"
-            req_cookies = image.cookies
+            # Convert curl_cffi Cookies to dict for httpx compatibility
+            raw_cookies = image.cookies
+            if raw_cookies and not isinstance(raw_cookies, dict):
+                try:
+                    req_cookies = dict(raw_cookies.items())
+                except Exception:
+                    req_cookies = {k: v for k, v in raw_cookies.items()} if hasattr(raw_cookies, 'items') else raw_cookies
+            else:
+                req_cookies = raw_cookies
 
         async with AsyncClient(
             http2=True, follow_redirects=True, cookies=req_cookies, timeout=45.0,
