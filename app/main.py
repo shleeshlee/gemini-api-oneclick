@@ -287,21 +287,19 @@ def describe_model(model: Model | dict[str, Any]) -> dict[str, str]:
     }
 
 
-def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
-    """Resolve an incoming model name via live registry first, then vendored enum."""
+def resolve_model_for_chat(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
+    """Resolve model for chat — uses live registry (account's real tier) first."""
     name_lower = openai_model_name.lower()
 
     # Step 1: Try live model registry (has real tokens for this account's tier)
     if gemini_client:
         registry = getattr(gemini_client, "_model_registry", None)
         if registry:
-            # Match by display_name or model_name
             for m in registry.values():
                 if name_lower in (m.display_name.lower(), m.model_name.lower()):
                     trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
                     trace.update(describe_model(m))
                     return m, trace
-            # Match by keyword (flash/pro/thinking)
             for m in registry.values():
                 names = f"{m.display_name} {m.model_name}".lower()
                 if name_lower in names or any(kw in name_lower for kw in ("flash", "pro", "thinking") if kw in names):
@@ -309,7 +307,27 @@ def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, A
                     trace.update(describe_model(m))
                     return m, trace
 
-    # Step 2: Fall back to vendored enum (exact match)
+    # Step 2: Fall back to vendored enum
+    return _resolve_from_vendored(openai_model_name)
+
+
+def resolve_model_for_media(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
+    """Resolve model for image/video generation — always uses BASIC_FLASH (capacity 1).
+
+    Why: Google's media generation (Nano Banana 2 / Veo) runs on the Flash Image
+    channel regardless of account tier. Pro/Plus tokens route to search instead of
+    ImageFX. The tier-based access control (free 20/day, pro 100/day, video pro-only)
+    is enforced server-side by account, not by token.
+    """
+    trace = {"requested_model": openai_model_name, "resolution": "media-basic"}
+    trace.update(describe_model(Model.BASIC_FLASH))
+    return Model.BASIC_FLASH, trace
+
+
+def _resolve_from_vendored(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
+    """Shared fallback: resolve from vendored Model enum."""
+    name_lower = openai_model_name.lower()
+
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
         if name_lower == model_name.lower():
@@ -317,34 +335,16 @@ def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, A
             trace.update(describe_model(m))
             return m, trace
 
-    # Step 3: Keyword alias to vendored enum
     alias_model = infer_model_alias(openai_model_name)
     if alias_model:
         trace = {"requested_model": openai_model_name, "resolution": "alias"}
         trace.update(describe_model(alias_model))
         return alias_model, trace
 
-    # Step 4: Default to first available
-    logger.warning("Unknown model '%s', using default", openai_model_name)
-    if gemini_client:
-        registry = getattr(gemini_client, "_model_registry", None)
-        if registry:
-            first = next(iter(registry.values()))
-            trace = {"requested_model": openai_model_name, "resolution": "default"}
-            trace.update(describe_model(first))
-            return first, trace
-
-    for m in Model:
-        model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if model_name != "unspecified":
-            trace = {"requested_model": openai_model_name, "resolution": "default"}
-            trace.update(describe_model(m))
-            return m, trace
-
-    fallback = next(iter(Model))
+    logger.warning("Unknown model '%s', using BASIC_FLASH default", openai_model_name)
     trace = {"requested_model": openai_model_name, "resolution": "default"}
-    trace.update(describe_model(fallback))
-    return fallback, trace
+    trace.update(describe_model(Model.BASIC_FLASH))
+    return Model.BASIC_FLASH, trace
 
 
 def build_model_trace_headers(trace: dict[str, str], endpoint: str) -> dict[str, str]:
@@ -485,7 +485,7 @@ async def list_models():
 
 def map_model_name(openai_model_name: str) -> Model | dict[str, Any]:
     """Map OpenAI model name to a vendored enum or a custom runtime-compatible model dict."""
-    model, _ = resolve_model_selection(openai_model_name)
+    model, _ = resolve_model_for_chat(openai_model_name)
     return model
 
 
@@ -578,7 +578,7 @@ async def create_chat_completion(
         logger.info(f"Prepared conversation: {conversation[:200]}...")
         logger.info(f"Temp files: {temp_files}")
 
-        model, model_trace = resolve_model_selection(request.model)
+        model, model_trace = resolve_model_for_chat(request.model)
         trace_headers = build_model_trace_headers(model_trace, "chat")
         logger.info("Using model trace: %s", model_trace)
 
@@ -843,7 +843,7 @@ async def create_image(
 
         model = None
         if request.model:
-            model, model_trace = resolve_model_selection(request.model)
+            model, model_trace = resolve_model_for_media(request.model)
             trace_headers = build_model_trace_headers(model_trace, "image")
         prompt = request.prompt  # prompt building is done by gateway
 
@@ -1055,7 +1055,7 @@ async def create_video(
 
         model = None
         if request.model:
-            model, model_trace = resolve_model_selection(request.model)
+            model, model_trace = resolve_model_for_media(request.model)
             trace_headers = build_model_trace_headers(model_trace, "video")
         kwargs = {}
         if model:
