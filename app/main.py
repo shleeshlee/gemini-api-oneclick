@@ -126,11 +126,17 @@ async def lifespan(app):
         delay = random.randint(5, 60)
         logger.info(f"Waiting {delay}s before initializing (staggered startup)...")
         await asyncio.sleep(delay)
-        try:
-            await get_or_create_client()
-            logger.info("Gemini client is warmed up and ready.")
-        except Exception as e:
-            logger.error(f"Failed to initialize Gemini client during startup: {e}")
+        for attempt in range(1, 4):
+            try:
+                await get_or_create_client()
+                logger.info("Gemini client is warmed up and ready.")
+                break
+            except Exception as e:
+                logger.error(f"Init attempt {attempt}/3 failed: {e}")
+                if attempt < 3:
+                    wait = 15 * attempt
+                    logger.info(f"Retrying in {wait}s...")
+                    await asyncio.sleep(wait)
     else:
         logger.error("Credentials (SECURE_1PSID, SECURE_1PSIDTS) are not set.")
     yield
