@@ -111,7 +111,7 @@ class Model(Enum):
     UNSPECIFIED = ("unspecified", {}, False)
 
     BASIC_PRO = (
-        "gemini-3-pro",
+        "gemini-3.1-pro",
         build_model_header("9d8ca3786ebdfbea", 1),
         False,
     )
@@ -127,7 +127,7 @@ class Model(Enum):
     )
 
     PLUS_PRO = (
-        "gemini-3-pro-plus",
+        "gemini-3.1-pro-plus",
         build_model_header("e6fa609c3fa255c0", 4),
         True,
     )
@@ -143,7 +143,7 @@ class Model(Enum):
     )
 
     ADVANCED_PRO = (
-        "gemini-3-pro-advanced",
+        "gemini-3.1-pro-advanced",
         build_model_header("e6fa609c3fa255c0", 2),
         True,
     )
@@ -159,8 +159,8 @@ class Model(Enum):
     )
 
     # Backward-compatible aliases kept for the existing oneclick code paths.
-    G_3_0_PRO = (
-        "gemini-3.0-pro",
+    G_3_1_PRO = (
+        "gemini-3.1-pro",
         build_model_header("9d8ca3786ebdfbea", 1),
         False,
     )

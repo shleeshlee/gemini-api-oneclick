@@ -219,7 +219,7 @@ def infer_model_alias(openai_model_name: str) -> Optional[dict[str, Any]]:
     if "flash" in name_lower:
         return build_custom_model(openai_model_name, Model.G_3_0_FLASH)
     if "pro" in name_lower:
-        return build_custom_model(openai_model_name, Model.G_3_0_PRO)
+        return build_custom_model(openai_model_name, Model.G_3_1_PRO)
     return None
 
 
