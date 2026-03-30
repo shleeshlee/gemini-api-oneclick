@@ -69,6 +69,7 @@ def main() -> int:
                 "      - ./app/raw_capture_tracer.py:/app/raw_capture_tracer.py:ro",
                 "      - ./app/parsers:/app/parsers:ro",
                 "      - ./app/worker_events.py:/app/worker_events.py:ro",
+                "      - ./lib/gemini_webapi:/app/gemini_webapi:ro",
                 "      - ./state:/app/state",
                 "    ports:",
                 f"      - \"{port}:8000\"",

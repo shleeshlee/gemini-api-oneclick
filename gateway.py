@@ -146,6 +146,7 @@ class Container:
         self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
         self.img_blocked = False    # True = can chat but not generate images, needs fresh cookie
         self.busy = False           # True = currently processing a request
+        self.tier = ""              # "free" | "pro" | "plus" | "ultra" — from container health
 
     @property
     def available(self):
@@ -168,6 +169,7 @@ class Container:
             "needs_cookie": self.needs_cookie,
             "img_blocked": self.img_blocked,
             "busy": self.busy,
+            "tier": self.tier,
         }
 
 
@@ -377,6 +379,9 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
         if ok:
             c.health_fail_count = 0
+            tier_info = data.get("tier")
+            if isinstance(tier_info, dict):
+                c.tier = tier_info.get("label", "")
             if not c.healthy and not c.needs_cookie:
                 c.healthy = True
                 add_log("info", c.num, "恢复正常")

@@ -44,7 +44,7 @@ from worker_events import (
 )
 from raw_capture_tracer import RawCaptureTracer
 from gemini_webapi import GeminiClient, set_log_level
-from gemini_webapi.constants import Model
+from gemini_webapi.constants import AccountStatus, Model
 from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
 
@@ -401,12 +401,29 @@ async def error_handling(request: Request, call_next):
         return JSONResponse(status_code=500, content={"error": {"message": str(e), "type": "internal_server_error"}})
 
 
+def _detect_tier() -> dict:
+    """Derive account tier from the live model registry."""
+    if not gemini_client:
+        return {"capacity": 0, "label": "unknown"}
+    registry = getattr(gemini_client, "_model_registry", None)
+    if not registry:
+        return {"capacity": 0, "label": "unknown"}
+    cap = max((m.capacity for m in registry.values()), default=0)
+    label = {4: "plus", 3: "ultra", 2: "pro", 1: "free"}.get(cap, "unknown")
+    status = getattr(gemini_client, "account_status", None)
+    result = {"capacity": cap, "label": label, "models": len(registry)}
+    if status and status != AccountStatus.AVAILABLE:
+        result["account_status"] = status.name
+    return result
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy" if gemini_client else "degraded",
         "client_ready": gemini_client is not None,
+        "tier": _detect_tier(),
         "timestamp": datetime.now(tz=timezone.utc).isoformat()
     }
 
