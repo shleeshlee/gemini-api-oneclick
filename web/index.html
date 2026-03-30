@@ -171,12 +171,9 @@ body::before {
 .card-status.orange { background: var(--warn); box-shadow: 0 0 8px rgba(255,179,71,0.4); }
 .card-status.blue { background: #5B9BD5; box-shadow: 0 0 8px rgba(91,155,213,0.4); animation: pulse 1.5s ease-in-out infinite; }
 .card.img-blocked::after { background: linear-gradient(90deg, var(--warn), var(--accent)); }
-.card.tier-plus { border-color: #5B9BD5; }
-.card.tier-plus::after { background: linear-gradient(90deg, #5B9BD5, #7BB8E8); }
-.card.tier-pro { border-color: #9B72CF; }
-.card.tier-pro::after { background: linear-gradient(90deg, #9B72CF, #B794E0); }
-.card.tier-ultra { border-color: #D4A843; }
-.card.tier-ultra::after { background: linear-gradient(90deg, #D4A843, #E8C86A); }
+.card.tier-plus.healthy::after { background: linear-gradient(90deg, #5B9BD5, #93CCE8); }
+.card.tier-pro.healthy::after { background: linear-gradient(90deg, #9B72CF, #C4A6E8); }
+.card.tier-ultra.healthy::after { background: linear-gradient(90deg, #D4A843, #E8D08A); }
 .card-warn { font-size: 0.7rem; color: var(--warn); background: var(--warn-light); padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem; }
 .card-busy { font-size: 0.7rem; color: #5B9BD5; background: #E8F0FE; padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
