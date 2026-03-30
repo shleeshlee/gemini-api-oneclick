@@ -173,7 +173,7 @@ def get_enum_models() -> list[dict[str, Any]]:
 
 
 async def get_runtime_models() -> list[dict[str, Any]]:
-    """Extract currently exposed Gemini model ids from the live Gemini web app."""
+    """Return models from the live model registry, falling back to vendored enum."""
     global runtime_models_cache, runtime_models_cache_time
 
     now = time.time()
@@ -182,26 +182,18 @@ async def get_runtime_models() -> list[dict[str, Any]]:
 
     try:
         client = await get_or_create_client()
-        if not getattr(client, "client", None):
-            raise RuntimeError("Gemini client session is unavailable")
-
-        resp = await client.client.get("https://gemini.google.com/app")
-        resp.raise_for_status()
-
-        raw_names = re.findall(r"gemini-[a-z0-9.-]+", resp.text.lower())
-        model_ids = []
-        seen = set()
-        for name in raw_names:
-            if name in RUNTIME_MODELS_EXCLUDE or name in seen:
-                continue
-            seen.add(name)
-            model_ids.append(name)
-
-        if model_ids:
-            runtime_models_cache = build_model_payload(model_ids)
-            runtime_models_cache_time = now
-            logger.info("Discovered runtime Gemini models: %s", model_ids)
-            return runtime_models_cache
+        registry = getattr(client, "_model_registry", None)
+        if registry:
+            model_ids = []
+            for m in registry.values():
+                name = m.model_name or m.display_name or m.model_id
+                if name:
+                    model_ids.append(name)
+            if model_ids:
+                runtime_models_cache = build_model_payload(model_ids)
+                runtime_models_cache_time = now
+                logger.info("Models from registry: %s", model_ids)
+                return runtime_models_cache
     except Exception as e:
         logger.warning("Falling back to vendored model enum for /v1/models: %s", e)
 
@@ -266,9 +258,28 @@ def describe_model(model: Model | dict[str, Any]) -> dict[str, str]:
 
 
 def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
-    """Resolve an incoming model name and keep trace metadata for the gateway."""
+    """Resolve an incoming model name via live registry first, then vendored enum."""
     name_lower = openai_model_name.lower()
 
+    # Step 1: Try live model registry (has real tokens for this account's tier)
+    if gemini_client:
+        registry = getattr(gemini_client, "_model_registry", None)
+        if registry:
+            # Match by display_name or model_name
+            for m in registry.values():
+                if name_lower in (m.display_name.lower(), m.model_name.lower()):
+                    trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
+                    trace.update(describe_model(m))
+                    return m, trace
+            # Match by keyword (flash/pro/thinking)
+            for m in registry.values():
+                names = f"{m.display_name} {m.model_name}".lower()
+                if name_lower in names or any(kw in name_lower for kw in ("flash", "pro", "thinking") if kw in names):
+                    trace = {"requested_model": openai_model_name, "resolution": "registry-keyword"}
+                    trace.update(describe_model(m))
+                    return m, trace
+
+    # Step 2: Fall back to vendored enum (exact match)
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
         if name_lower == model_name.lower():
@@ -276,21 +287,23 @@ def resolve_model_selection(openai_model_name: str) -> tuple[Model | dict[str, A
             trace.update(describe_model(m))
             return m, trace
 
-    for m in Model:
-        model_name = m.model_name if hasattr(m, "model_name") else str(m)
-        if name_lower in model_name.lower():
-            trace = {"requested_model": openai_model_name, "resolution": "substring"}
-            trace.update(describe_model(m))
-            return m, trace
-
+    # Step 3: Keyword alias to vendored enum
     alias_model = infer_model_alias(openai_model_name)
     if alias_model:
-        logger.info("Mapped runtime model alias '%s' to vendored header family", openai_model_name)
         trace = {"requested_model": openai_model_name, "resolution": "alias"}
         trace.update(describe_model(alias_model))
         return alias_model, trace
 
+    # Step 4: Default to first available
     logger.warning("Unknown model '%s', using default", openai_model_name)
+    if gemini_client:
+        registry = getattr(gemini_client, "_model_registry", None)
+        if registry:
+            first = next(iter(registry.values()))
+            trace = {"requested_model": openai_model_name, "resolution": "default"}
+            trace.update(describe_model(first))
+            return first, trace
+
     for m in Model:
         model_name = m.model_name if hasattr(m, "model_name") else str(m)
         if model_name != "unspecified":
