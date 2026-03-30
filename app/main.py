@@ -1005,7 +1005,12 @@ async def create_image(
             raw_capture=tracer.get_snapshot() if tracer else None,
         )
 
-        if not result_data:
+        if not result_data and raw_image_urls:
+            # Images generated but downloads failed (e.g. free account 403)
+            # Return URLs so frontend can show them directly
+            result_data = [{"url": url} for url in raw_image_urls[:request.n]]
+            logger.warning(f"Image downloads failed, returning {len(result_data)} raw URLs instead")
+        elif not result_data:
             raise HTTPException(status_code=500, detail="Images found but all downloads failed")
 
         worker_event = build_worker_event(
