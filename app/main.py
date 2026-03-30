@@ -184,8 +184,13 @@ def _build_model_name(m) -> str:
     # Fall back: display_name is "Fast"/"Thinking"/"Pro"
     # Models without version in desc self-report as generation 3 (e.g. "Gemini 3 Flash")
     display_lower = display.lower()
-    family_map = {"fast": "flash", "thinking": "flash-thinking"}
-    family = family_map.get(display_lower, display_lower)
+    family_map = {
+        "fast": "flash", "thinking": "flash-thinking", "pro": "pro",
+        "快速": "flash", "快捷": "flash", "思考": "flash-thinking", "思考型": "flash-thinking",
+    }
+    family = family_map.get(display_lower)
+    if not family:
+        return getattr(m, "model_id", "") or ""
     if family:
         return f"gemini-3-{family}"
     return getattr(m, "model_id", "") or ""
