@@ -194,7 +194,9 @@ body::before {
 }
 .card-preview.empty { color: var(--danger); background: var(--danger-light); font-family: 'Outfit', sans-serif; }
 
-.card-stats { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
+.card-stats { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; display: flex; gap: 0.6rem; }
+.card-stats .stat-item { white-space: nowrap; }
+.card-stats .stat-err { color: var(--danger); }
 .card-error {
   font-size: 0.7rem; color: var(--danger); background: var(--danger-light);
   padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem;
@@ -209,6 +211,7 @@ body::before {
 .card-btn.enable { border-color: var(--success); color: #2D7A52; }
 .card-btn.disable { border-color: var(--danger); color: #B94A4A; }
 .card-btn.test { border-color: #2D9CDB; color: #2D9CDB; }
+.card-btn.restart { border-color: var(--success); color: #2D7A52; }
 .card-btn.testing { opacity: 0.5; pointer-events: none; }
 
 /* --- MODAL --- */
@@ -1216,7 +1219,7 @@ function renderGrid() {
     let actionBtn = '';
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
-      const restartBtn = `<button class="card-btn" onclick="event.stopPropagation();restartContainer(${num})">重启</button>`;
+      const restartBtn = `<button class="card-btn restart" onclick="event.stopPropagation();restartContainer(${num})">重启</button>`;
       if (gw.enabled) {
         actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
@@ -1228,7 +1231,8 @@ function renderGrid() {
     if (gw) {
       const chat = gw.chat_requests || 0;
       const img = gw.image_requests || 0;
-      statsLine = `<div class="card-stats">💬${chat} 🎨${img} / ${gw.total_errors} 错误</div>`;
+      const errs = gw.total_errors || 0;
+      statsLine = `<div class="card-stats"><span class="stat-item">聊天 ${chat}</span><span class="stat-item">图片 ${img}</span>${errs ? `<span class="stat-item stat-err">错误 ${errs}</span>` : ''}</div>`;
     }
 
     const showErrorLine = gw && gw.last_error && (!gw.healthy || gw.needs_cookie || gw.img_blocked);
