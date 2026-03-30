@@ -1561,7 +1561,7 @@ const IMG_STYLES = [
   // 额外常用
   {id:'Anime',label:'动漫',icon:'🌸'},{id:'Photorealistic',label:'写实',icon:'📷'},
   {id:'Watercolor',label:'水彩',icon:'🎨'},{id:'Pixel Art',label:'像素',icon:'👾'},
-  {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},{id:'Otome CG',label:'乙女CG',icon:'🌸'},{id:'Fantasy Anime',label:'幻想动漫',icon:'✨'},{id:'Shinkai',label:'新海诚',icon:'🌊'},{id:'Soft Anime',label:'柔和动漫',icon:'🌿'},{id:'Pixiv Rank',label:'P站精选',icon:'🏆'},
+  {id:'Kawaii',label:'可爱',icon:'🧸'},{id:'Ghibli',label:'吉卜力',icon:'🍃'},{id:'Otome CG',label:'乙女CG',icon:'🌸'},{id:'Fantasy Anime',label:'幻想动漫',icon:'✨'},{id:'Shinkai',label:'新海诚',icon:'🌊'},{id:'Soft Anime',label:'柔和动漫',icon:'🌿'},{id:'Pixiv Rank',label:'P站精选',icon:'🏆'},{id:'Fine Line',label:'精致线条',icon:'✒️'},
 ];
 const IMG_RATIOS = [
   {id:'1024x1024',label:'1:1',icon:'□'},
@@ -1572,9 +1572,13 @@ const IMG_RATIOS = [
 ];
 let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
 const NEG_PRESETS = [
-  {id:'blurry',label:'模糊'},{id:'low quality',label:'低质量'},{id:'text, watermark',label:'文字水印'},
-  {id:'extra limbs, deformed',label:'畸形'},{id:'bad anatomy',label:'解剖错误'},
-  {id:'ugly, disfigured',label:'丑陋变形'},{id:'cropped, out of frame',label:'裁切出框'},
+  {id:'bold lines, thick lines, messy lines',label:'粗线条'},
+  {id:'comic book style bold outlining',label:'漫画描边'},
+  {id:'gritty textures, heavy strokes',label:'粗糙质感'},
+  {id:'western comic book style',label:'欧美漫画'},
+  {id:'realistic photo style',label:'写实照片'},
+  {id:'chibi, super deformed',label:'Q版变形'},
+  {id:'text, watermark, signature',label:'文字水印'},
 ];
 let negSelected = new Set();
 let tempImages = []; // {b64, prompt, style, size, quality, channel}
@@ -1688,48 +1692,56 @@ function updateImgGroupSelect() {
 async function optimizePrompt() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  const style = imgSelectedStyle !== 'none' ? (IMG_STYLES.find(s=>s.id===imgSelectedStyle)?.label||imgSelectedStyle) : '';
-  const ratio = IMG_RATIOS.find(r=>r.id===imgSelectedRatio)?.label || '';
-  const quality = document.getElementById('imgQuality').value;
+  const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('imgOptBtn');
 
   btn.disabled = true; btn.textContent = '✨ 优化中...';
 
-  const sysPrompt = `You are an expert image prompt engineer for Google Gemini's ImageFX generator. Your job is to expand a user's brief description into a detailed, vivid image generation prompt in English.
+  // Fetch style preset constraints if a style is selected
+  let styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
+  if (styleId) {
+    try {
+      const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
+      if (presetResp.ok) {
+        const presetData = await presetResp.json();
+        const preset = presetData.presets?.[styleId];
+        if (preset) {
+          styleConstraint = (preset.prefix || '') + '. ' + (preset.suffix || '');
+        }
+      }
+    } catch(e) { /* use default constraint */ }
+  }
 
-Your job is ONLY to enrich the CONTENT — the subject, scene, action, pose, expression, clothing, environment, spatial relationships. Make the scene vivid and specific.
+  const neg = getNegativePrompt();
+  const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
 
-Rules:
-- Output ONLY the optimized prompt, nothing else
-- Use natural descriptive language (NOT Stable Diffusion tags)
-- Expand the scene: who/what is there, what they are doing, where they are, spatial arrangement
-- Add sensory details: textures, materials, weather, time of day, background elements
-- Do NOT specify art style, rendering technique, or medium (e.g. no "digital illustration", "oil painting", "anime style")
-- Do NOT specify camera or lens (e.g. no "Canon 5D", "85mm lens", "f/1.4")
-- Do NOT specify lighting technique (e.g. no "Rembrandt lighting", "rim light", "volumetric")
-- Do NOT specify color palette or color grading (e.g. no "warm tones", "cool palette", "desaturated")
-- Do NOT add quality boosters (e.g. no "masterpiece", "4k", "ultra detailed", "film grain")
-- These are controlled separately by the user's style settings
-- Keep the user's core intent, don't change the subject
-- 100 words max
-${ratio ? `- Aspect ratio: ${ratio}` : ''}`;
+  const userPrompt = `请你作为我的专业 AI 图像提示词工程师。
+
+我会给你一个简单的中文画面构思，请你帮我扩写成一段结构严谨、细节丰富、适合生图模型（如 Midjourney 或 具有 Pro 细节还原能力的大模型）的英文提示词。
+
+我的基本构思是：${prompt}
+
+我需要的特定风格和物理约束是：${styleConstraint}${negLine}
+
+请直接输出最终的英文提示词，并用逗号分隔各个核心元素。`;
 
   try {
     const resp = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: [
-        { role: 'system', content: sysPrompt },
-        { role: 'user', content: prompt }
-      ], max_tokens: 300, temperature: 0.7 })
+        { role: 'user', content: userPrompt }
+      ], max_tokens: 400, temperature: 0.7 })
     });
     const data = await resp.json();
     let optimized = data.choices?.[0]?.message?.content || '';
     optimized = optimized.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
     if (optimized) {
       document.getElementById('imgPrompt').value = optimized;
-      toast('提示词已优化', 'ok');
+      // Style already fused into optimized prompt — switch to no-style to avoid double injection
+      selectImgStyle('none');
+      toast('提示词已优化，风格已融入', 'ok');
     } else {
       toast('优化失败：空响应', 'err');
     }
@@ -2073,38 +2085,40 @@ async function doImgEdit() {
 }
 
 // ── Style Templates ────────────────────────────────────────
-const DIM_LABELS = {linework:'✒️ 线条',coloring:'🎨 上色',lighting:'💡 打光',texture:'🧶 材质',anatomy:'🦴 人体',atmosphere:'🌙 氛围',combined:'🎭 综合'};
+const DIM_LABELS = {physical:'✒️ 物理约束',negative:'🚫 排除',quality:'🏆 质量锚点',style:'🎨 风格氛围',content:'👤 内容描述'};
 let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
 async function analyzeStyle() {
   if (!uploadedImageB64) { toast('请先上传图片或视频', 'err'); return; }
-  const model = document.getElementById('imgModel').value;
+  const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  const sysPrompt = `You are an expert at writing style descriptors for Google Gemini image generation. Analyze this image and extract the precise visual qualities that make it look the way it does.
+  const sysPrompt = `You are an expert at analyzing images and writing structured prompts for Google Gemini image generation. Analyze this image using a 5-layer reverse engineering approach.
 
-Your goal: write descriptors that will make Gemini retrieve the RIGHT visual style from its training data. Think of each field as a search query into Gemini's memory of beautiful artwork — use the specific terminology that high-quality illustrations are tagged with.
+For each layer, ask yourself:
+1. Line quality (Physical): Are the lines ultra-fine or varied? Are edges clean and sharp?
+2. Coloring style (Quality/Style): Smooth cel-shading or thick painterly strokes?
+3. Core subject (Content): Character features, poses, interactions, composition?
+4. Environment & mood (Style): Background elements, dominant colors, light sources?
+5. What is NOT in this image (Negative): No bold outlines? No gritty textures? No western comic style?
 
-Return a JSON object with these 7 keys. For the first 6 keys, write a precise English style descriptor (15-30 words). Be specific enough to distinguish this style from similar ones, but use natural art terminology Gemini understands well.
+Return a JSON object with these 5 keys:
 
 {
-  "linework": "(Line quality and edge treatment. Use terms like: clean refined lineart, thick bold outlines, no-lineart painterly edges, sketchy loose strokes, varied line weight, tapered brush strokes, sharp silhouette edges, soft lost edges. Example: Clean refined anime lineart with confident varied line weight, thicker on silhouettes and thinner on inner details, elegant flowing contours.)",
-  "coloring": "(Color method, palette, and shadow style. Use terms like: soft cel-shading, watercolor wash, flat color fills, rich saturated jewel tones, desaturated pastels, hard-edged shadows, gradient blending, wet-on-wet transitions, complementary color contrast. Example: Rich watercolor palette with deep cerulean shadows and warm golden highlights, visible wet-on-wet color bleeding, soft cel-shaded skin tones.)",
-  "lighting": "(Light sources and their visual effect. Use terms like: dramatic rim lighting, soft diffused ambient light, volumetric haze, luminous bokeh, backlit glow, chiaroscuro contrast, warm key light, cool fill light, god rays, overexposed bloom. Example: Warm magical glow from focal point with cool blue ambient fill, luminous bokeh particles, soft rim lighting on hair and shoulders.)",
-  "texture": "(Surface quality and material rendering. Use terms like: silky hair highlights, delicate lace detail, glossy reflective surfaces, matte skin, watercolor paper grain, fabric folds with natural draping, transparent glass refraction, metallic sheen. Example: Delicate hair with silky highlight streaks, soft fabric with layered lace detail, traditional watercolor paper texture throughout.)",
-  "anatomy": "(Figure and face rendering quality. Use terms like: elegant anime proportions, detailed expressive eyes with layered catchlights, refined facial features, graceful slender hands, semi-realistic body proportions, large eyes with iris detail, minimal implied nose. Example: Elegant anime proportions with large detailed eyes featuring multiple catchlight reflections and layered iris colors, refined soft features.)",
-  "atmosphere": "(Scene depth and environmental quality. Use terms like: lush detailed environment, atmospheric perspective, shallow depth-of-field bokeh, floating particles, negative space, storybook-quality background, dreamy haze, immersive scene depth, minimalist white space. Example: Lush fully-realized storybook environment with atmospheric depth, abundant floating light particles, strong foreground-background separation.)",
-  "combined": "(The most important field. A single fluent style instruction for Gemini, 30-45 words. Weave together the most distinctive qualities from above into a natural sentence. This gets appended directly to user prompts. Example: High-quality digital anime illustration with refined lineart and rich watercolor coloring, deep cerulean shadows with warm golden glow, luminous bokeh particles, detailed eyes with layered catchlights, lush storybook atmosphere.)"
+  "physical": "(Physical constraints: line weight, edge quality, detail precision. Example: fine delicate line art, minimal line weight, pristine clean edges, precise and sharp outlines, high-fidelity detailing on hair strands and delicate features.)",
+  "negative": "(What to exclude — elements that would break this style. Start with 排除：. Example: 排除：bold lines, thick outlines, heavy strokes, messy linework, gritty textures, western comic book style bold outlines.)",
+  "quality": "(Quality anchors — reference the highest standard this style matches. Example: Masterpiece, best quality, like novelai quality, intricate digital illustration quality, 8k resolution, flawless professional-level rendering.)",
+  "style": "(Atmosphere, lighting, color palette, mood. Example: High-end Korean webtoon style with a clean and polished look, cinematic lighting with dominant soft blue glows, holographic reflections, intensely romantic yet tense atmosphere.)",
+  "content": "(Detailed description of everything visible: characters, clothing, hair, expression, pose, background objects, spatial arrangement. Be specific — 50-80 words. Example: A cool, beautiful female doctor with long silver-purple hair and glasses, wearing a black blouse and white lab coat, intensely close to a young male patient with dark hair who is blushing and sweating, leaning against a glowing laboratory wall panel surrounded by holographic screens.)"
 }
 
 RULES:
-- Do NOT describe subject matter, characters, poses, clothing, or scene content — only visual style and rendering quality.
-- Use terminology commonly found in high-quality digital art descriptions — these words help Gemini find the right style in its training data.
-- Prioritize specificity over length. "Rich watercolor with deep cerulean shadows" beats "beautiful colorful painting with blue tones".
-- The "combined" field will be appended to a user's prompt as a style suffix — it must read naturally.
-Return ONLY the JSON.`;
+- The "physical" and "negative" layers are the most important — they control rendering quality.
+- "content" must describe EVERYTHING visible in detail — this is what makes reproductions accurate.
+- Use terminology from high-quality digital art tags.
+- Return ONLY the JSON.`;
 
   try {
     const resp = await fetch('/v1/chat/completions', {
@@ -2218,13 +2232,20 @@ function renderActiveDims() {
 function getActiveDimsPrompt() {
   const entries = Object.entries(activeDims);
   if (!entries.length) return '';
-  // Prefer combined field if any template has it active
-  const combinedEntries = entries.filter(([k]) => k.endsWith(':combined'));
-  if (combinedEntries.length) {
-    return combinedEntries.map(([, v]) => v).join('. ');
+  // Build prompt in 5-layer order: physical → style → content → quality → NOT negative
+  const byLayer = {};
+  for (const [key, val] of entries) {
+    const dimKey = key.split(':').pop();
+    if (!byLayer[dimKey]) byLayer[dimKey] = [];
+    byLayer[dimKey].push(val);
   }
-  // Fallback: join individual dimension values
-  return entries.map(([, v]) => v).join('. ') + '.';
+  const parts = [];
+  if (byLayer.physical) parts.push(byLayer.physical.join(', '));
+  if (byLayer.style) parts.push(byLayer.style.join(', '));
+  if (byLayer.content) parts.push(byLayer.content.join(', '));
+  if (byLayer.quality) parts.push(byLayer.quality.join(', '));
+  if (byLayer.negative) parts.push('NOT ' + byLayer.negative.map(v => v.replace(/^排除[：:]\s*/i, '')).join(', '));
+  return parts.join(', ');
 }
 
 async function deleteStyleTemplate(id) {
