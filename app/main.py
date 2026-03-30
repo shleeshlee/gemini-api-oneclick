@@ -67,12 +67,25 @@ client_lock = asyncio.Lock()
 runtime_models_cache: list[dict[str, Any]] = []
 runtime_models_cache_time = 0.0
 
+# Container real state — reported to gateway, never self-managed
+_container_state: dict[str, Any] = {
+    "auth_status": "unknown",      # AVAILABLE / UNAUTHENTICATED / LOCATION_REJECTED / ...
+    "last_error": "",              # most recent request error
+    "last_error_type": "",         # cookie_expired / image_blocked / rate_limit / tls_error / ...
+    "needs_restart": False,        # True = TLS/connection repeatedly broken
+    "initializing": True,          # True during startup init
+    "_tls_fail_count": 0,          # consecutive TLS failures → triggers needs_restart
+}
+
 RUNTIME_MODELS_CACHE_TTL = 300
 RUNTIME_MODELS_EXCLUDE = {
     "gemini-advanced",
     "gemini-apps-while-signed-out",
 }
 IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "1024").strip() or "1024"
+
+# TLS failure threshold before requesting restart
+_TLS_RESTART_THRESHOLD = 3
 
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
@@ -86,38 +99,97 @@ logger.info(f"SECURE_1PSIDTS: {'SET' if SECURE_1PSIDTS else 'EMPTY'} (len={len(S
 logger.info("------------------------------------")
 
 
+def _report_error(e: Exception) -> None:
+    """Classify error and update _container_state. Container only reports, never self-manages."""
+    from gemini_webapi.exceptions import (
+        AuthError, RateLimitExceeded, UsageLimitExceeded,
+        ImageGenerationBlocked, TemporarilyBlocked,
+    )
+    error_str = str(e)
+    error_lower = error_str.lower()
+
+    if isinstance(e, ImageGenerationBlocked):
+        _container_state["last_error_type"] = "image_blocked"
+    elif isinstance(e, (AuthError,)):
+        _container_state["last_error_type"] = "cookie_expired"
+    elif isinstance(e, UsageLimitExceeded):
+        _container_state["last_error_type"] = "usage_limit"
+    elif isinstance(e, RateLimitExceeded):
+        _container_state["last_error_type"] = "rate_limit"
+    elif isinstance(e, TemporarilyBlocked):
+        _container_state["last_error_type"] = "temporarily_blocked"
+    elif "tls" in error_lower or "ssl" in error_lower or "curl: (35)" in error_lower:
+        _container_state["last_error_type"] = "tls_error"
+        _container_state["_tls_fail_count"] += 1
+        if _container_state["_tls_fail_count"] >= _TLS_RESTART_THRESHOLD:
+            _container_state["needs_restart"] = True
+    elif any(kw in error_lower for kw in ["can't generate more videos", "video generation isn't available"]):
+        _container_state["last_error_type"] = "video_quota"
+    elif any(kw in error_lower for kw in ['401', '403', 'cookie', 'expired']):
+        _container_state["last_error_type"] = "cookie_expired"
+    elif '429' in error_lower or 'rate limit' in error_lower:
+        _container_state["last_error_type"] = "rate_limit"
+    else:
+        _container_state["last_error_type"] = "unknown"
+
+    _container_state["last_error"] = error_str[:200]
+
+    # Reset TLS counter on non-TLS errors (connection recovered)
+    if _container_state["last_error_type"] != "tls_error":
+        _container_state["_tls_fail_count"] = 0
+
+    logger.info(f"Error reported: type={_container_state['last_error_type']} msg={error_str[:100]}")
+
+
 async def get_or_create_client():
-    """Get or create Gemini client with auto-reconnect."""
+    """Get or create Gemini client. Reports real auth status to _container_state."""
     global gemini_client
 
     async with client_lock:
         if gemini_client is None:
             if not SECURE_1PSID or not SECURE_1PSIDTS:
-                logger.error("Cannot initialize: credentials not set.")
+                _container_state["auth_status"] = "no_credentials"
                 raise HTTPException(status_code=503, detail="Gemini credentials not configured")
 
             try:
+                _container_state["initializing"] = True
                 proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
                 await gemini_client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
+
+                # Read real auth status from Google
+                status = getattr(gemini_client, "account_status", None)
+                if status:
+                    _container_state["auth_status"] = status.name
+                else:
+                    _container_state["auth_status"] = "unknown"
+
+                if status and status != AccountStatus.AVAILABLE:
+                    logger.warning(f"Auth status: {status.name} — client initialized but account not fully available")
+
+                _container_state["initializing"] = False
+                _container_state["needs_restart"] = False
+                _container_state["_tls_fail_count"] = 0
+                _container_state["last_error"] = ""
+                _container_state["last_error_type"] = ""
                 logger.info("Gemini client initialized successfully.")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
                 gemini_client = None
+                _container_state["initializing"] = False
+                error_str = str(e).lower()
+                if "tls" in error_str or "ssl" in error_str or "curl: (35)" in error_str:
+                    _container_state["_tls_fail_count"] += 1
+                    _container_state["last_error_type"] = "tls_error"
+                    if _container_state["_tls_fail_count"] >= 3:
+                        _container_state["needs_restart"] = True
+                else:
+                    _container_state["last_error_type"] = "init_failed"
+                _container_state["last_error"] = str(e)[:200]
                 raise HTTPException(status_code=503, detail=f"Failed to initialize Gemini client: {str(e)}")
 
         return gemini_client
-
-
-async def reset_client():
-    """Reset client for error recovery."""
-    global gemini_client, runtime_models_cache, runtime_models_cache_time
-    async with client_lock:
-        gemini_client = None
-        runtime_models_cache = []
-        runtime_models_cache_time = 0.0
-        logger.warning("Gemini client has been reset.")
 
 
 @asynccontextmanager
@@ -463,18 +535,30 @@ def _detect_tier() -> dict:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint. Auto-reinitializes if client was reset."""
-    if gemini_client is None and SECURE_1PSID and SECURE_1PSIDTS:
-        try:
-            await get_or_create_client()
-            logger.info("Client re-initialized via health check.")
-        except Exception as e:
-            logger.warning(f"Health check re-init failed: {e}")
+    """Health check — reports real container state, no self-management."""
+    auth = _container_state["auth_status"]
+    client_ready = gemini_client is not None
+
+    if _container_state["initializing"]:
+        status = "initializing"
+    elif not client_ready:
+        status = "no_client"
+    elif auth == "UNAUTHENTICATED":
+        status = "unauthenticated"
+    elif auth == "AVAILABLE":
+        status = "healthy"
+    else:
+        status = "degraded"
+
     return {
-        "status": "healthy" if gemini_client else "degraded",
-        "client_ready": gemini_client is not None,
+        "status": status,
+        "client_ready": client_ready,
+        "auth_status": auth,
         "tier": _detect_tier(),
-        "timestamp": datetime.now(tz=timezone.utc).isoformat()
+        "needs_restart": _container_state["needs_restart"],
+        "last_error": _container_state["last_error"],
+        "last_error_type": _container_state["last_error_type"],
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
     }
 
 
@@ -670,9 +754,7 @@ async def create_chat_completion(
 
                 except Exception as e:
                     logger.error(f"Stream error: {e}", exc_info=True)
-                    error_msg = str(e).lower()
-                    if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
-                        await reset_client()
+                    _report_error(e)
                     # Send error as final content chunk so caller sees it
                     if first:
                         role_chunk = {
@@ -772,8 +854,7 @@ async def create_chat_completion(
         error_msg = str(e).lower()
         logger.error(f"Error in chat completion: {e}", exc_info=True)
 
-        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
-            await reset_client()
+        _report_error(e)
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
             raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
 
@@ -988,8 +1069,7 @@ async def create_image(
                 "raw_capture": tracer.get_snapshot() if tracer else None,
             },
         )
-        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
-            await reset_client()
+        _report_error(e)
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
     finally:
         for tf in temp_files:
@@ -1145,8 +1225,7 @@ async def create_video(
                 "raw_capture": tracer.get_snapshot() if tracer else None,
             },
         )
-        if not isinstance(e, ImageGenerationBlocked) and any(kw in error_msg for kw in ['auth', 'cookie', 'expired', '401', '403']):
-            await reset_client()
+        _report_error(e)
         if any(kw in error_msg for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
             raise HTTPException(status_code=429, detail=f"Video rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
