@@ -544,7 +544,6 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
 
         async with AsyncClient(
             http2=True, follow_redirects=True, cookies=req_cookies, timeout=45.0,
-            trust_env=False,
         ) as http_client:
             resp = await http_client.get(url)
             if resp.status_code == 200:
