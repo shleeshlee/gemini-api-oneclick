@@ -368,72 +368,75 @@ def get_next_available(group: str | None = None, is_image: bool = False) -> Cont
 # ── Health Check ────────────────────────────────────────────────────────
 
 HEALTH_FAIL_TOLERANCE = 2   # consecutive failures before marking unhealthy
-HEALTH_RESTART_THRESHOLD = 3  # consecutive failures to trigger docker restart
-_AUTH_KEYWORDS = {"auth", "cookie", "expired", "credentials", "401", "403"}
-
-
 async def check_health(c: Container, client: httpx.AsyncClient):
-    """Check single container health with failure tolerance and auto-restart."""
+    """Read container's real state and make management decisions."""
     try:
         resp = await client.get(f"{c.url}/health", timeout=5.0)
         data = resp.json()
-        was_healthy = c.healthy
-        ok = resp.status_code == 200 and data.get("client_ready", False)
         c.last_check = time.time()
 
-        if ok:
+        status = data.get("status", "unknown")
+        auth_status = data.get("auth_status", "unknown")
+        needs_restart = data.get("needs_restart", False)
+        last_error_type = data.get("last_error_type", "")
+        last_error = data.get("last_error", "")
+
+        # Read tier
+        tier_info = data.get("tier")
+        if isinstance(tier_info, dict):
+            c.tier = tier_info.get("label", "")
+
+        # ── Decision: container says it needs restart ──
+        if needs_restart:
+            add_log("warn", c.num, f"容器请求重启: {last_error[:80]}")
+            await _do_restart(c)
+            return
+
+        # ── Decision: unauthenticated = cookie expired ──
+        if status == "unauthenticated" or auth_status == "UNAUTHENTICATED":
+            if not c.needs_cookie:
+                c.needs_cookie = True
+                c.healthy = False
+                add_log("error", c.num, "Cookie 无效（UNAUTHENTICATED），需更换")
+            return
+
+        # ── Decision: initializing = wait ──
+        if status == "initializing":
+            c.healthy = False
             c.health_fail_count = 0
-            tier_info = data.get("tier")
-            if isinstance(tier_info, dict):
-                c.tier = tier_info.get("label", "")
+            return
+
+        # ── Decision: healthy ──
+        if status == "healthy" and data.get("client_ready", False):
+            c.health_fail_count = 0
             if c.needs_cookie:
                 c.needs_cookie = False
                 add_log("info", c.num, "认证已恢复")
             if not c.healthy:
                 c.healthy = True
                 add_log("info", c.num, "恢复正常")
-        else:
-            c.health_fail_count += 1
-            reason = "client not ready" if resp.status_code == 200 else f"HTTP {resp.status_code}"
-            if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
-                c.healthy = False
-                add_log("warn", c.num, f"健康检查连续{HEALTH_FAIL_TOLERANCE}次失败: {reason}")
-            if c.health_fail_count >= HEALTH_RESTART_THRESHOLD:
-                await _maybe_restart(c)
+            # Store last error type for routing (e.g. image_blocked)
+            c.last_error = last_error_type
+            return
+
+        # ── Decision: degraded or no_client ──
+        c.health_fail_count += 1
+        if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
+            c.healthy = False
+            add_log("warn", c.num, f"状态异常: {status}, auth={auth_status}")
+
     except Exception as e:
         c.health_fail_count += 1
         c.last_check = time.time()
         if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
             c.healthy = False
             add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
-        if c.health_fail_count >= HEALTH_RESTART_THRESHOLD:
-            await _maybe_restart(c)
 
 
-async def _maybe_restart(c: Container):
-    """Restart container if not an auth problem. Auth issues need new cookies, not restart."""
+async def _do_restart(c: Container):
+    """Execute docker restart for a container."""
     cname = f"gemini_api_account_{c.num}"
-    # Check recent logs for auth errors
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "logs", "--tail", "30", cname,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
-        recent = stdout.decode(errors="replace").lower()
-        if any(kw in recent for kw in _AUTH_KEYWORDS):
-            if not c.needs_cookie:
-                c.needs_cookie = True
-                c.healthy = False
-                add_log("error", c.num, "认证错误，需要更换 Cookie（重启无效）")
-            c.health_fail_count = 0  # stop retrying restart
-            return
-    except Exception:
-        pass
-
-    # Not auth — restart
-    add_log("warn", c.num, f"连续{c.health_fail_count}次健康检查失败，自动重启容器")
+    add_log("warn", c.num, "自动重启容器")
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "restart", cname,
@@ -442,7 +445,7 @@ async def _maybe_restart(c: Container):
         )
         await asyncio.wait_for(proc.communicate(), timeout=30)
         c.health_fail_count = 0
-        c.healthy = False  # wait for next health check to confirm
+        c.healthy = False  # wait for next health check
         add_log("info", c.num, "容器已重启，等待恢复")
     except Exception as e:
         add_log("error", c.num, f"容器重启失败: {str(e)[:80]}")
@@ -885,10 +888,15 @@ async def proxy(request: Request, path: str):
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
+        # Check why — initializing, needs_cookie, or genuinely none
+        initializing_count = sum(1 for c in containers.values() if not c.healthy and not c.needs_cookie)
+        needs_cookie_count = sum(1 for c in containers.values() if c.needs_cookie)
+        if initializing_count > 0 and not any(c.available for c in containers.values()):
+            raise HTTPException(status_code=503, detail=f"容器正在准备中（{initializing_count}个初始化中，{needs_cookie_count}个需更新Cookie）")
         if is_image_req:
-            detail = f"No containers available for image generation" + (f" in group [{target_group}]" if target_group else "") + " (all may be img_blocked)"
+            detail = f"没有可用的生图容器" + (f"（分组 [{target_group}]）" if target_group else "")
         else:
-            detail = f"No healthy containers in group [{target_group}]" if target_group else "No healthy containers available"
+            detail = f"没有可用容器" + (f"（分组 [{target_group}]）" if target_group else "")
         raise HTTPException(status_code=503, detail=detail)
 
     last_error = ""
@@ -1048,6 +1056,16 @@ async def set_container_name(num: int, request: Request):
         account_names.pop(num, None)
     save_account_names()
     return {"ok": True}
+
+
+@app.post("/gateway/restart/{num}", dependencies=[Depends(verify_panel_auth)])
+async def restart_container(num: int):
+    """Restart a single container (no cookie change)."""
+    c = containers.get(num)
+    if not c:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    await _do_restart(c)
+    return {"ok": True, "message": f"Container {num} restarting"}
 
 
 @app.post("/gateway/refresh", dependencies=[Depends(verify_panel_auth)])
