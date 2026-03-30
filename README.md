@@ -107,7 +107,7 @@ bash scripts/install.sh
 curl -X POST http://你的IP:9880/v1/videos/generations \
   -H "Authorization: Bearer 你的API密钥" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "a kitten playing with yarn", "model": "gemini-2.0-flash"}'
+  -d '{"prompt": "a kitten playing with yarn", "model": "gemini-3-flash"}'
 ```
 
 视频生成需要 1-5 分钟（Veo），API 自动轮询等待完成，返回 base64 数据和下载 URL。

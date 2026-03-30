@@ -780,7 +780,7 @@ async def root():
 
 class ImageGenerationRequest(BaseModel):
     prompt: str
-    model: Optional[str] = "gemini-3.0-flash"
+    model: Optional[str] = "gemini-3-flash"
     n: Optional[int] = 1
     size: Optional[str] = "1024x1024"
     quality: Optional[str] = "standard"
@@ -993,7 +993,7 @@ async def create_image(
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
-    model: Optional[str] = "gemini-2.0-flash"
+    model: Optional[str] = "gemini-3-flash"
     image: Optional[str] = None  # base64 encoded media for image/video-to-video
     media_type: Optional[str] = "image"  # "image" or "video"
 
