@@ -1216,16 +1216,19 @@ function renderGrid() {
     let actionBtn = '';
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
+      const restartBtn = `<button class="card-btn" onclick="event.stopPropagation();restartContainer(${num})" title="重启容器" style="font-size:.8rem">🔄</button>`;
       if (gw.enabled) {
-        actionBtn = testBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
+        actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
-        actionBtn = testBtn + `<span style="flex:1"></span><button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
+        actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
       }
     }
 
     let statsLine = '';
     if (gw) {
-      statsLine = `<div class="card-stats">${gw.total_requests} 请求 / ${gw.total_errors} 错误</div>`;
+      const chat = gw.chat_requests || 0;
+      const img = gw.image_requests || 0;
+      statsLine = `<div class="card-stats">💬${chat} 🎨${img} / ${gw.total_errors} 错误</div>`;
     }
 
     const showErrorLine = gw && gw.last_error && (!gw.healthy || gw.needs_cookie || gw.img_blocked);
@@ -1275,6 +1278,22 @@ async function toggleContainer(num, enable) {
     await loadAll();
   } catch(e) {
     toast('操作失败', 'err');
+  }
+}
+
+async function restartContainer(num) {
+  if (!confirm(`确认重启容器 #${num}？`)) return;
+  try {
+    const resp = await fetch(`/gateway/restart/${num}`, { method: 'POST', headers: authHeaders() });
+    if (resp.ok) {
+      toast(`#${num} 正在重启`, 'ok');
+    } else {
+      const d = await resp.json().catch(() => ({}));
+      toast(d.detail || '重启失败', 'err');
+    }
+    await loadAll();
+  } catch(e) {
+    toast('重启失败: ' + e.message, 'err');
   }
 }
 
