@@ -790,11 +790,12 @@ STYLE_PROMPTS = {
     "ASMR Apple": {"prefix": "ASMR macro style, extreme close-up detail", "suffix": "satisfying textures, crisp focus, sensory-rich, highly detailed"},
     "Red Carpet": {"prefix": "Red carpet documentary style, paparazzi flash", "suffix": "celebrity glamour, dramatic entrances, cinematic, highly detailed"},
     "Popcorn": {"prefix": "Popcorn fun style, playful stop-motion", "suffix": "whimsical food art, creative and surprising compositions"},
-    "Otome CG": {"prefix": "High-quality otome game CG illustration with refined lineart and delicate tapered strokes, elegant bishoujo anime proportions with large expressive eyes featuring complex layered irises and bright catchlights, refined soft facial features", "suffix": "soft watercolor wash with warm peach and cool blue cel-shading, silky fine-line hair highlights, soft matte skin rendering, tyndall effect lighting, sentimental atmosphere with shallow depth-of-field, elegant jewelry details"},
+    "Otome CG": {"prefix": "An incredibly intricate digital illustration in a high-quality otome game CG style (cell shading). Features fine, delicate line art (minimal line weight), pristine clean edges, high fidelity detailing on hair strands and facial features", "suffix": "Smooth color gradients and pristine lighting, soft watercolor wash, tyndall effect, like novelai quality. NOT bold lines, thick lines, messy lines, comic book style bold outlining"},
     "Fantasy Anime": {"prefix": "High-quality fantasy anime illustration with refined lineart and varied line weights, elegant anime proportions with large detailed eyes featuring layered catchlights, refined facial features, graceful slender gestures", "suffix": "soft watercolor-like coloring with desaturated pastel tones and subtle color bleeding, ethereal diffused lighting with soft bloom effect, floating particles and magical light motes, lush fully-realized fantasy environment with atmospheric depth and dreamy haze"},
     "Shinkai": {"prefix": "High-quality digital anime illustration with crisp refined lineart and delicate tapered ends, thin internal detailing and slightly weighted outer silhouettes, elegant anime proportions with large intensely detailed eyes featuring complex iris patterns and multiple catchlights", "suffix": "saturated palette with vivid cold-warm color grading, smooth digital gradients with soft-edged cel-shading, dramatic cinematic rim lighting with subtle bloom effect, silky hair with sharp high-contrast highlights, luminous transparent sky with detailed cloud layers and sunlight rays piercing through, wistful and nostalgic atmosphere"},
     "Soft Anime": {"prefix": "High-quality digital anime illustration with soft watercolor aesthetic, refined sketchy lineart with varied line weights and delicate tapered strokes blending into soft coloring, elegant bishoujo anime proportions with large expressive eyes featuring complex layered irises and bright catchlights", "suffix": "desaturated pastel palette with gentle wet-on-wet transitions and subtle color bleeding, light cel-shading with warm peach and cool blue shadow accents, soft diffused ambient light with ethereal high-key glow, traditional watercolor paper grain texture, silky fine-line hair highlights, minimalist airy storybook atmosphere with floating particles"},
-    "Pixiv Rank": {"prefix": "Top-ranked Pixiv illustration quality, masterful digital painting with professional polish and appeal, refined anime art style with meticulous attention to detail", "suffix": "vibrant saturated colors with expert light-shadow interplay, intricate hair rendering with flowing strands, jewel-like eyes with multiple reflections, dramatic composition, trending on Pixiv daily ranking, highly detailed"},
+    "Pixiv Rank": {"prefix": "fine delicate line art with varied line weight, pristine clean edges, precise and sharp outlines, high-fidelity detailing on hair strands with flowing individual strands, jewel-like eyes with multiple reflections and layered iris detail, refined anime art style with vibrant saturated colors, expert light-shadow interplay with dramatic rim lighting, cinematic composition with strong focal point, atmospheric depth", "suffix": "Masterpiece, best quality, top-ranked Pixiv daily ranking illustration, like novelai quality, professional-level digital painting with exceptional polish. NOT bold lines, thick outlines, messy linework, flat coloring, dull colors, simple backgrounds, low detail"},
+    "Fine Line": {"prefix": "An incredibly intricate digital illustration in a high-quality Korean webtoon style (cell shading). Features fine, delicate line art (minimal line weight), pristine clean edges, high fidelity detailing on hair strands and facial features", "suffix": "Smooth color gradients and pristine lighting, like novelai quality. NOT bold lines, thick lines, messy lines, comic book style bold outlining"},
 }
 
 QUALITY_PROMPTS = {
@@ -986,23 +987,33 @@ async def proxy(request: Request, path: str):
         except Exception as e:
             c.busy = False
             error_msg = str(e)[:200] or f"{type(e).__name__}"
+            error_lower = error_msg.lower()
             c.total_errors += 1
             c.error_count += 1
             c.last_error = error_msg
             last_error = error_msg
             add_log("error", c.num, f"Request failed (attempt {attempt+1}): {error_msg[:100]}")
 
-            # 超时的容器冷却60秒，防止积压
-            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                c.cooldown_until = time.time() + 60
-                add_log("warn", c.num, "Container timed out, cooling down 60s")
-
-            if is_auth_error(error_msg):
+            # Cooldown based on error type — temporary, auto-recovers
+            if "timeout" in error_lower or "timed out" in error_lower:
+                cooldown = 60
+            elif "tls" in error_lower or "ssl" in error_lower or "curl: (35)" in error_lower:
+                cooldown = 60 * min(c.error_count, 5)  # escalate: 60s, 120s, ..., 300s
+            elif is_auth_error(error_msg):
+                # Cookie problem — needs_cookie, don't cooldown (won't fix itself)
+                c.needs_cookie = True
                 c.healthy = False
-                if c.error_count >= ERROR_THRESHOLD:
-                    c.enabled = False
-                    save_gateway_state()
-                    add_log("error", c.num, f"Auto-disabled after {c.error_count} errors")
+                add_log("error", c.num, "Cookie 过期，已标记需更新")
+                continue
+            elif is_image_req and any(kw in error_lower for kw in ("blocked", "safety", "policy", "restricted", "not available", "can't create")):
+                c.img_blocked = True
+                add_log("warn", c.num, "仅生文，需更新 Cookie")
+                continue
+            else:
+                cooldown = 30 * min(c.error_count, 4)  # 30s, 60s, 90s, 120s
+
+            c.cooldown_until = time.time() + cooldown
+            add_log("warn", c.num, f"冷却 {cooldown}s")
             continue
 
     raise HTTPException(status_code=502, detail=f"All containers failed. Last: {last_error}")
@@ -1375,10 +1386,16 @@ def suggest_model_for_slot(slot: str, model_ids: list[str]) -> str:
     if not model_ids:
         return ""
 
-    if slot in {"chat_fast", "prompt_optimize"}:
+    if slot == "chat_fast":
         return (
             _first_matching_model(model_ids, ("flash",), ("image-preview", "tts", "veo", "video"))
             or _first_matching_model(model_ids, ("flash",), ("veo", "video"))
+            or model_ids[0]
+        )
+    if slot == "prompt_optimize":
+        return (
+            _first_matching_model(model_ids, ("pro",), ("image-preview", "tts", "veo", "video"))
+            or _first_matching_model(model_ids, ("flash",), ("image-preview", "tts", "veo", "video"))
             or model_ids[0]
         )
     if slot == "chat_pro":
@@ -1870,6 +1887,12 @@ async def save_style(request: Request):
 async def list_styles():
     """List saved style templates."""
     return {"styles": _load_styles()}
+
+
+@app.get("/gateway/style-presets", dependencies=[Depends(verify_panel_auth)])
+async def get_style_presets():
+    """Return built-in style presets (prefix/suffix) for prompt optimization."""
+    return {"presets": {k: v for k, v in STYLE_PROMPTS.items()}}
 
 
 @app.delete("/gateway/styles/{style_id}", dependencies=[Depends(verify_panel_auth)])
