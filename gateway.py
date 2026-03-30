@@ -382,7 +382,10 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             tier_info = data.get("tier")
             if isinstance(tier_info, dict):
                 c.tier = tier_info.get("label", "")
-            if not c.healthy and not c.needs_cookie:
+            if c.needs_cookie:
+                c.needs_cookie = False
+                add_log("info", c.num, "认证已恢复")
+            if not c.healthy:
                 c.healthy = True
                 add_log("info", c.num, "恢复正常")
         else:
