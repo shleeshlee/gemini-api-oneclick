@@ -373,12 +373,16 @@ def resolve_model_for_chat(openai_model_name: str) -> tuple[Model | dict[str, An
                     trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
                     trace.update(describe_model(m))
                     return m, trace
-            for m in registry.values():
-                names = f"{m.display_name} {m.model_name}".lower()
-                if name_lower in names or any(kw in name_lower for kw in ("flash", "pro", "thinking") if kw in names):
-                    trace = {"requested_model": openai_model_name, "resolution": "registry-keyword"}
-                    trace.update(describe_model(m))
-                    return m, trace
+            # Keyword match: all family keywords in the request must appear in the model
+            req_keywords = {kw for kw in ("flash", "pro", "thinking") if kw in name_lower}
+            if req_keywords:
+                for m in registry.values():
+                    model_names = f"{m.display_name} {m.model_name}".lower()
+                    model_keywords = {kw for kw in ("flash", "pro", "thinking") if kw in model_names}
+                    if req_keywords == model_keywords:
+                        trace = {"requested_model": openai_model_name, "resolution": "registry-keyword"}
+                        trace.update(describe_model(m))
+                        return m, trace
 
     # Step 2: Fall back to vendored enum
     return _resolve_from_vendored(openai_model_name)
