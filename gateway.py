@@ -895,7 +895,6 @@ async def proxy(request: Request, path: str):
         req_session_id = body_json.get("session_id")
         if req_session_id and req_session_id in _session_routes:
             cnum, ts = _session_routes[req_session_id]
-            import time as _time
             if time.time() - ts < _SESSION_ROUTE_TTL and cnum in containers and containers[cnum].available:
                 session_affinity_container = containers[cnum]
                 _session_routes[req_session_id] = (cnum, time.time())  # refresh TTL
@@ -986,7 +985,7 @@ async def proxy(request: Request, path: str):
 
                 # Image requests: buffer response to capture session_id for affinity routing
                 if is_image_req:
-                        resp_body = await resp.aread()
+                    resp_body = await resp.aread()
                     c.busy = False
                     await resp.aclose()
                     await client.aclose()
