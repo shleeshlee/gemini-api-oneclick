@@ -28,7 +28,7 @@ import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -180,6 +180,10 @@ class Container:
 containers: dict[int, Container] = {}
 round_robin_index = 0
 logs: deque = deque(maxlen=MAX_LOG_ENTRIES)
+# Session affinity: session_id -> (container_num, timestamp)
+_session_routes: dict[str, tuple[int, float]] = {}
+_SESSION_ROUTE_TTL = 600
+_MAX_SESSION_ROUTES = 200
 account_names: dict[int, str] = {}  # num -> display name, persisted to state/accounts.json
 
 ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
@@ -884,6 +888,18 @@ async def proxy(request: Request, path: str):
 
     is_media_req = "images" in path or "videos" in path
     is_image_req = is_media_req  # reuse for img_blocked filtering
+
+    # Session affinity: route session_id requests to the container that created them
+    session_affinity_container = None
+    if body_json and "images" in path:
+        req_session_id = body_json.get("session_id")
+        if req_session_id and req_session_id in _session_routes:
+            cnum, ts = _session_routes[req_session_id]
+            import time as _time
+            if time.time() - ts < _SESSION_ROUTE_TTL and cnum in containers and containers[cnum].available:
+                session_affinity_container = containers[cnum]
+                _session_routes[req_session_id] = (cnum, time.time())  # refresh TTL
+
     if body_json and "images" in path:
         body_json, body, headers = _build_image_prompt(body_json, headers)
     elif body_json and "videos" in path:
@@ -914,7 +930,10 @@ async def proxy(request: Request, path: str):
 
     last_error = ""
     for attempt in range(retries):
-        c = get_next_available(target_group, is_image=is_image_req)
+        if attempt == 0 and session_affinity_container:
+            c = session_affinity_container
+        else:
+            c = get_next_available(target_group, is_image=is_image_req)
         if not c:
             break
 
@@ -964,6 +983,33 @@ async def proxy(request: Request, path: str):
                 if trace_headers:
                     record_model_truth(c.num, f"/v1/{path}", target_group, resp.headers)
                     trace_headers["Access-Control-Expose-Headers"] = ", ".join(TRACE_HEADER_NAMES)
+
+                # Image requests: buffer response to capture session_id for affinity routing
+                if is_image_req:
+                        resp_body = await resp.aread()
+                    c.busy = False
+                    await resp.aclose()
+                    await client.aclose()
+                    # Record session_id -> container mapping
+                    try:
+                        resp_json = json.loads(resp_body)
+                        sid = resp_json.get("session_id")
+                        if sid:
+                            _session_routes[sid] = (c.num, time.time())
+                            # Cleanup old entries
+                            if len(_session_routes) > _MAX_SESSION_ROUTES:
+                                expired = [k for k, (_, ts) in _session_routes.items()
+                                           if time.time() - ts > _SESSION_ROUTE_TTL]
+                                for k in expired:
+                                    del _session_routes[k]
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+                    return Response(
+                        content=resp_body,
+                        status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"),
+                        headers=trace_headers,
+                    )
 
                 async def stream_generator():
                     try:
