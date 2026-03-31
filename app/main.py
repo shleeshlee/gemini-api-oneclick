@@ -52,7 +52,7 @@ from gemini_webapi.types.video import GeneratedVideo
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 # gemini_webapi's RotateCookies sends 401 and invalidates all cookies.
 # This monkey-patch disables it regardless of init() parameters or library defaults.
-# See: https://github.com/shleeshlee/gemini-api-oneclick/issues/XX
+# See: gemini_webapi auto_refresh breaks multi-cookie setups
 async def _noop_auto_refresh(self, *a, **kw): pass
 GeminiClient.start_auto_refresh = _noop_auto_refresh
 
@@ -1090,6 +1090,9 @@ async def create_image(
                 "raw_capture": tracer.get_snapshot() if tracer else None,
             },
         )
+        # Clean up orphaned session if generation failed after session was created
+        if session_id and session_id in _edit_sessions and not request.session_id:
+            del _edit_sessions[session_id]
         _report_error(e)
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
     finally:

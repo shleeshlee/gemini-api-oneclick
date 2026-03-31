@@ -17,7 +17,7 @@ import json
 import os
 import re
 import time
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -890,14 +890,20 @@ async def proxy(request: Request, path: str):
     is_image_req = is_media_req  # reuse for img_blocked filtering
 
     # Session affinity: route session_id requests to the container that created them
+    # Lazy cleanup: purge expired session routes every request (cheap dict scan)
+    now = time.time()
+    expired_sids = [k for k, (_, ts) in _session_routes.items() if now - ts > _SESSION_ROUTE_TTL]
+    for k in expired_sids:
+        del _session_routes[k]
+
     session_affinity_container = None
     if body_json and "images" in path:
         req_session_id = body_json.get("session_id")
         if req_session_id and req_session_id in _session_routes:
             cnum, ts = _session_routes[req_session_id]
-            if time.time() - ts < _SESSION_ROUTE_TTL and cnum in containers and containers[cnum].available:
+            if cnum in containers and containers[cnum].available:
                 session_affinity_container = containers[cnum]
-                _session_routes[req_session_id] = (cnum, time.time())  # refresh TTL
+                _session_routes[req_session_id] = (cnum, now)
 
     if body_json and "images" in path:
         body_json, body, headers = _build_image_prompt(body_json, headers)
@@ -989,18 +995,12 @@ async def proxy(request: Request, path: str):
                     c.busy = False
                     await resp.aclose()
                     await client.aclose()
-                    # Record session_id -> container mapping
+                    # Record session_id -> container for affinity routing
                     try:
                         resp_json = json.loads(resp_body)
                         sid = resp_json.get("session_id")
                         if sid:
                             _session_routes[sid] = (c.num, time.time())
-                            # Cleanup old entries
-                            if len(_session_routes) > _MAX_SESSION_ROUTES:
-                                expired = [k for k, (_, ts) in _session_routes.items()
-                                           if time.time() - ts > _SESSION_ROUTE_TTL]
-                                for k in expired:
-                                    del _session_routes[k]
                     except (json.JSONDecodeError, AttributeError):
                         pass
                     return Response(
