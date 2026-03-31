@@ -82,7 +82,7 @@ RUNTIME_MODELS_EXCLUDE = {
     "gemini-advanced",
     "gemini-apps-while-signed-out",
 }
-IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "1024").strip() or "1024"
+IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "0").strip() or "0"  # 0 = original size, no downscale
 
 # TLS failure threshold before requesting restart
 _TLS_RESTART_THRESHOLD = 3
@@ -634,7 +634,7 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
         req_cookies = cookies
 
         if isinstance(image, GeneratedImage):
-            # 1024 keeps the studio responsive while remaining sharper than the preview.
+            # s0 = original resolution (no downscale). Set IMAGE_DOWNLOAD_SIZE env to limit.
             url = url + f"=s{IMAGE_DOWNLOAD_SIZE}"
             # Convert curl_cffi Cookies to dict for httpx compatibility
             raw_cookies = image.cookies
