@@ -330,6 +330,9 @@ body::before {
 .img-action-btn.dl:hover { background: #fff; }
 .img-action-btn.del { background: rgba(255,123,123,0.85); color: #fff; }
 .img-action-btn.del:hover { background: var(--danger); }
+.img-action-btn.pro { background: rgba(160,120,220,0.85); color: #fff; }
+.img-action-btn.pro:hover { background: rgba(140,90,210,1); }
+.img-action-btn.pro:disabled { opacity: 0.6; cursor: wait; }
 
 .section-toggle {
   cursor: pointer; user-select: none;
@@ -1791,6 +1794,7 @@ async function doImgGen() {
     const sec = ((Date.now() - start) / 1000).toFixed(1);
 
     if (data.data && data.data.length > 0 && data.data[0].b64_json) {
+      lastGenSessionId = data.session_id || null;
       tempImages = data.data.map((d, i) => ({
         b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: imgSelectedStyle, size, quality, channel: model, index: i
       }));
@@ -1834,16 +1838,66 @@ function renderTempGrid() {
   const grid = document.getElementById('imgTempGrid');
   const cols = tempImages.length >= 4 ? 2 : Math.max(1, tempImages.length);
   grid.className = `img-grid cols-${cols}`;
+  const proBtn = lastGenSessionId
+    ? `<button class="img-action-btn pro" onclick="event.stopPropagation();doProRedo()" title="用 Nano Banana Pro 精修">✨ Pro</button>`
+    : '';
   grid.innerHTML = tempImages.map((img, i) => {
     const src = 'data:image/png;base64,' + img.b64;
     return `<div class="img-card">
       <img src="${src}" onclick="openImageFull(this.src)" title="点击查看大图">
       <div class="img-card-actions">
+        ${i === 0 ? proBtn : ''}
         <button class="img-action-btn save" onclick="event.stopPropagation();saveTempImage(${i})">💾 保存</button>
         <a class="img-action-btn dl" download="gemini-${Date.now()}-${i+1}.png" href="${src}" onclick="event.stopPropagation()">⬇ 下载</a>
       </div>
     </div>`;
   }).join('');
+}
+
+async function doProRedo() {
+  if (!lastGenSessionId) { toast('无可精修的会话', 'err'); return; }
+  const btn = document.querySelector('.img-action-btn.pro');
+  if (btn) { btn.disabled = true; btn.innerHTML = '✨ 精修中...'; }
+  const info = document.getElementById('imgTempInfo');
+  const origInfo = info ? info.textContent : '';
+  if (info) info.textContent = '🔮 Pro 精修中，预计 30-120 秒...';
+  const start = Date.now();
+  try {
+    const lastImg = tempImages[0];
+    const body = {
+      prompt: lastImg ? lastImg.final_prompt || lastImg.prompt : '',
+      session_id: lastGenSessionId,
+      use_pro: true,
+      model: lastImg ? lastImg.channel : 'gemini-3.0-flash',
+    };
+    const resp = await fetch('/v1/images/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
+    if (data.data && data.data.length > 0 && data.data[0].b64_json) {
+      const lastImg0 = tempImages[0] || {};
+      tempImages = data.data.map((d, i) => ({
+        b64: d.b64_json, prompt: lastImg0.prompt || '', final_prompt: data.final_prompt || lastImg0.final_prompt || '',
+        style: lastImg0.style, size: lastImg0.size, quality: 'pro', channel: lastImg0.channel, index: i
+      }));
+      if (data.session_id) lastGenSessionId = data.session_id;
+      else lastGenSessionId = null; // Pro done, no further redo
+      if (info) info.textContent = `${sec}s · Pro 精修 · ${tempImages.length} 张`;
+      renderTempGrid();
+    } else {
+      const errMsg = data.detail || data.error?.message || 'Pro 精修失败';
+      toast(errMsg, 'err');
+      if (info) info.textContent = origInfo;
+      if (btn) { btn.disabled = false; btn.innerHTML = '✨ Pro'; }
+    }
+  } catch(e) {
+    toast('Pro 精修请求失败: ' + e.message, 'err');
+    if (info) info.textContent = origInfo;
+    if (btn) { btn.disabled = false; btn.innerHTML = '✨ Pro'; }
+  }
 }
 
 async function saveTempImage(index) {
@@ -1874,6 +1928,7 @@ function downloadAllTemp() {
 let uploadedImageB64 = null;
 let uploadedMediaType = 'image'; // 'image' or 'video'
 let editSessionId = null;
+let lastGenSessionId = null; // session_id from last generation (for Pro redo)
 let activeAbortController = null;
 
 function showCancelBtn() { document.getElementById('imgCancelBtn').style.display = ''; }

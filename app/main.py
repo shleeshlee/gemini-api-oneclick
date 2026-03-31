@@ -949,7 +949,7 @@ async def create_image(
         if session_id and session_id in _edit_sessions:
             chat, _ = _edit_sessions[session_id]
             _edit_sessions[session_id] = (chat, time.time())  # refresh TTL
-            logger.info(f"Continuing edit session {session_id}, cid={chat.cid}")
+            logger.info(f"Continuing edit session {session_id}, cid={chat.cid}, use_pro={request.use_pro}")
             gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
 
         else:
@@ -982,22 +982,25 @@ async def create_image(
                 logger.info(f"New edit session {session_id} created, cid={chat.cid}")
 
             else:
-                # Pure text-to-image (no session needed)
-                gemini_response = await client.generate_content(prompt, tracer=tracer, use_pro=request.use_pro, **kwargs)
+                # Pure text-to-image: use ChatSession so Pro redo can continue in same conversation
+                chat = client.start_chat()
+                if model:
+                    chat.model = model
+                gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
+                session_id = str(uuid.uuid4())[:12]
+                _edit_sessions[session_id] = (chat, time.time())
+                logger.info(f"New generation session {session_id} created, cid={chat.cid}")
 
         # Log what we got back
         logger.info(f"Response text: '{gemini_response.text[:200] if gemini_response.text else 'None'}'")
         logger.info(f"Response images: {gemini_response.images}")
 
         images = gemini_response.images
-        if not images and not chat:
-            # Retry only for pure text-to-image
+        if not images and not request.image and not request.session_id:
+            # Retry only for pure text-to-image (not edit or Pro redo)
             logger.info("No images with first prompt, trying alternate format...")
             tracer = RawCaptureTracer()  # fresh tracer for retry
-            retry_kwargs = {}
-            if model:
-                retry_kwargs["model"] = model
-            gemini_response = await client.generate_content(f"Create a picture: {request.prompt}", tracer=tracer, use_pro=request.use_pro, **retry_kwargs)
+            gemini_response = await chat.send_message(f"Create a picture: {request.prompt}", tracer=tracer)
             images = gemini_response.images
 
         if not images:
