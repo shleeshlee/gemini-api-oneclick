@@ -607,11 +607,11 @@ async def health_loop():
     await asyncio.sleep(5)  # initial delay
     async with httpx.AsyncClient() as client:
         while True:
-            tasks = [check_health(c, client) for c in containers.values()]
+            tasks = [check_health(c, client) for c in containers.values() if c.enabled]
             await asyncio.gather(*tasks, return_exceptions=True)
 
             available = sum(1 for c in containers.values() if c.available)
-            total = len(containers)
+            total = sum(1 for c in containers.values() if c.enabled)
             # Only log when availability changes
             if available != _last_health_available:
                 add_log("info", None, f"Health check: {available}/{total} available")
@@ -1143,10 +1143,10 @@ async def restart_container(num: int):
 async def refresh_health():
     """Trigger immediate health check."""
     async with httpx.AsyncClient() as client:
-        tasks = [check_health(c, client) for c in containers.values()]
+        tasks = [check_health(c, client) for c in containers.values() if c.enabled]
         await asyncio.gather(*tasks, return_exceptions=True)
     available = sum(1 for c in containers.values() if c.available)
-    return {"ok": True, "available": available, "total": len(containers)}
+    return {"ok": True, "available": available, "total": sum(1 for c in containers.values() if c.enabled)}
 
 
 @app.post("/gateway/group/{num}", dependencies=[Depends(verify_panel_auth)])
