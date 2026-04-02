@@ -420,6 +420,9 @@ async def check_health(c: Container, client: httpx.AsyncClient):
                 if not c.img_blocked:
                     c.img_blocked = True
                     add_log("warn", c.num, "仅生文，需更新 Cookie")
+                if c.needs_cookie:
+                    c.needs_cookie = False
+                    c.healthy = True
             else:
                 # No error or transient error → clear blocked states
                 if c.needs_cookie:
@@ -1044,15 +1047,15 @@ async def proxy(request: Request, path: str):
                 cooldown = 60
             elif "tls" in error_lower or "ssl" in error_lower or "curl: (35)" in error_lower:
                 cooldown = 60 * min(c.error_count, 5)  # escalate: 60s, 120s, ..., 300s
+            elif is_image_req and any(kw in error_lower for kw in ("blocked", "safety", "policy", "restricted", "not available", "can't create")):
+                c.img_blocked = True
+                add_log("warn", c.num, "仅生文，需更新 Cookie")
+                continue
             elif is_auth_error(error_msg):
                 # Cookie problem — needs_cookie, don't cooldown (won't fix itself)
                 c.needs_cookie = True
                 c.healthy = False
                 add_log("error", c.num, "Cookie 过期，已标记需更新")
-                continue
-            elif is_image_req and any(kw in error_lower for kw in ("blocked", "safety", "policy", "restricted", "not available", "can't create")):
-                c.img_blocked = True
-                add_log("warn", c.num, "仅生文，需更新 Cookie")
                 continue
             else:
                 cooldown = 30 * min(c.error_count, 4)  # 30s, 60s, 90s, 120s
