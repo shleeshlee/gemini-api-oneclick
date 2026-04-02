@@ -446,8 +446,8 @@ async def check_health(c: Container, client: httpx.AsyncClient):
         if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
             c.healthy = False
             add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
-        # Auto-remove if container no longer exists
-        if c.health_fail_count >= HEALTH_FAIL_TOLERANCE * 3:
+        # Auto-remove if container no longer exists (check once at threshold)
+        if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
             if not await _container_exists(c.num):
                 await _remove_container(c.num)
                 add_log("info", c.num, "容器已不存在，自动移除")
