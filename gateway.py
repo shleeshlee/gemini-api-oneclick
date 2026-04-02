@@ -446,6 +446,36 @@ async def check_health(c: Container, client: httpx.AsyncClient):
         if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
             c.healthy = False
             add_log("warn", c.num, f"Health check error: {str(e)[:80]}")
+        # Auto-remove if container no longer exists
+        if c.health_fail_count >= HEALTH_FAIL_TOLERANCE * 3:
+            if not await _container_exists(c.num):
+                await _remove_container(c.num)
+                add_log("info", c.num, "容器已不存在，自动移除")
+
+
+async def _container_exists(num: int) -> bool:
+    """Check if docker container actually exists."""
+    cname = f"gemini_api_account_{num}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "inspect", cname,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=5)
+        return proc.returncode == 0
+    except Exception:
+        return True  # assume exists if we can't check
+
+
+async def _remove_container(num: int):
+    """Remove container from gateway: delete env file and drop from memory."""
+    env_file = ENVS_DIR / f"account{num}.env"
+    if env_file.exists():
+        env_file.unlink()
+    containers.pop(num, None)
+    container_groups.pop(num, None)
+    save_gateway_state()
 
 
 async def _do_restart(c: Container):
@@ -1112,6 +1142,27 @@ async def disable_container(num: int):
     save_gateway_state()
     add_log("info", num, "Manually disabled")
     return {"ok": True, "message": f"Container {num} disabled"}
+
+
+@app.delete("/gateway/container/{num}", dependencies=[Depends(verify_panel_auth)])
+async def delete_container(num: int):
+    """Stop docker container, remove env file, drop from gateway."""
+    if num not in containers:
+        raise HTTPException(status_code=404, detail=f"Container {num} not found")
+    cname = f"gemini_api_account_{num}"
+    # Stop and remove docker container
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "rm", "-f", cname,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=15)
+    except Exception:
+        pass  # container may already be gone
+    await _remove_container(num)
+    add_log("info", num, "容器已删除")
+    return {"ok": True, "message": f"Container {num} deleted"}
 
 
 @app.post("/gateway/name/{num}", dependencies=[Depends(verify_panel_auth)])

@@ -1226,7 +1226,7 @@ function renderGrid() {
       if (gw.enabled) {
         actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
-        actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button>`;
+        actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn enable" onclick="event.stopPropagation();toggleContainer(${num}, true)">启用</button><button class="card-btn disable" onclick="event.stopPropagation();deleteContainer(${num})" style="margin-left:4px">删除</button>`;
       }
     }
 
@@ -1288,6 +1288,17 @@ async function toggleContainer(num, enable) {
     await loadAll();
   } catch(e) {
     toast('操作失败', 'err');
+  }
+}
+
+async function deleteContainer(num) {
+  if (!confirm(`确认删除容器 #${num}？将停止容器并移除配置，不可恢复。`)) return;
+  try {
+    await fetch(`/gateway/container/${num}`, { method: 'DELETE', headers: authHeaders() });
+    toast(`#${num} 已删除`, 'ok');
+    await loadAll();
+  } catch(e) {
+    toast('删除失败', 'err');
   }
 }
 
