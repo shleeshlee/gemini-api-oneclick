@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 set_log_level("INFO")
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-ENVS_DIR = ROOT_DIR / "envs"
+ENVS_DIR = Path(os.environ.get("ENVS_DIR", "")) if os.environ.get("ENVS_DIR") else ROOT_DIR / "envs"
 PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
 API_KEY = os.environ.get("API_KEY", "")
 IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "0").strip() or "0"
