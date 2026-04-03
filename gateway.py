@@ -57,6 +57,8 @@ GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT") or _dotenv.get("GATEWAY_PORT")
 BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 API_KEY = _dotenv.get("API_KEY", "")
 COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
+WORKER_MODE = _dotenv.get("WORKER_MODE", "").lower() in ("1", "true", "yes")
+WORKER_URL = _dotenv.get("WORKER_URL", "http://127.0.0.1:7860")
 
 def _safe_compare(a: str, b: str) -> bool:
     """Timing-safe string comparison."""
@@ -133,7 +135,7 @@ class Container:
     def __init__(self, num: int, port: int):
         self.num = num
         self.port = port
-        self.url = f"http://127.0.0.1:{port}"
+        self.url = f"{WORKER_URL}/slot/{num}" if WORKER_MODE else f"http://127.0.0.1:{port}"
         self.healthy = False
         self.enabled = True
         self.error_count = 0
@@ -454,7 +456,14 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
 
 async def _container_exists(num: int) -> bool:
-    """Check if docker container actually exists."""
+    """Check if docker container or worker slot actually exists."""
+    if WORKER_MODE:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{WORKER_URL}/slot/{num}/health", timeout=3)
+                return resp.status_code != 404
+        except Exception:
+            return True  # assume exists if worker unreachable
     cname = f"gemini_api_account_{num}"
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -479,7 +488,22 @@ async def _remove_container(num: int):
 
 
 async def _do_restart(c: Container):
-    """Execute docker restart for a container."""
+    """Execute docker restart (container mode) or slot reload (worker mode)."""
+    if WORKER_MODE:
+        add_log("warn", c.num, "重新加载 Slot")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(f"{WORKER_URL}/worker/reload-slot/{c.num}", timeout=30)
+                if resp.status_code == 200:
+                    c.health_fail_count = 0
+                    c.healthy = False
+                    add_log("info", c.num, "Slot 已重载，等待恢复")
+                else:
+                    add_log("error", c.num, f"Slot 重载失败: HTTP {resp.status_code}")
+        except Exception as e:
+            add_log("error", c.num, f"Slot 重载失败: {str(e)[:80]}")
+        return
+
     cname = f"gemini_api_account_{c.num}"
     add_log("warn", c.num, "自动重启容器")
     try:
@@ -1146,22 +1170,30 @@ async def disable_container(num: int):
 
 @app.delete("/gateway/container/{num}", dependencies=[Depends(verify_panel_auth)])
 async def delete_container(num: int):
-    """Stop docker container, remove env file, drop from gateway."""
+    """Stop docker container / remove worker slot, delete env, drop from gateway."""
     if num not in containers:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
-    cname = f"gemini_api_account_{num}"
-    # Stop and remove docker container
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "rm", "-f", cname,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        await asyncio.wait_for(proc.communicate(), timeout=15)
-    except Exception:
-        pass  # container may already be gone
+
+    if WORKER_MODE:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.delete(f"{WORKER_URL}/worker/slot/{num}", timeout=10)
+        except Exception:
+            pass  # slot may already be gone
+    else:
+        cname = f"gemini_api_account_{num}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-f", cname,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=15)
+        except Exception:
+            pass  # container may already be gone
+
     await _remove_container(num)
-    add_log("info", num, "容器已删除")
+    add_log("info", num, "已删除")
     return {"ok": True, "message": f"Container {num} deleted"}
 
 
@@ -1340,29 +1372,44 @@ async def deploy_cookie(num: int, request: Request):
         f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
         encoding="utf-8",
     )
-    add_log("info", num, "Cookie 已更新，正在重建容器 ...")
-
-    # Recreate container via docker compose
-    compose_file = ROOT_DIR / "docker-compose.accounts.yml"
-    service_name = f"gemini-api-{num}"
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "compose", "-f", str(compose_file),
-            "up", "-d", "--force-recreate", service_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(ROOT_DIR),
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        if proc.returncode != 0:
-            err = stderr.decode(errors="replace")[:200]
-            add_log("error", num, f"容器重建失败: {err}")
-            raise HTTPException(status_code=500, detail=f"容器重建失败: {err}")
-    except asyncio.TimeoutError:
-        add_log("error", num, "容器重建超时(60s)")
-        raise HTTPException(status_code=504, detail="容器重建超时")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="docker compose 命令未找到")
+    if WORKER_MODE:
+        add_log("info", num, "Cookie 已更新，正在重载 Slot ...")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{WORKER_URL}/worker/deploy-slot/{num}",
+                    json={"psid": psid, "psidts": psidts},
+                    timeout=30,
+                )
+                if resp.status_code != 200:
+                    detail = resp.text[:200]
+                    add_log("error", num, f"Slot 部署失败: {detail}")
+                    raise HTTPException(status_code=500, detail=f"Slot 部署失败: {detail}")
+        except httpx.HTTPError as e:
+            add_log("error", num, f"Slot 部署失败: {str(e)[:80]}")
+            raise HTTPException(status_code=500, detail=str(e)[:200])
+    else:
+        add_log("info", num, "Cookie 已更新，正在重建容器 ...")
+        compose_file = ROOT_DIR / "docker-compose.accounts.yml"
+        service_name = f"gemini-api-{num}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "compose", "-f", str(compose_file),
+                "up", "-d", "--force-recreate", service_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(ROOT_DIR),
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode != 0:
+                err = stderr.decode(errors="replace")[:200]
+                add_log("error", num, f"容器重建失败: {err}")
+                raise HTTPException(status_code=500, detail=f"容器重建失败: {err}")
+        except asyncio.TimeoutError:
+            add_log("error", num, "容器重建超时(60s)")
+            raise HTTPException(status_code=504, detail="容器重建超时")
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="docker compose 命令未找到")
 
     # Discover new container if it wasn't known, reset health state
     port = BASE_PORT + num - 1
@@ -1376,17 +1423,27 @@ async def deploy_cookie(num: int, request: Request):
     c.total_errors = 0
     c.healthy = False  # wait for health check to confirm
 
-    add_log("info", num, "容器已重建")
-    return {"ok": True, "message": f"容器 #{num} Cookie 已部署并重建"}
+    add_log("info", num, "已部署")
+    return {"ok": True, "message": f"#{num} Cookie 已部署"}
 
 
 # ── Container Logs & Test ──────────────────────────────────────────────
 
 @app.get("/gateway/container-log/{num}", dependencies=[Depends(verify_panel_auth)])
 async def container_log(num: int, tail: int = 60):
-    """Fetch recent docker logs from a specific container."""
+    """Fetch recent logs from a container or worker slot."""
     if num not in containers:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
+
+    if WORKER_MODE:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{WORKER_URL}/worker/slot-logs/{num}?tail={tail}", timeout=5)
+                data = resp.json()
+                return {"ok": True, "lines": data.get("lines", [])}
+        except Exception as e:
+            return {"ok": False, "lines": [f"Error: {str(e)[:200]}"]}
+
     cname = f"gemini_api_account_{num}"
     try:
         proc = await asyncio.create_subprocess_exec(
