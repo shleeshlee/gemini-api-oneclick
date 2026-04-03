@@ -280,7 +280,10 @@ class ResearchMixin:
         statuses: list[DeepResearchStatus] = []
         chat = self.start_chat(metadata=list(plan.metadata), cid=plan.cid)
 
+        _poll_count = 0
+        _CHAT_CHECK_INTERVAL = 30  # Check chat history every N polls
         while (time.time() - start) < timeout:
+            _poll_count += 1
             status = None
             if plan.research_id:
                 status = await self.get_deep_research_status(plan.research_id)
@@ -311,6 +314,25 @@ class ResearchMixin:
                     on_status(status)
                 if status.done:
                     break
+
+            # Periodically check chat history as fallback completion detection
+            if plan.cid and _poll_count % _CHAT_CHECK_INTERVAL == 0:
+                try:
+                    latest = await self.fetch_latest_chat_response(plan.cid)
+                    if latest and latest.text and len(latest.text) > 500:
+                        logger.info(
+                            f"Deep research [{plan.research_id}] found result via chat history "
+                            f"(text_len={len(latest.text)}) after {_poll_count} polls"
+                        )
+                        return DeepResearchResult(
+                            plan=plan,
+                            statuses=statuses,
+                            final_output=latest,
+                            done=True,
+                        )
+                except Exception as e:
+                    logger.debug(f"Periodic chat check failed: {e}")
+
             await asyncio.sleep(poll_interval)
 
         if not statuses or not statuses[-1].done:
