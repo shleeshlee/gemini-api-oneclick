@@ -917,21 +917,20 @@ def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
 @app.get("/v1/research", dependencies=[Depends(verify_auth)])
 @app.get("/v1/research/{task_id}", dependencies=[Depends(verify_auth)])
 async def proxy_research_query(request: Request, task_id: str = ""):
-    """Proxy research task queries to any healthy worker."""
+    """Proxy research task queries directly to the worker (not per-slot)."""
     headers = dict(request.headers)
     headers.pop("host", None)
     if API_KEY:
         headers["authorization"] = f"Bearer {API_KEY}"
 
-    path = f"v1/research/{task_id}" if task_id else "v1/research"
-    c = get_next_available()
-    if not c:
-        raise HTTPException(status_code=503, detail="没有可用容器")
+    # Research task queries go to worker root, not per-slot endpoint
+    worker_base = WORKER_URL if WORKER_MODE else "http://127.0.0.1:7860"
+    path = f"/v1/research/{task_id}" if task_id else "/v1/research"
 
     try:
         client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0))
         try:
-            resp = await client.get(f"{c.url}/{path}", headers=headers)
+            resp = await client.get(f"{worker_base}{path}", headers=headers)
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         finally:
             await client.aclose()
