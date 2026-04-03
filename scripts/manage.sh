@@ -66,11 +66,11 @@ list_account_nums() {
   done | sort -n
 }
 
-# 重启 Gateway（端口不变，只重新发现容器）
+# 重启 Gateway
 restart_gateway() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active gemini-gateway >/dev/null 2>&1; then
     sudo systemctl restart gemini-gateway
-    info "Gateway 已重启，自动发现新容器"
+    info "Gateway 已重启"
   fi
 }
 
@@ -84,7 +84,7 @@ do_add() {
 
   info "当前账号数: ${current}（最大编号: #${max}）"
   echo ""
-  read -rp "要添加几个容器？[1]: " add_count
+  read -rp "要添加几个账号？[1]: " add_count
   add_count="${add_count:-1}"
 
   if ! [[ "$add_count" =~ ^[0-9]+$ ]] || (( add_count < 1 || add_count > 50 )); then
@@ -95,17 +95,19 @@ do_add() {
   local start=$((max + 1))
   local end=$((max + add_count))
 
-  local has_conflict=false
-  for (( i=start; i<=end; i++ )); do
-    local port=$(( START_PORT + i - 1 ))
-    if port_in_use "$port"; then
-      warn "端口 $port（容器 #$i）已被占用！"
-      has_conflict=true
+  if ! is_worker_mode; then
+    local has_conflict=false
+    for (( i=start; i<=end; i++ )); do
+      local port=$(( START_PORT + i - 1 ))
+      if port_in_use "$port"; then
+        warn "端口 $port（容器 #$i）已被占用！"
+        has_conflict=true
+      fi
+    done
+    if $has_conflict; then
+      read -rp "检测到端口冲突，继续吗？[y/N]: " force
+      [[ "$force" =~ ^[Yy]$ ]] || { info "已取消"; return; }
     fi
-  done
-  if $has_conflict; then
-    read -rp "检测到端口冲突，继续吗？[y/N]: " force
-    [[ "$force" =~ ^[Yy]$ ]] || { info "已取消"; return; }
   fi
 
   info "创建 account${start}.env ~ account${end}.env ..."
@@ -148,26 +150,34 @@ EOF
 # ══════════════════════════════════════════════════════════════
 do_remove() {
   echo ""
-  info "当前容器列表:"
+  info "当前账号列表:"
   echo ""
   for n in $(list_account_nums); do
-    local port=$(( START_PORT + n - 1 ))
-    local status="${RED}离线${NC}"
-    if curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
-      status="${GREEN}正常${NC}"
+    if is_worker_mode; then
+      local status="${RED}离线${NC}"
+      if curl -fsS --max-time 2 "${WORKER_URL}/slot/${n}/health" 2>/dev/null | grep -q '"client_ready": true'; then
+        status="${GREEN}正常${NC}"
+      fi
+      echo -e "  #${n}  $status"
+    else
+      local port=$(( START_PORT + n - 1 ))
+      local status="${RED}离线${NC}"
+      if curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+        status="${GREEN}正常${NC}"
+      fi
+      echo -e "  #${n}  端口 ${port}  $status"
     fi
-    echo -e "  #${n}  端口 ${port}  $status"
   done
 
   echo ""
-  read -rp "要删除哪些容器？（逗号分隔，如 5,6,7）: " nums_input
+  read -rp "要删除哪些账号？（逗号分隔，如 5,6,7）: " nums_input
   [[ -z "$nums_input" ]] && { info "已取消"; return; }
 
   IFS=',' read -ra nums <<< "$nums_input"
 
   echo ""
   echo -e "  ${YELLOW}即将删除: ${nums[*]}${NC}"
-  echo -e "  对应的 env 文件和容器都会被移除"
+  echo -e "  对应的配置文件会被移除"
   echo ""
   read -rp "确认删除？输入 yes: " confirm
   [[ "$confirm" == "yes" ]] || { info "已取消"; return; }
@@ -272,8 +282,8 @@ do_status() {
 do_uninstall() {
   echo ""
   warn "即将执行:"
-  echo "  - 停止并删除所有 Gemini API 容器"
-  echo "  - 停止 Gateway 和 Cookie Manager 服务"
+  echo "  - 停止所有 Gemini API 服务"
+  echo "  - 停止 Gateway 服务"
   echo "  - 删除配置文件"
   echo ""
   echo -e "  ${YELLOW}注意: envs/ 目录会保留（包含你的 Cookie）${NC}"
