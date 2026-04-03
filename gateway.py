@@ -1005,9 +1005,10 @@ async def proxy(request: Request, path: str):
         c.busy = True
 
         try:
-            # 研究 660s（轮询最多600s），视频 330s（轮询最多300s），图片 180s，聊天 300s。
+            # 研究 POST 快速返回 task_id；研究 GET 也快速返回。
+            # 视频 330s（轮询最多300s），图片 180s，聊天 300s。
             if is_research_req:
-                read_timeout = 660.0
+                read_timeout = 60.0
             elif "videos" in path:
                 read_timeout = 330.0
             elif "images" in path:

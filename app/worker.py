@@ -948,7 +948,55 @@ class DeepResearchRequest(BaseModel):
     prompt: str
     model: Optional[str] = None
     poll_interval: float = 10.0
-    timeout: float = 600.0
+    timeout: float = 900.0
+
+
+# In-memory store for active/completed research tasks
+_research_tasks: Dict[str, dict] = {}
+
+
+async def _run_research_background(slot_num: int, client, prompt: str, poll_interval: float, timeout: float, task_id: str):
+    """Background coroutine that runs deep research and updates the task store."""
+    task = _research_tasks[task_id]
+    try:
+        def on_status(status):
+            entry = {
+                "state": status.state,
+                "title": status.title,
+                "notes": status.notes[:5] if status.notes else [],
+                "done": status.done,
+                "raw_state": status.raw_state,
+            }
+            task["statuses"].append(entry)
+            task["last_state"] = status.state
+            notes_preview = "; ".join(status.notes[:2]) if status.notes else ""
+            logger.info("Slot %d research [%s] status: %s notes=[%s]", slot_num, task_id[:8], status.state, notes_preview[:100])
+
+        result = await client.deep_research(
+            prompt=prompt,
+            poll_interval=poll_interval,
+            timeout=timeout,
+            on_status=on_status,
+        )
+
+        task["done"] = result.done
+        task["text"] = result.text
+        task["plan"] = {
+            "research_id": result.plan.research_id,
+            "title": result.plan.title,
+            "query": result.plan.query,
+            "steps": result.plan.steps,
+            "eta_text": result.plan.eta_text,
+        }
+        task["finished"] = True
+        task["finished_at"] = int(time.time())
+        logger.info("Slot %d research [%s] finished. done=%s text_len=%d", slot_num, task_id[:8], result.done, len(result.text))
+
+    except Exception as e:
+        task["finished"] = True
+        task["finished_at"] = int(time.time())
+        task["error"] = str(e)
+        logger.error("Slot %d research [%s] error: %s", slot_num, task_id[:8], e)
 
 
 @app.post("/slot/{num}/v1/research")
@@ -958,60 +1006,96 @@ async def slot_deep_research(
     response: Response,
     api_key: str = Depends(_verify_api_key),
 ):
-    """Run a full deep research cycle: plan -> start -> wait -> result."""
+    """Start a deep research task. Returns immediately with a task_id for polling."""
     slot = _get_slot(num)
     try:
         client = await _get_client(slot)
         logger.info("Slot %d deep research: '%s'", num, request.prompt[:200])
         slot_log(num, f"Research: {request.prompt[:60]}")
 
-        statuses_log = []
-
-        def on_status(status):
-            entry = {
-                "state": status.state,
-                "title": status.title,
-                "notes": status.notes[:5] if status.notes else [],
-                "done": status.done,
-                "raw_state": status.raw_state,
-            }
-            statuses_log.append(entry)
-            notes_preview = "; ".join(status.notes[:2]) if status.notes else ""
-            logger.info("Slot %d research status: %s notes=[%s]", num, status.state, notes_preview[:100])
-
-        result = await client.deep_research(
-            prompt=request.prompt,
-            poll_interval=request.poll_interval,
-            timeout=request.timeout,
-            on_status=on_status,
-        )
-
-        response_data = {
-            "created": int(time.time()),
-            "plan": {
-                "research_id": result.plan.research_id,
-                "title": result.plan.title,
-                "query": result.plan.query,
-                "steps": result.plan.steps,
-                "eta_text": result.plan.eta_text,
-            },
-            "done": result.done,
-            "text": result.text,
-            "statuses": statuses_log,
+        task_id = str(uuid.uuid4())
+        _research_tasks[task_id] = {
+            "task_id": task_id,
+            "slot": num,
+            "prompt": request.prompt[:200],
+            "created_at": int(time.time()),
+            "finished": False,
+            "finished_at": None,
+            "done": False,
+            "text": "",
+            "plan": None,
+            "statuses": [],
+            "last_state": "starting",
+            "error": None,
         }
 
-        return response_data
+        # Launch research in background
+        asyncio.create_task(
+            _run_research_background(num, client, request.prompt, request.poll_interval, request.timeout, task_id)
+        )
+
+        return {
+            "task_id": task_id,
+            "status": "started",
+            "message": "Deep research started. Poll GET /v1/research/{task_id} for progress.",
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Slot %d research error: %s", num, e, exc_info=True)
+        logger.error("Slot %d research start error: %s", num, e, exc_info=True)
         slot.report_error(e)
         if "not eligible" in str(e).lower():
             raise HTTPException(status_code=403, detail=f"Account not eligible for deep research: {str(e)}")
-        if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota', 'usage limit']):
-            raise HTTPException(status_code=429, detail=f"Research rate limited: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Deep research failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Deep research failed to start: {str(e)}")
+
+
+@app.get("/v1/research/{task_id}")
+async def get_research_status(
+    task_id: str,
+    api_key: str = Depends(_verify_api_key),
+):
+    """Poll a deep research task for progress and results."""
+    task = _research_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Research task {task_id} not found")
+
+    return {
+        "task_id": task["task_id"],
+        "slot": task["slot"],
+        "prompt": task["prompt"],
+        "created_at": task["created_at"],
+        "finished": task["finished"],
+        "finished_at": task["finished_at"],
+        "done": task["done"],
+        "last_state": task["last_state"],
+        "plan": task["plan"],
+        "statuses_count": len(task["statuses"]),
+        "statuses": task["statuses"][-5:],  # last 5 statuses
+        "text": task["text"],
+        "error": task["error"],
+    }
+
+
+@app.get("/v1/research")
+async def list_research_tasks(
+    api_key: str = Depends(_verify_api_key),
+):
+    """List all research tasks."""
+    tasks = []
+    for t in _research_tasks.values():
+        tasks.append({
+            "task_id": t["task_id"],
+            "slot": t["slot"],
+            "prompt": t["prompt"],
+            "created_at": t["created_at"],
+            "finished": t["finished"],
+            "done": t["done"],
+            "last_state": t["last_state"],
+            "text_length": len(t["text"]),
+            "error": t["error"],
+        })
+    return {"tasks": tasks}
 
 
 # ═══════════════════════════════════════════════════════════════════════
