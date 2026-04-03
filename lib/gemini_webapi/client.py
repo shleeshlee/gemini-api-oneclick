@@ -1397,6 +1397,13 @@ class GeminiClient(GemMixin, ResearchMixin):
             )
             if plan_data:
                 deep_research_plan = DeepResearchPlan(**plan_data)
+            else:
+                # Plan extraction failed but there might still be a research_id
+                # (e.g., in the confirmation response where "57" has a different structure)
+                from .utils.research import _extract_research_id
+                rid = _extract_research_id(candidate_data)
+                if rid:
+                    deep_research_plan = DeepResearchPlan(research_id=rid, response_text=text)
 
         if text_delta or thoughts_delta or web_images or generated_images or generated_videos or deep_research_plan:
             flags.has_candidates = True
