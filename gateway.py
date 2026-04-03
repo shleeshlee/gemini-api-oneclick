@@ -914,6 +914,31 @@ def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
     return body_json, new_body, headers
 
 
+@app.get("/v1/research", dependencies=[Depends(verify_auth)])
+@app.get("/v1/research/{task_id}", dependencies=[Depends(verify_auth)])
+async def proxy_research_query(request: Request, task_id: str = ""):
+    """Proxy research task queries to any healthy worker."""
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    if API_KEY:
+        headers["authorization"] = f"Bearer {API_KEY}"
+
+    path = f"v1/research/{task_id}" if task_id else "v1/research"
+    c = get_next_available()
+    if not c:
+        raise HTTPException(status_code=503, detail="没有可用容器")
+
+    try:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0))
+        try:
+            resp = await client.get(f"{c.url}/{path}", headers=headers)
+            return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        finally:
+            await client.aclose()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Research query failed: {str(e)}")
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
