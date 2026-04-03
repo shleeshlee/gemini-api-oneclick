@@ -943,6 +943,7 @@ async def proxy(request: Request, path: str):
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
 
+    is_research_req = "research" in path
     is_media_req = "images" in path or "videos" in path
     is_image_req = is_media_req  # reuse for img_blocked filtering
 
@@ -1004,8 +1005,10 @@ async def proxy(request: Request, path: str):
         c.busy = True
 
         try:
-            # 视频 330s（轮询最多300s），图片 180s（编辑首轮 + 下载 base64 更慢），聊天 300s。
-            if "videos" in path:
+            # 研究 660s（轮询最多600s），视频 330s（轮询最多300s），图片 180s，聊天 300s。
+            if is_research_req:
+                read_timeout = 660.0
+            elif "videos" in path:
                 read_timeout = 330.0
             elif "images" in path:
                 read_timeout = 180.0

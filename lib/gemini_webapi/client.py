@@ -16,7 +16,7 @@ from curl_cffi import CurlHttpVersion
 from curl_cffi.requests import AsyncSession, Cookies, Response
 from curl_cffi.requests.errors import RequestsError
 
-from .components import GemMixin
+from .components import GemMixin, ResearchMixin
 from .tracer import Tracer, sanitize_headers
 from .constants import (
     AccountStatus,
@@ -42,6 +42,7 @@ from .exceptions import (
 from .types import (
     AvailableModel,
     Candidate,
+    DeepResearchPlan,
     Gem,
     GeneratedImage,
     GeneratedVideo,
@@ -50,6 +51,7 @@ from .types import (
     WebImage,
 )
 from .utils import (
+    extract_deep_research_plan,
     extract_json_from_response,
     get_access_token,
     get_delta_by_fp_len,
@@ -82,6 +84,7 @@ class _StreamFlags:
     is_completed: bool = False
     is_final_chunk: bool = False
     detected_image_model: str | None = None  # "pro" or "standard" when detected
+    deep_research: bool = False
 
 
 def _raise_for_error_code(error_code: int, model_name: str) -> None:
@@ -282,7 +285,7 @@ def _extract_candidate_text(candidate_data: list[Any]) -> str:
     return re.sub(r"http://googleusercontent\.com/\w+/\d+\n*", "", text)
 
 
-class GeminiClient(GemMixin):
+class GeminiClient(GemMixin, ResearchMixin):
     """
     Async client interface for gemini.google.com using curl_cffi.
 
@@ -729,6 +732,7 @@ class GeminiClient(GemMixin):
         gem: Gem | str | None = None,
         chat: Optional["ChatSession"] = None,
         use_pro: bool = False,
+        deep_research: bool = False,
         tracer: Tracer | None = None,
         **kwargs,
     ) -> ModelOutput:
@@ -804,6 +808,7 @@ class GeminiClient(GemMixin):
                 chat=chat,
                 streaming_state=streaming_state,
                 use_pro=use_pro,
+                deep_research=deep_research,
                 tracer=tracer,
                 **kwargs,
             ):
@@ -972,6 +977,7 @@ class GeminiClient(GemMixin):
         chat: Optional["ChatSession"] = None,
         streaming_state: _StreamingState | None = None,
         use_pro: bool = False,
+        deep_research: bool = False,
         tracer: Tracer | None = None,
         **kwargs,
     ) -> AsyncGenerator[ModelOutput, None]:
@@ -1022,14 +1028,23 @@ class GeminiClient(GemMixin):
             if self.session_id:
                 params["f.sid"] = self.session_id
 
-            inner_req_list: list[Any] = [None] * 73  # Extend to support index 32
+            inner_req_list: list[Any] = [None] * 73  # Extend to support index 32+
             inner_req_list[0] = message_content
             inner_req_list[2] = chat.metadata if chat else ["", "", "", None, None, None, None, None, None, ""]
+            if deep_research:
+                import secrets
+                import uuid
+                inner_req_list[3] = "!" + secrets.token_urlsafe(2600)
+                inner_req_list[4] = uuid.uuid4().hex
             inner_req_list[7] = 1  # Enable Snapshot Streaming
             if gem_id:
                 inner_req_list[19] = gem_id
             if use_pro:
                 inner_req_list[32] = 1  # Enable pro regeneration
+            if deep_research:
+                inner_req_list[49] = 1
+                inner_req_list[54] = [[[[[1]]]]]
+                inner_req_list[55] = [[1]]
 
             request_data = {
                 "at": self.access_token,
@@ -1097,7 +1112,7 @@ class GeminiClient(GemMixin):
                 last_thoughts = streaming_state.last_thoughts
                 last_progress_time = time.time()  # reset per polling iteration to avoid false stall detection
                 streaming_state.last_progress_time = last_progress_time
-                flags = _StreamFlags()
+                flags = _StreamFlags(deep_research=deep_research)
                 _FIRST_CHUNK_TIMEOUT = 30  # seconds to wait for first chunk
 
                 # Wrap aiter_content with first-chunk timeout detection
@@ -1373,7 +1388,17 @@ class GeminiClient(GemMixin):
             thoughts_delta = ""
             new_full_thought = ""
 
-        if text_delta or thoughts_delta or web_images or generated_images or generated_videos:
+        # Extract deep research plan if in deep research mode
+        deep_research_plan = None
+        if flags.deep_research:
+            plan_data = extract_deep_research_plan(
+                candidate_data,
+                fallback_text=text,
+            )
+            if plan_data:
+                deep_research_plan = DeepResearchPlan(**plan_data)
+
+        if text_delta or thoughts_delta or web_images or generated_images or generated_videos or deep_research_plan:
             flags.has_candidates = True
 
         # Update state
@@ -1389,6 +1414,7 @@ class GeminiClient(GemMixin):
             web_images=web_images,
             generated_images=generated_images,
             generated_videos=generated_videos,
+            deep_research_plan=deep_research_plan,
         )
 
     def start_chat(self, **kwargs) -> "ChatSession":
@@ -1429,7 +1455,7 @@ class GeminiClient(GemMixin):
         )
 
     @running(retry=2)
-    async def _batch_execute(self, payloads: list[RPCData], **kwargs) -> Response:
+    async def _batch_execute(self, payloads: list[RPCData], close_on_error: bool = True, **kwargs) -> Response:
         """
         Execute a batch of requests to Gemini API.
 
@@ -1480,7 +1506,8 @@ class GeminiClient(GemMixin):
             raise
 
         if response.status_code != 200:
-            await self.close()
+            if close_on_error:
+                await self.close()
             raise APIError(f"Batch execution failed with status code {response.status_code}")
 
         if self.client:
@@ -1573,6 +1600,75 @@ class GeminiClient(GemMixin):
         logger.warning(f"Video generation polling timed out after {_VIDEO_POLL_MAX_ATTEMPTS * _VIDEO_POLL_INTERVAL} seconds")
         return []
 
+    async def fetch_latest_chat_response(self, cid: str) -> ModelOutput | None:
+        """
+        Fetch the latest model response from an existing chat by reading chat history.
+
+        Parameters
+        ----------
+        cid : str
+            Conversation ID
+
+        Returns
+        -------
+        ModelOutput | None
+            The latest model response, or None if not found.
+        """
+        try:
+            payload = json.dumps([cid, 10, None, 1, [1], [4], None, 1]).decode("utf-8")
+            response = await self._batch_execute(
+                [RPCData(rpcid=GRPC.READ_CHAT, payload=payload)],
+                close_on_error=False,
+            )
+
+            response_text = response.text
+            if not response_text:
+                return None
+
+            if response_text.startswith(")]}'"):
+                response_text = response_text[5:]
+
+            parsed_parts, _ = parse_response_by_frame(response_text)
+
+            for part in parsed_parts:
+                if get_nested_value(part, [1]) != GRPC.READ_CHAT:
+                    continue
+
+                inner_json_str = get_nested_value(part, [2])
+                if not inner_json_str:
+                    continue
+
+                try:
+                    part_json = json.loads(inner_json_str)
+                except json.JSONDecodeError:
+                    continue
+
+                candidates_data = get_nested_value(part_json, [0, 0, 3], [])
+                if not candidates_data:
+                    continue
+
+                output_candidates = []
+                for candidate_data in candidates_data:
+                    rcid = get_nested_value(candidate_data, [0])
+                    if not rcid:
+                        continue
+                    text = _extract_candidate_text(candidate_data)
+                    output_candidates.append(
+                        Candidate(rcid=rcid, text=text)
+                    )
+
+                if output_candidates:
+                    metadata_raw = get_nested_value(part_json, [0, 0, 0], [])
+                    return ModelOutput(
+                        metadata=metadata_raw if isinstance(metadata_raw, list) else [cid],
+                        candidates=output_candidates,
+                    )
+
+        except Exception as e:
+            logger.debug(f"fetch_latest_chat_response({cid!r}) failed: {type(e).__name__}: {e}")
+
+        return None
+
 
 class ChatSession:
     """
@@ -1659,6 +1755,7 @@ class ChatSession:
         self,
         prompt: str,
         files: list[str | Path] | None = None,
+        deep_research: bool = False,
         **kwargs,
     ) -> ModelOutput:
         """
@@ -1671,6 +1768,8 @@ class ChatSession:
             Prompt provided by user.
         files: `list[str | Path]`, optional
             List of file paths to be attached.
+        deep_research: `bool`, optional
+            If True, enable deep research mode.
         kwargs: `dict`, optional
             Additional arguments which will be passed to the post request.
             Refer to `curl_cffi.requests.AsyncSession.request` for more information.
@@ -1700,6 +1799,7 @@ class ChatSession:
             model=self.model,
             gem=self.gem,
             chat=self,
+            deep_research=deep_research,
             **kwargs,
         )
 

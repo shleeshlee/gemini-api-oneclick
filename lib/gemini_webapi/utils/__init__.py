@@ -13,6 +13,7 @@ from .parsing import (
     get_nested_value,
     parse_response_by_frame,
 )
+from .research import extract_deep_research_plan, extract_deep_research_status_payload
 from .rotate_1psidts import rotate_1psidts
 from .upload_file import parse_file_name, upload_file
 
@@ -31,5 +32,7 @@ __all__ = [
     "rotate_1psidts",
     "running",
     "set_log_level",
+    "extract_deep_research_plan",
+    "extract_deep_research_status_payload",
     "upload_file",
 ]

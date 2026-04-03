@@ -8,6 +8,7 @@
 #   POST /slot/{num}/v1/chat/completions
 #   POST /slot/{num}/v1/images/generations
 #   POST /slot/{num}/v1/videos/generations
+#   POST /slot/{num}/v1/research
 #
 # Management:
 #   POST /worker/reload-slot/{num}   — re-read env, reinit client
@@ -937,6 +938,78 @@ async def slot_video_generation(
                 os.unlink(tf)
             except Exception:
                 pass
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Deep Research endpoint — /slot/{num}/v1/research
+# ═══════════════════════════════════════════════════════════════════════
+
+class DeepResearchRequest(BaseModel):
+    prompt: str
+    model: Optional[str] = None
+    poll_interval: float = 10.0
+    timeout: float = 600.0
+
+
+@app.post("/slot/{num}/v1/research")
+async def slot_deep_research(
+    num: int,
+    request: DeepResearchRequest,
+    response: Response,
+    api_key: str = Depends(_verify_api_key),
+):
+    """Run a full deep research cycle: plan -> start -> wait -> result."""
+    slot = _get_slot(num)
+    try:
+        client = await _get_client(slot)
+        logger.info("Slot %d deep research: '%s'", num, request.prompt[:200])
+        slot_log(num, f"Research: {request.prompt[:60]}")
+
+        statuses_log = []
+
+        def on_status(status):
+            entry = {
+                "state": status.state,
+                "title": status.title,
+                "notes": status.notes[:3] if status.notes else [],
+                "done": status.done,
+            }
+            statuses_log.append(entry)
+            logger.info("Slot %d research status: %s", num, status.state)
+
+        result = await client.deep_research(
+            prompt=request.prompt,
+            poll_interval=request.poll_interval,
+            timeout=request.timeout,
+            on_status=on_status,
+        )
+
+        response_data = {
+            "created": int(time.time()),
+            "plan": {
+                "research_id": result.plan.research_id,
+                "title": result.plan.title,
+                "query": result.plan.query,
+                "steps": result.plan.steps,
+                "eta_text": result.plan.eta_text,
+            },
+            "done": result.done,
+            "text": result.text,
+            "statuses": statuses_log,
+        }
+
+        return response_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Slot %d research error: %s", num, e, exc_info=True)
+        slot.report_error(e)
+        if "not eligible" in str(e).lower():
+            raise HTTPException(status_code=403, detail=f"Account not eligible for deep research: {str(e)}")
+        if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota', 'usage limit']):
+            raise HTTPException(status_code=429, detail=f"Research rate limited: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Deep research failed: {str(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

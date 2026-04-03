@@ -6,6 +6,8 @@ from .gem import Gem, GemJar
 from .grpc import RPCData
 from .image import GeneratedImage, Image, WebImage
 from .modeloutput import ModelOutput
+from .research import DeepResearchPlan, DeepResearchStatus
+from .researchresult import DeepResearchResult
 from .video import GeneratedVideo
 
 __all__ = [
@@ -14,6 +16,9 @@ __all__ = [
     "ChatHistory",
     "ChatInfo",
     "ChatTurn",
+    "DeepResearchPlan",
+    "DeepResearchResult",
+    "DeepResearchStatus",
     "Gem",
     "GemJar",
     "GeneratedImage",

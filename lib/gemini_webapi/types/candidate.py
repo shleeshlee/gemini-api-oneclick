@@ -3,6 +3,7 @@ import html
 from pydantic import BaseModel, Field, field_validator
 
 from .image import GeneratedImage, Image, WebImage
+from .research import DeepResearchPlan
 from .video import GeneratedVideo
 
 
@@ -34,6 +35,7 @@ class Candidate(BaseModel):
     web_images: list[WebImage] = Field(default_factory=list)
     generated_images: list[GeneratedImage] = Field(default_factory=list)
     generated_videos: list[GeneratedVideo] = Field(default_factory=list)
+    deep_research_plan: DeepResearchPlan | None = None
 
     def __str__(self):
         return self.text
