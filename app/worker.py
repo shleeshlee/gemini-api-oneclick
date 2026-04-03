@@ -971,11 +971,13 @@ async def slot_deep_research(
             entry = {
                 "state": status.state,
                 "title": status.title,
-                "notes": status.notes[:3] if status.notes else [],
+                "notes": status.notes[:5] if status.notes else [],
                 "done": status.done,
+                "raw_state": status.raw_state,
             }
             statuses_log.append(entry)
-            logger.info("Slot %d research status: %s", num, status.state)
+            notes_preview = "; ".join(status.notes[:2]) if status.notes else ""
+            logger.info("Slot %d research status: %s notes=[%s]", num, status.state, notes_preview[:100])
 
         result = await client.deep_research(
             prompt=request.prompt,

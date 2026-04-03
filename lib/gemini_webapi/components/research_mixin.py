@@ -255,7 +255,13 @@ class ResearchMixin:
                 continue
             parsed = extract_deep_research_status_payload(part_body)
             if parsed:
-                return DeepResearchStatus(**parsed)
+                status = DeepResearchStatus(**parsed)
+                if status.done:
+                    logger.info(f"Deep research [{research_id}] completed!")
+                return status
+            else:
+                # Log raw for debugging if parse failed
+                logger.debug(f"Status parse returned None for research_id={research_id}")
         return None
 
     async def wait_for_deep_research(
