@@ -207,6 +207,12 @@ class ResearchMixin:
                 "Gemini did not return a deep research plan. " f"Preview: {preview!r}"
             )
 
+        logger.info(
+            f"Deep research plan: research_id={plan.research_id!r}, "
+            f"title={plan.title!r}, steps={len(plan.steps)}, "
+            f"confirm_prompt={plan.confirm_prompt!r}, "
+            f"raw_state={plan.raw_state}"
+        )
         plan.metadata = list(chat.metadata)
         plan.cid = chat.cid or plan.cid
         if not plan.confirm_prompt:
