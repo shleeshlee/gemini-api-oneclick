@@ -238,12 +238,35 @@ if [[ -f .env ]]; then
         echo "COOKIE_MANAGER_PORT=${GATEWAY_PORT}" >> .env
       fi
 
-      info "重新生成 compose ..."
-      python3 scripts/generate_compose.py
+      EXISTING_WORKER_MODE=$(grep '^WORKER_MODE=' .env 2>/dev/null | cut -d= -f2 || echo "")
 
-      info "重建并重启容器 ..."
       docker build -t gemini-api-oneclick:local .
-      docker compose -f docker-compose.accounts.yml up -d
+
+      if [[ "$EXISTING_WORKER_MODE" == "true" ]]; then
+        info "重启 Worker 容器 ..."
+        docker rm -f gemini_worker 2>/dev/null || true
+        docker run -d \
+          --name gemini_worker \
+          --network host \
+          --restart unless-stopped \
+          -v "${ROOT_DIR}/envs:/app/envs" \
+          -v "${ROOT_DIR}/app/slot.py:/app/slot.py" \
+          -v "${ROOT_DIR}/app/worker.py:/app/worker.py" \
+          -v "${ROOT_DIR}/app/parsers:/app/parsers" \
+          -v "${ROOT_DIR}/app/raw_capture_tracer.py:/app/raw_capture_tracer.py" \
+          -v "${ROOT_DIR}/app/worker_events.py:/app/worker_events.py" \
+          -v "${ROOT_DIR}/lib/gemini_webapi:/app/gemini_webapi" \
+          -e ENVS_DIR=/app/envs \
+          -e HTTP_PROXY="${HTTP_PROXY}" \
+          -e HTTPS_PROXY="${HTTPS_PROXY}" \
+          gemini-api-oneclick:local \
+          uv run uvicorn worker:app --host 0.0.0.0 --port 7860
+      else
+        info "重新生成 compose ..."
+        python3 scripts/generate_compose.py
+        info "重建并重启容器 ..."
+        docker compose -f docker-compose.accounts.yml up -d
+      fi
 
       # 安装 Gateway 依赖
       if ! python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null; then
@@ -262,7 +285,6 @@ if [[ -f .env ]]; then
         PYTHON_BIN=$(command -v python3)
         SERVICE_FILE="/etc/systemd/system/gemini-gateway.service"
 
-        # 始终写入最新的 service 文件（更新配置路径等）
         $SUDO tee "$SERVICE_FILE" > /dev/null <<GWEOF
 [Unit]
 Description=Gemini API Gateway — 智能轮询网关
@@ -285,9 +307,10 @@ GWEOF
         $SUDO systemctl restart gemini-gateway
         info "Gateway 已安装/更新为系统服务（端口 ${GATEWAY_PORT}）"
 
-        # 容器分批启动服务（更新模式也确保最新）
-        CONTAINERS_SERVICE="/etc/systemd/system/gemini-containers.service"
-        $SUDO tee "$CONTAINERS_SERVICE" > /dev/null <<CSEOF
+        # 容器分批启动服务（仅多容器模式）
+        if [[ "$EXISTING_WORKER_MODE" != "true" ]]; then
+          CONTAINERS_SERVICE="/etc/systemd/system/gemini-containers.service"
+          $SUDO tee "$CONTAINERS_SERVICE" > /dev/null <<CSEOF
 [Unit]
 Description=Gemini API 容器分批启动（延时等服务器稳定）
 After=network-online.target docker.service
@@ -305,9 +328,10 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 CSEOF
-        $SUDO systemctl daemon-reload
-        $SUDO systemctl enable gemini-containers
-        info "容器分批启动服务已更新"
+          $SUDO systemctl daemon-reload
+          $SUDO systemctl enable gemini-containers
+          info "容器分批启动服务已更新"
+        fi
       fi
 
       echo ""
@@ -353,8 +377,24 @@ echo -e "${BOLD}交互式安装向导${NC}"
 echo "════════════════════════════════════════"
 echo ""
 
-# [1/5] Container count
-step "1/5" "需要多少个容器（账号）？"
+# [0] Deploy mode
+echo -e "  ${BOLD}选择部署模式${NC}"
+echo ""
+echo "  [1] ${GREEN}单容器模式（推荐）${NC}"
+echo "      所有账号在一个进程里运行，省内存，管理简单"
+echo ""
+echo "  [2] 多容器模式"
+echo "      每个账号一个 Docker 容器，独立端口"
+echo ""
+read -rp "  选择 [1/2, 默认 1]: " DEPLOY_MODE
+DEPLOY_MODE="${DEPLOY_MODE:-1}"
+if [[ "$DEPLOY_MODE" != "1" && "$DEPLOY_MODE" != "2" ]]; then
+  error "无效选择"
+fi
+echo ""
+
+# [1/5] Account count
+step "1/5" "需要多少个账号？"
 read -rp "  数量 [1-50, 默认 5]: " ACCOUNT_COUNT
 ACCOUNT_COUNT="${ACCOUNT_COUNT:-5}"
 if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT > 50 )); then
@@ -362,64 +402,66 @@ if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT
 fi
 echo ""
 
-# 容器端口分配（优先沿用旧配置）
-DEFAULT_START="${OLD_START_PORT:-3001}"
-END_PORT=$((DEFAULT_START + ACCOUNT_COUNT - 1))
-[[ -n "${OLD_START_PORT:-}" ]] && echo -e "  ${GREEN}沿用已有端口配置${NC}"
-echo -e "  端口范围: ${BOLD}${DEFAULT_START}-${END_PORT}${NC}"
-echo ""
-echo "  [1] 使用端口范围 ${DEFAULT_START}-${END_PORT}"
-echo "  [2] 自定义起始端口"
-echo ""
-read -rp "  选择 [1/2, 默认 1]: " port_choice
-port_choice="${port_choice:-1}"
+START_PORT="8001"  # default, only used in multi-container mode
 
-if [[ "$port_choice" == "2" ]]; then
-  read -rp "  输入起始端口: " DEFAULT_START
-  if ! [[ "$DEFAULT_START" =~ ^[0-9]+$ ]] || (( DEFAULT_START < 1024 || DEFAULT_START > 65000 )); then
-    error "端口无效（1024-65000）"
-  fi
-fi
-
-# 检测端口占用
-START_PORT="$DEFAULT_START"
-occupied_ports=()
-for (( i=0; i<ACCOUNT_COUNT; i++ )); do
-  p=$((START_PORT + i))
-  if port_in_use "$p"; then
-    occupied_ports+=("$p")
-  fi
-done
-
-if (( ${#occupied_ports[@]} > 0 )); then
-  warn "以下端口已被占用: ${occupied_ports[*]}"
+if [[ "$DEPLOY_MODE" == "2" ]]; then
+  # 容器端口分配（优先沿用旧配置）
+  DEFAULT_START="${OLD_START_PORT:-3001}"
+  END_PORT=$((DEFAULT_START + ACCOUNT_COUNT - 1))
+  [[ -n "${OLD_START_PORT:-}" ]] && echo -e "  ${GREEN}沿用已有端口配置${NC}"
+  echo -e "  端口范围: ${BOLD}${DEFAULT_START}-${END_PORT}${NC}"
   echo ""
-  echo "  [1] 跳过已占用端口，自动顺延"
-  echo "  [2] 重新输入起始端口"
+  echo "  [1] 使用端口范围 ${DEFAULT_START}-${END_PORT}"
+  echo "  [2] 自定义起始端口"
   echo ""
-  read -rp "  选择 [1/2]: " conflict_choice
+  read -rp "  选择 [1/2, 默认 1]: " port_choice
+  port_choice="${port_choice:-1}"
 
-  if [[ "$conflict_choice" == "2" ]]; then
-    read -rp "  输入新的起始端口: " START_PORT
-    if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || (( START_PORT < 1024 || START_PORT > 65000 )); then
+  if [[ "$port_choice" == "2" ]]; then
+    read -rp "  输入起始端口: " DEFAULT_START
+    if ! [[ "$DEFAULT_START" =~ ^[0-9]+$ ]] || (( DEFAULT_START < 1024 || DEFAULT_START > 65000 )); then
       error "端口无效（1024-65000）"
     fi
-    # 再检一次
-    for (( i=0; i<ACCOUNT_COUNT; i++ )); do
-      p=$((START_PORT + i))
-      if port_in_use "$p"; then
-        error "端口 $p 仍被占用，请释放后重试"
-      fi
-    done
-  else
-    # 跳过占用端口，找到足够的连续空闲段
-    START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$START_PORT") || error "找不到 $ACCOUNT_COUNT 个连续空闲端口"
-    info "已顺延到 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
   fi
-else
-  info "端口 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) 全部可用"
+
+  # 检测端口占用
+  START_PORT="$DEFAULT_START"
+  occupied_ports=()
+  for (( i=0; i<ACCOUNT_COUNT; i++ )); do
+    p=$((START_PORT + i))
+    if port_in_use "$p"; then
+      occupied_ports+=("$p")
+    fi
+  done
+
+  if (( ${#occupied_ports[@]} > 0 )); then
+    warn "以下端口已被占用: ${occupied_ports[*]}"
+    echo ""
+    echo "  [1] 跳过已占用端口，自动顺延"
+    echo "  [2] 重新输入起始端口"
+    echo ""
+    read -rp "  选择 [1/2]: " conflict_choice
+
+    if [[ "$conflict_choice" == "2" ]]; then
+      read -rp "  输入新的起始端口: " START_PORT
+      if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || (( START_PORT < 1024 || START_PORT > 65000 )); then
+        error "端口无效（1024-65000）"
+      fi
+      for (( i=0; i<ACCOUNT_COUNT; i++ )); do
+        p=$((START_PORT + i))
+        if port_in_use "$p"; then
+          error "端口 $p 仍被占用，请释放后重试"
+        fi
+      done
+    else
+      START_PORT=$(find_free_port_range "$ACCOUNT_COUNT" "$START_PORT") || error "找不到 $ACCOUNT_COUNT 个连续空闲端口"
+      info "已顺延到 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1))"
+    fi
+  else
+    info "端口 ${START_PORT}-$((START_PORT + ACCOUNT_COUNT - 1)) 全部可用"
+  fi
+  echo ""
 fi
-echo ""
 
 # [2/5] API key
 step "2/5" "API 密钥（回车自动生成）"
@@ -521,6 +563,13 @@ fi
 CURRENT_STEP=$((CURRENT_STEP + 1))
 step "${CURRENT_STEP}/${TOTAL_STEPS}" "写入 .env 配置 ..."
 
+WORKER_MODE_VALUE=""
+WORKER_URL_VALUE=""
+if [[ "$DEPLOY_MODE" == "1" ]]; then
+  WORKER_MODE_VALUE="true"
+  WORKER_URL_VALUE="http://127.0.0.1:7860"
+fi
+
 cat > .env <<EOF
 # Gemini API OneClick - Configuration
 # Generated by install.sh
@@ -531,6 +580,10 @@ IMAGE_NAME=gemini-api-oneclick:local
 START_PORT=${START_PORT}
 CONTAINER_PREFIX=gemini_api_account_
 API_KEY=${USER_API_KEY}
+
+# Deploy mode: WORKER_MODE=true → single container, false/empty → multi container
+WORKER_MODE=${WORKER_MODE_VALUE}
+WORKER_URL=${WORKER_URL_VALUE}
 
 # Outbound proxy (optional)
 HTTP_PROXY=${HTTP_PROXY}
@@ -549,29 +602,68 @@ EOF
 info ".env 已写入"
 CONTAINER_PREFIX="gemini_api_account_"
 
-# Step: Generate compose
-CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "生成 docker-compose ..."
-python3 scripts/generate_compose.py
-
 # Step: Build and start
 CURRENT_STEP=$((CURRENT_STEP + 1))
-step "${CURRENT_STEP}/${TOTAL_STEPS}" "构建并启动容器 ..."
-
-# 清理所有残留的同名容器（扫描全部 env 文件，不仅是 1~N）
-for env_file in envs/account*.env; do
-  [[ -f "$env_file" ]] || continue
-  n="${env_file##*account}"; n="${n%.env}"
-  [[ "$n" =~ ^[0-9]+$ ]] || continue
-  cname="${CONTAINER_PREFIX}${n}"
-  if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
-    docker stop "$cname" 2>/dev/null || true
-    docker rm "$cname" 2>/dev/null || true
-  fi
-done
 
 docker build -t gemini-api-oneclick:local .
-docker compose -f docker-compose.accounts.yml up -d
+
+if [[ "$DEPLOY_MODE" == "1" ]]; then
+  # ── Single container (worker) mode ──
+  step "${CURRENT_STEP}/${TOTAL_STEPS}" "启动 Worker 容器 ..."
+
+  # 清理旧的多容器残留
+  for env_file in envs/account*.env; do
+    [[ -f "$env_file" ]] || continue
+    n="${env_file##*account}"; n="${n%.env}"
+    [[ "$n" =~ ^[0-9]+$ ]] || continue
+    cname="${CONTAINER_PREFIX}${n}"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+      docker stop "$cname" 2>/dev/null || true
+      docker rm "$cname" 2>/dev/null || true
+    fi
+  done
+
+  # 停止旧 worker 如果存在
+  docker rm -f gemini_worker 2>/dev/null || true
+
+  docker run -d \
+    --name gemini_worker \
+    --network host \
+    --restart unless-stopped \
+    -v "${ROOT_DIR}/envs:/app/envs" \
+    -v "${ROOT_DIR}/app/slot.py:/app/slot.py" \
+    -v "${ROOT_DIR}/app/worker.py:/app/worker.py" \
+    -v "${ROOT_DIR}/app/parsers:/app/parsers" \
+    -v "${ROOT_DIR}/app/raw_capture_tracer.py:/app/raw_capture_tracer.py" \
+    -v "${ROOT_DIR}/app/worker_events.py:/app/worker_events.py" \
+    -v "${ROOT_DIR}/lib/gemini_webapi:/app/gemini_webapi" \
+    -e ENVS_DIR=/app/envs \
+    -e HTTP_PROXY="${HTTP_PROXY}" \
+    -e HTTPS_PROXY="${HTTPS_PROXY}" \
+    gemini-api-oneclick:local \
+    uv run uvicorn worker:app --host 0.0.0.0 --port 7860
+
+  info "Worker 容器已启动（端口 7860）"
+else
+  # ── Multi container mode ──
+  CURRENT_STEP=$((CURRENT_STEP))
+  step "${CURRENT_STEP}/${TOTAL_STEPS}" "生成 docker-compose 并启动容器 ..."
+  python3 scripts/generate_compose.py
+
+  # 清理所有残留的同名容器
+  for env_file in envs/account*.env; do
+    [[ -f "$env_file" ]] || continue
+    n="${env_file##*account}"; n="${n%.env}"
+    [[ "$n" =~ ^[0-9]+$ ]] || continue
+    cname="${CONTAINER_PREFIX}${n}"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+      docker stop "$cname" 2>/dev/null || true
+      docker rm "$cname" 2>/dev/null || true
+    fi
+  done
+
+  docker compose -f docker-compose.accounts.yml up -d
+fi
 
 # Step: Gateway (智能轮询网关)
 CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -620,8 +712,8 @@ else
   info "Gateway 已启动 (PID: $!)"
 fi
 
-# 容器分批启动服务（服务器重启时延时启动，防止抢资源触发机房防护）
-if command -v systemctl >/dev/null 2>&1; then
+# 容器分批启动服务（仅多容器模式需要）
+if [[ "$DEPLOY_MODE" == "2" ]] && command -v systemctl >/dev/null 2>&1; then
   CONTAINERS_SERVICE="/etc/systemd/system/gemini-containers.service"
 
   $SUDO tee "$CONTAINERS_SERVICE" > /dev/null <<EOF
@@ -686,7 +778,11 @@ echo -e "  ${BOLD}状态面板:${NC}   http://YOUR_IP:${GATEWAY_PORT}"
 echo -e "  ${BOLD}API 密钥:${NC}   ${USER_API_KEY}"
 echo ""
 FINAL_COUNT=$(ls envs/account*.env 2>/dev/null | wc -l | tr -d ' ')
-echo -e "  智能轮询 ${FINAL_COUNT} 个容器，自动跳过故障节点"
+if [[ "$DEPLOY_MODE" == "1" ]]; then
+  echo -e "  ${GREEN}单容器模式${NC} — ${FINAL_COUNT} 个账号在 1 个 Worker 进程中运行"
+else
+  echo -e "  ${GREEN}多容器模式${NC} — 智能轮询 ${FINAL_COUNT} 个容器，自动跳过故障节点"
+fi
 echo -e "  支持 OpenAI 兼容格式，可直接接入酒馆/Kelivo/NewAPI 等"
 
 echo -e "  ${BOLD}面板密码:${NC}   ${COOKIE_MANAGER_PASSWORD}"
