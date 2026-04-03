@@ -266,9 +266,8 @@ class ResearchMixin:
         on_status: Callable[[DeepResearchStatus], None] | None = None,
     ) -> DeepResearchResult:
         if not plan.research_id:
-            raise GeminiError(
-                "Cannot poll deep research status: plan.research_id is missing. "
-                "The research task may not have started successfully."
+            logger.warning(
+                "research_id missing — will wait and fetch final output from chat history instead of polling status."
             )
 
         start = time.time()
@@ -279,6 +278,24 @@ class ResearchMixin:
             status = None
             if plan.research_id:
                 status = await self.get_deep_research_status(plan.research_id)
+            elif plan.cid:
+                # No research_id — try fetching latest response to see if it's done
+                try:
+                    latest = await self.fetch_latest_chat_response(plan.cid)
+                    if latest and latest.text and len(latest.text) > 500:
+                        # Got a substantial response — research is likely done
+                        logger.info("Got substantial response via chat history fallback")
+                        return DeepResearchResult(
+                            plan=plan,
+                            statuses=statuses,
+                            final_output=latest,
+                            done=True,
+                        )
+                except Exception as e:
+                    logger.debug(f"Chat history fallback failed: {e}")
+                await asyncio.sleep(poll_interval)
+                continue
+
             if status:
                 statuses.append(status)
                 logger.debug(
@@ -316,9 +333,62 @@ class ResearchMixin:
         on_status: Callable[[DeepResearchStatus], None] | None = None,
     ) -> DeepResearchResult:
         """Run a full deep research cycle: plan -> start -> wait -> result."""
+        import re
 
         plan = await self.create_deep_research_plan(prompt)
         start_output = await self.start_deep_research(plan)
+
+        # research_id may only appear after confirming the plan
+        if not plan.research_id and start_output:
+            # Try to extract from start output's deep_research_plan
+            if start_output.deep_research_plan and start_output.deep_research_plan.research_id:
+                plan.research_id = start_output.deep_research_plan.research_id
+                logger.info(f"Got research_id from start output plan: {plan.research_id}")
+
+            # Also try the chat cid as research context
+            if not plan.research_id and plan.cid:
+                # Poll status without research_id to try to discover it
+                try:
+                    # Try polling with cid-based approach
+                    response = await self._batch_execute(
+                        [RPCData(rpcid=GRPC.DEEP_RESEARCH_STATUS, payload=json.dumps([plan.cid]).decode("utf-8"))],
+                        close_on_error=False,
+                    )
+                    from ..utils import extract_json_from_response, extract_deep_research_status_payload
+                    response_json = extract_json_from_response(response.text)
+                    for part in response_json:
+                        body_str = get_nested_value(part, [2])
+                        if not body_str:
+                            continue
+                        try:
+                            body = json.loads(body_str)
+                        except json.JSONDecodeError:
+                            continue
+                        parsed = extract_deep_research_status_payload(body)
+                        if parsed and parsed.get("research_id"):
+                            plan.research_id = parsed["research_id"]
+                            logger.info(f"Got research_id from status poll: {plan.research_id}")
+                            break
+                except Exception as e:
+                    logger.debug(f"Status poll for research_id failed: {e}")
+
+            # Last resort: search the start_output text for UUID
+            if not plan.research_id and start_output.text:
+                uuid_match = re.search(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    start_output.text,
+                    re.IGNORECASE,
+                )
+                if uuid_match:
+                    plan.research_id = uuid_match.group(0)
+                    logger.info(f"Got research_id from start text: {plan.research_id}")
+
+        if not plan.research_id:
+            logger.warning(
+                f"No research_id found after start. "
+                f"plan.cid={plan.cid}, start_text={start_output.text[:200] if start_output and start_output.text else 'empty'}"
+            )
+
         result = await self.wait_for_deep_research(
             plan,
             poll_interval=poll_interval,
