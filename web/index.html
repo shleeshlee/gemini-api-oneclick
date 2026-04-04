@@ -360,15 +360,30 @@ body::before {
 }
 .batch-bar .info { color: var(--text-muted); flex: 1; }
 
-/* Result tabs */
-.result-tab {
-  padding: 0.4rem 1rem; font-size: 0.78rem; font-weight: 600; border: none;
+/* Task tabs */
+.task-tab {
+  padding: 0.35rem 0.8rem; font-size: 0.75rem; font-weight: 600; border: none;
   background: transparent; color: var(--text-muted); cursor: pointer;
   border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Outfit', sans-serif; display: inline-flex; align-items: center; gap: 0.3rem;
+  flex-shrink: 0;
 }
-.result-tab:hover { color: var(--text); }
-.result-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.task-tab:hover { color: var(--text); }
+.task-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.task-tab .task-status-dot { font-size: 0.6rem; }
+.task-tab .task-close { font-size: 0.85rem; opacity: 0.4; cursor: pointer; margin-left: 0.2rem; }
+.task-tab .task-close:hover { opacity: 1; color: var(--danger); }
+.task-timeline {
+  font-size: 0.72rem; color: var(--text-muted); padding: 0.4rem 0.6rem;
+  background: var(--bg); border-radius: var(--radius-sm); margin-bottom: 0.5rem;
+  border: 1px solid var(--border); line-height: 1.6;
+}
+.task-timeline .tl-step { display: inline; }
+.task-timeline .tl-arrow { color: var(--border); margin: 0 0.3rem; }
+.task-timeline .tl-error { color: var(--danger); }
+.task-timeline .tl-success { color: var(--success); font-weight: 600; }
+.task-timeline .tl-trying { color: var(--primary); }
+@keyframes taskPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 /* Optimize prompt bubbles */
 .opt-bubble {
   width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--border);
@@ -857,38 +872,10 @@ body::before {
       </div>
     </div>
 
-    <!-- Zone 2: Results (tabbed) -->
+    <!-- Zone 2: Dynamic Task Results -->
     <div class="studio-section" id="resultZone" style="display:none">
-      <div style="display:flex;align-items:center;gap:0;margin-bottom:0.5rem;border-bottom:2px solid var(--border)">
-        <button class="result-tab active" id="resultTabImg" onclick="switchResultTab('img')">🎨 图片</button>
-        <button class="result-tab" id="resultTabVid" onclick="switchResultTab('vid')">🎬 视频</button>
-        <button class="result-tab" id="resultTabMusic" onclick="switchResultTab('music')">🎵 音乐</button>
-      </div>
-      <!-- Image results -->
-      <div id="resultPanelImg">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">
-          <div id="imgTempInfo" style="font-size:0.78rem;color:var(--text-muted)"></div>
-          <div class="batch-bar" style="padding:0;margin:0">
-            <button class="img-action-btn dl" onclick="downloadAllTemp()">⬇ 全部下载</button>
-            <button class="img-action-btn save" onclick="saveAllTemp()">💾 全部保存</button>
-          </div>
-        </div>
-        <details id="imgPromptPreview" style="margin-bottom:0.5rem;display:none"><summary style="cursor:pointer;font-size:0.72rem;color:var(--text-light);user-select:none">📝 查看发送的提示词</summary><pre id="imgPromptText" onclick="navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="margin-top:0.3rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.72rem;line-height:1.4;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border:1px solid var(--border);cursor:pointer"></pre></details>
-        <div id="imgTempGrid" class="img-grid cols-2"></div>
-        <div id="imgResultEmpty" class="gallery-empty">还没有生成图片</div>
-      </div>
-      <!-- Video results -->
-      <div id="resultPanelVid" style="display:none">
-        <div id="vidResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
-        <div id="vidResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
-        <div id="vidResultEmpty" class="gallery-empty">还没有生成视频</div>
-      </div>
-      <!-- Music results -->
-      <div id="resultPanelMusic" style="display:none">
-        <div id="musicResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
-        <div id="musicResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
-        <div id="musicResultEmpty" class="gallery-empty">还没有生成音乐</div>
-      </div>
+      <div id="taskTabBar" style="display:flex;align-items:center;gap:0;margin-bottom:0.5rem;border-bottom:2px solid var(--border);overflow-x:auto;white-space:nowrap"></div>
+      <div id="taskPanels"></div>
     </div>
 
     <!-- Zone 3: Project Gallery -->
@@ -1936,7 +1923,7 @@ async function optimizePrompt(target = 'image') {
   btn.disabled = false; btn.textContent = '✨ 优化提示词';
 }
 
-async function doImgGen() {
+function doImgGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
   const quality = document.getElementById('imgQuality').value;
@@ -1945,65 +1932,13 @@ async function doImgGen() {
   const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
   const size = imgSelectedRatio;
   const model = document.getElementById('imgModel').value;
-  const btn = document.getElementById('imgGenBtn');
-  btn.disabled = true; btn.innerHTML = '🍪 生成中...';
-  activeAbortController = new AbortController();
-  showCancelBtn();
-  tempImages = [];
-  showResultZone('img');
-  document.getElementById('imgResultEmpty').style.display = 'none';
-  document.getElementById('imgTempInfo').textContent = `正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...`;
-  document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
-  const promptPreview = document.getElementById('imgPromptPreview');
-  if (promptPreview) promptPreview.style.display = 'none';
-
-  const start = Date.now();
   const dimsPrompt = getActiveDimsPrompt();
   const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
-  const body = { prompt: finalPrompt, model, n, size, quality };
-  if (style) body.style = style;
-  if (neg) body.negative_prompt = neg;
-
-  try {
-    const resp = await fetch('/v1/images/generations', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      signal: activeAbortController.signal,
-      body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    const sec = ((Date.now() - start) / 1000).toFixed(1);
-
-    if (data.data && data.data.length > 0 && data.data[0].b64_json) {
-      lastGenSessionId = data.session_id || null;
-      tempImages = data.data.map((d, i) => ({
-        b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: imgSelectedStyle, size, quality, channel: model, index: i
-      }));
-      const styleName = style ? (IMG_STYLES.find(s=>s.id===style)?.label||style) : '';
-      document.getElementById('imgTempInfo').textContent = `${sec}s · ${model}${styleName?' · '+styleName:''} · ${tempImages.length} 张`;
-      // Show final prompt sent to Gemini
-      const promptPreview = document.getElementById('imgPromptPreview');
-      const promptText = document.getElementById('imgPromptText');
-      if (promptPreview && promptText && data.final_prompt) {
-        promptText.textContent = data.final_prompt;
-        promptPreview.style.display = '';
-      }
-      renderTempGrid();
-    } else {
-      const errMsg = data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
-        : data.error ? (data.error.message || JSON.stringify(data.error))
-        : '未生成图片（Cookie 可能需要更新）';
-      document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);font-size:0.88rem;grid-column:1/-1">${esc(errMsg)}</div>`;
-      tempImages = [];
-    }
-  } catch(e) {
-    if (e.name === 'AbortError') { document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">已取消</div>'; }
-    else { document.getElementById('imgTempGrid').innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm);grid-column:1/-1">请求失败: ${esc(e.message)}</div>`; }
-    tempImages = [];
-  }
-  activeAbortController = null;
-  hideCancelBtn();
-  btn.disabled = false; btn.innerHTML = '🎨 生成图片';
+  const params = {prompt: finalPrompt, model, n, size, quality};
+  if (style) params.style = style;
+  if (neg) params.negative_prompt = neg;
+  if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
+  TaskManager.create('image', params);
 }
 
 function openImageFull(dataUrl) {
@@ -2112,15 +2047,8 @@ let editSessionId = null;
 let lastGenSessionId = null; // session_id from last generation (for Pro redo)
 let activeAbortController = null;
 
-function showCancelBtn() {
-  document.getElementById('imgCancelBtn').style.display = '';
-  // Disable all action buttons in both menus
-  document.querySelectorAll('#menuCreate button, #menuEdit button').forEach(b => b.disabled = true);
-}
-function hideCancelBtn() {
-  document.getElementById('imgCancelBtn').style.display = 'none';
-  document.querySelectorAll('#menuCreate button, #menuEdit button').forEach(b => b.disabled = false);
-}
+function showCancelBtn() { /* no-op: tasks manage their own cancel via tab × */ }
+function hideCancelBtn() { /* no-op */ }
 function cancelImgRequest() {
   if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
   hideCancelBtn();
@@ -2248,17 +2176,292 @@ function clearUploadImage() {
 function updateButtonsForMediaType() {
   switchStudioMenu();
 }
-function switchResultTab(tab) {
-  const panels = {img:'resultPanelImg', vid:'resultPanelVid', music:'resultPanelMusic'};
-  const tabs = {img:'resultTabImg', vid:'resultTabVid', music:'resultTabMusic'};
-  for (const [k, id] of Object.entries(panels)) {
-    document.getElementById(id).style.display = k === tab ? '' : 'none';
-    document.getElementById(tabs[k]).classList.toggle('active', k === tab);
-  }
+// ── Task Manager ─────────────────────────────────────────
+const TASK_ICONS = {image: '🎨', video: '🎬', music: '🎵'};
+const TASK_LABELS = {image: '图片', video: '视频', music: '音乐'};
+
+const TaskManager = {
+  tasks: new Map(),
+  counter: {image: 0, video: 0, music: 0},
+  activeTaskId: null,
+
+  async create(type, params) {
+    this.counter[type]++;
+    const label = `${TASK_LABELS[type]} #${this.counter[type]}`;
+
+    try {
+      const resp = await fetch('/v1/tasks/create', {
+        method: 'POST',
+        headers: {...authHeaders(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({task_type: type, ...params}),
+      });
+      const {task_id} = await resp.json();
+
+      const task = {id: task_id, type, label, status: 'pending', events: [], result: null, error: null};
+      this.tasks.set(task_id, task);
+
+      // Show result zone and create tab + panel
+      document.getElementById('resultZone').style.display = '';
+      this._createTabAndPanel(task);
+      this._switchTo(task_id);
+      this._connectSSE(task_id);
+    } catch (e) {
+      toast('任务创建失败: ' + e.message, 'err');
+    }
+  },
+
+  cancel(taskId) {
+    fetch(`/v1/tasks/${taskId}/cancel`, {method: 'POST', headers: authHeaders()});
+    const task = this.tasks.get(taskId);
+    if (task) { task.status = 'cancelled'; this._updateTab(taskId); }
+  },
+
+  close(taskId) {
+    const task = this.tasks.get(taskId);
+    if (task && task.status === 'pending') this.cancel(taskId);
+    // Remove tab and panel
+    document.getElementById(`taskTab_${taskId}`)?.remove();
+    document.getElementById(`taskPanel_${taskId}`)?.remove();
+    this.tasks.delete(taskId);
+    // Switch to another tab or hide zone
+    if (this.tasks.size === 0) {
+      document.getElementById('resultZone').style.display = 'none';
+      this.activeTaskId = null;
+    } else if (this.activeTaskId === taskId) {
+      const firstId = this.tasks.keys().next().value;
+      this._switchTo(firstId);
+    }
+  },
+
+  _createTabAndPanel(task) {
+    const bar = document.getElementById('taskTabBar');
+    const panels = document.getElementById('taskPanels');
+    // Tab
+    const tab = document.createElement('button');
+    tab.className = 'task-tab';
+    tab.id = `taskTab_${task.id}`;
+    tab.innerHTML = `${TASK_ICONS[task.type]} <span class="task-label">${task.label}</span> <span class="task-status-dot" style="animation:taskPulse 1s infinite">⏳</span> <span class="task-close" onclick="event.stopPropagation();TaskManager.close('${task.id}')">&times;</span>`;
+    tab.onclick = () => this._switchTo(task.id);
+    bar.appendChild(tab);
+    // Panel
+    const panel = document.createElement('div');
+    panel.id = `taskPanel_${task.id}`;
+    panel.style.display = 'none';
+    panel.innerHTML = `<div class="task-timeline" id="taskTL_${task.id}">等待中...</div><div id="taskResult_${task.id}"></div>`;
+    panels.appendChild(panel);
+  },
+
+  _switchTo(taskId) {
+    // Deactivate all, activate target
+    document.querySelectorAll('.task-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#taskPanels > div').forEach(p => p.style.display = 'none');
+    const tab = document.getElementById(`taskTab_${taskId}`);
+    const panel = document.getElementById(`taskPanel_${taskId}`);
+    if (tab) tab.classList.add('active');
+    if (panel) panel.style.display = '';
+    this.activeTaskId = taskId;
+  },
+
+  async _connectSSE(taskId) {
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+    try {
+      const resp = await fetch(`/v1/tasks/${taskId}/stream`, {headers: authHeaders()});
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop();
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(part.slice(6));
+            task.events.push(event);
+            this._handleEvent(taskId, event);
+          } catch {}
+        }
+      }
+    } catch (e) {
+      if (task.status === 'pending') {
+        task.status = 'failed';
+        task.error = 'SSE 连接断开';
+        this._updateTab(taskId);
+        this._updateTimeline(taskId);
+      }
+    }
+  },
+
+  _handleEvent(taskId, event) {
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+    if (event.type === 'start') { task.status = 'running'; }
+    else if (event.type === 'success') {
+      task.status = 'success'; task.result = event.result;
+      this._renderResult(taskId);
+    }
+    else if (event.type === 'failed') { task.status = 'failed'; task.error = event.error; }
+    else if (event.type === 'cancelled') { task.status = 'cancelled'; }
+    this._updateTab(taskId);
+    this._updateTimeline(taskId);
+  },
+
+  _updateTab(taskId) {
+    const task = this.tasks.get(taskId);
+    const tab = document.getElementById(`taskTab_${taskId}`);
+    if (!task || !tab) return;
+    const dot = tab.querySelector('.task-status-dot');
+    const statusMap = {
+      pending: ['⏳', 'animation:taskPulse 1s infinite'],
+      running: ['⏳', 'animation:taskPulse 1s infinite'],
+      success: ['✓', 'color:var(--success);animation:none'],
+      failed: ['✗', 'color:var(--danger);animation:none'],
+      cancelled: ['⊘', 'color:var(--text-muted);animation:none'],
+    };
+    const [icon, style] = statusMap[task.status] || ['?', ''];
+    dot.textContent = icon;
+    dot.style.cssText = style;
+  },
+
+  _updateTimeline(taskId) {
+    const task = this.tasks.get(taskId);
+    const el = document.getElementById(`taskTL_${taskId}`);
+    if (!task || !el) return;
+    let html = '';
+    for (const ev of task.events) {
+      if (html) html += '<span class="tl-arrow">→</span>';
+      if (ev.type === 'start') html += `<span class="tl-step">就绪 (${ev.retries_available} 个容器可用)</span>`;
+      else if (ev.type === 'trying') html += `<span class="tl-step tl-trying">${esc(ev.container)} 请求中...</span>`;
+      else if (ev.type === 'retry') html += `<span class="tl-step tl-error">${esc(ev.container)} 失败: ${esc(ev.error?.substring(0,40) || '')}</span>`;
+      else if (ev.type === 'success') html += `<span class="tl-step tl-success">${esc(ev.container)} ✓</span>`;
+      else if (ev.type === 'failed') html += `<span class="tl-step tl-error">全部失败: ${esc(ev.error?.substring(0,60) || '')}</span>`;
+      else if (ev.type === 'cancelled') html += `<span class="tl-step">已取消</span>`;
+    }
+    el.innerHTML = html || '等待中...';
+  },
+
+  _renderResult(taskId) {
+    const task = this.tasks.get(taskId);
+    const el = document.getElementById(`taskResult_${taskId}`);
+    if (!task?.result || !el) return;
+    const data = task.result;
+    if (task.type === 'image') this._renderImageResult(el, data, taskId);
+    else if (task.type === 'video') this._renderVideoResult(el, data, taskId);
+    else if (task.type === 'music') this._renderMusicResult(el, data, taskId);
+  },
+
+  _renderImageResult(el, data, taskId) {
+    if (!data.data?.length) { el.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.detail || '未生成图片')}</div>`; return; }
+    // Store for download
+    window[`_taskImgs_${taskId}`] = data.data;
+    let html = `<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">${data.data.length} 张图片</div>`;
+    html += '<div class="img-grid cols-2">';
+    data.data.forEach((img, i) => {
+      if (!img.b64_json) return;
+      html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)">`;
+      html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
+      html += `<a class="img-action-btn dl" href="data:image/png;base64,${img.b64_json}" download="img_${Date.now()}_${i}.png" style="flex:1;text-align:center;text-decoration:none">⬇</a>`;
+      html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">📌 素材</button>`;
+      html += `</div></div>`;
+    });
+    html += '</div>';
+    if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
+    el.innerHTML = html;
+  },
+
+  _renderVideoResult(el, data, taskId) {
+    if (!data.data?.length) { el.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.detail || '未生成视频')}</div>`; return; }
+    window[`_taskVids_${taskId}`] = data.data;
+    let html = '';
+    data.data.forEach((v, i) => {
+      html += '<div style="background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border);margin-bottom:0.5rem">';
+      if (v.b64_json) html += `<video controls style="width:100%;border-radius:6px;max-height:400px" src="data:video/mp4;base64,${v.b64_json}"></video>`;
+      html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
+      if (v.b64_json) {
+        html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${v.b64_json}" download="video_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ 下载</a>`;
+        html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">📌 素材</button>`;
+      }
+      html += '</div></div>';
+    });
+    if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
+    el.innerHTML = html;
+  },
+
+  _renderMusicResult(el, data, taskId) {
+    if (!data.data?.length) { el.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.detail || '未生成音乐')}</div>`; return; }
+    const m = data.data[0];
+    window[`_taskMusic_${taskId}`] = m;
+    let html = '<div style="background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border)">';
+    if (m.audio_b64) html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎧 音频</div><audio controls style="width:100%" src="data:audio/mpeg;base64,${m.audio_b64}"></audio></div>`;
+    if (m.video_b64) html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎬 音乐视频</div><video controls style="width:100%;border-radius:6px;max-height:300px" src="data:video/mp4;base64,${m.video_b64}"></video></div>`;
+    html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
+    if (m.audio_b64) html += `<a class="img-action-btn dl" href="data:audio/mpeg;base64,${m.audio_b64}" download="music_${Date.now()}.mp3" style="flex:1;text-align:center;text-decoration:none">⬇ MP3</a>`;
+    if (m.video_b64) html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${m.video_b64}" download="music_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ MP4</a>`;
+    if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">📌 素材</button>`;
+    html += '</div></div>';
+    if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
+    el.innerHTML = html;
+  },
+
+  _useImageAsMaterial(taskId, idx) {
+    const imgs = window[`_taskImgs_${taskId}`];
+    if (!imgs?.[idx]?.b64_json) return;
+    uploadedImageB64 = imgs[idx].b64_json;
+    uploadedMediaType = 'image';
+    editSessionId = null;
+    const oldVid = document.getElementById('vidPreviewPlayer'); if (oldVid) oldVid.remove();
+    const oldAud = document.getElementById('audPreviewPlayer'); if (oldAud) oldAud.remove();
+    document.getElementById('imgPreviewImg').style.display = '';
+    setEditImage(imgs[idx].b64_json, '从任务结果加载 · 🎨 图片');
+    toast('图片已加载到素材区', 'ok');
+  },
+  _useVideoAsMaterial(taskId, idx) {
+    const vids = window[`_taskVids_${taskId}`];
+    if (!vids?.[idx]?.b64_json) return;
+    useVideoAsMaterial_b64(vids[idx].b64_json);
+  },
+  _useMusicAsMaterial(taskId) {
+    const m = window[`_taskMusic_${taskId}`];
+    if (!m?.audio_b64) return;
+    useMusicAsMaterial_b64(m.audio_b64);
+  },
+};
+
+function useVideoAsMaterial_b64(b64) {
+  uploadedImageB64 = b64; uploadedMediaType = 'video'; editSessionId = null;
+  const preview = document.getElementById('imgUploadPreview');
+  const img = document.getElementById('imgPreviewImg'); img.style.display = 'none';
+  const oldVid = document.getElementById('vidPreviewPlayer'); if (oldVid) oldVid.remove();
+  const oldAud = document.getElementById('audPreviewPlayer'); if (oldAud) oldAud.remove();
+  const vid = document.createElement('video'); vid.id = 'vidPreviewPlayer'; vid.controls = true;
+  vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
+  vid.src = 'data:video/mp4;base64,' + b64;
+  img.parentNode.insertBefore(vid, img);
+  preview.style.display = ''; document.getElementById('imgUploadEmpty').style.display = 'none';
+  document.getElementById('imgFileInfo').innerHTML = '从任务结果加载 · 🎬 视频';
+  updateButtonsForMediaType();
+  document.getElementById('imgUploadArea').scrollIntoView({behavior:'smooth',block:'center'});
+  toast('视频已加载到素材区', 'ok');
 }
-function showResultZone(tab) {
-  document.getElementById('resultZone').style.display = '';
-  switchResultTab(tab);
+
+function useMusicAsMaterial_b64(b64) {
+  uploadedImageB64 = b64; uploadedMediaType = 'audio'; editSessionId = null;
+  const preview = document.getElementById('imgUploadPreview');
+  const img = document.getElementById('imgPreviewImg'); img.style.display = 'none';
+  const oldVid = document.getElementById('vidPreviewPlayer'); if (oldVid) oldVid.remove();
+  const oldAud = document.getElementById('audPreviewPlayer'); if (oldAud) oldAud.remove();
+  const aud = document.createElement('audio'); aud.id = 'audPreviewPlayer'; aud.controls = true;
+  aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
+  aud.src = 'data:audio/mpeg;base64,' + b64;
+  img.parentNode.insertBefore(aud, img);
+  preview.style.display = ''; document.getElementById('imgUploadEmpty').style.display = 'none';
+  document.getElementById('imgFileInfo').innerHTML = '从任务结果加载 · 🎵 音频';
+  updateButtonsForMediaType();
+  document.getElementById('imgUploadArea').scrollIntoView({behavior:'smooth',block:'center'});
+  toast('音频已加载到素材区', 'ok');
 }
 function switchStudioMenu() {
   const hasMaterial = !!uploadedImageB64;
@@ -2369,10 +2572,8 @@ async function doImgEdit() {
       tempImages = data.data.map((d, i) => ({
         b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: '', size: '', quality: '', channel: model, index: i
       }));
-      showResultZone('img');
-      document.getElementById('imgResultEmpty').style.display = 'none';
-      document.getElementById('imgTempInfo').textContent = `编辑完成 · ${tempImages.length} 张`;
-      renderTempGrid();
+      // Show edit result as a toast (result is in the preview area)
+      toast(`编辑完成 · ${tempImages.length} 张`, 'ok');
 
       toast('编辑完成', 'ok');
     } else {
@@ -2385,7 +2586,7 @@ async function doImgEdit() {
   }
   activeAbortController = null;
   hideCancelBtn();
-  btn.disabled = false; btn.innerHTML = uploadedMediaType === 'video' ? '✏️ 编辑视频' : '✏️ 编辑图片';
+  btn.disabled = false; btn.innerHTML = '✏️ 编辑';
 }
 
 // ── Style Templates ────────────────────────────────────────
@@ -3099,226 +3300,26 @@ document.getElementById('newGroupName').addEventListener('keydown', e => {
 });
 
 // ========== Video Generation ==========
-async function doVidGen() {
+function doVidGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
   const model = document.getElementById('imgModel').value;
-  const btn = document.getElementById('vidGenBtn');
-  const grid = document.getElementById('vidResultGrid');
-  const info = document.getElementById('vidResultInfo');
-
-  btn.disabled = true; btn.innerHTML = '🎬 生成中...';
-  showCancelBtn();
-  showResultZone('vid');
-  document.getElementById('vidResultEmpty').style.display = 'none';
-  const hasImg = !!uploadedImageB64;
-  info.textContent = hasImg
-    ? '正在根据图片生成视频，Veo 需要 1-5 分钟，请耐心等待...'
-    : '正在生成视频，Veo 需要 1-5 分钟，请耐心等待...';
-  grid.innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
-
-  const start = Date.now();
   let finalPrompt = prompt;
   if (vidSelectedStyle && vidSelectedStyle !== 'none') finalPrompt = `${vidSelectedStyle} style. ${prompt}`;
-  const body = { prompt: finalPrompt, model };
-  if (hasImg) body.image = uploadedImageB64; body.media_type = uploadedMediaType;
-  try {
-    const resp = await fetch('/v1/videos/generations', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    const sec = ((Date.now() - start) / 1000).toFixed(1);
-
-    if (data.data && data.data.length > 0) {
-      info.textContent = `${sec}s · ${data.data.length} 个视频`;
-      grid.innerHTML = '';
-      data.data.forEach((v, i) => {
-        const card = document.createElement('div');
-        card.style.cssText = 'background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border)';
-        let html = '';
-        if (v.b64_json) {
-          html += `<video controls style="width:100%;border-radius:6px;max-height:400px" src="data:video/mp4;base64,${v.b64_json}"></video>`;
-        } else if (v.url) {
-          html += `<div style="padding:1rem;text-align:center;color:var(--text-muted)">视频已生成但无法内联播放</div>`;
-        }
-        html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
-        if (v.b64_json) {
-          html += `<button class="img-action-btn dl" onclick="downloadVideo(${i})" style="flex:1">⬇ 下载</button>`;
-          html += `<button class="img-action-btn save" onclick="saveVideoToGallery(${i})" style="flex:1">💾 保存</button>`;
-          html += `<button class="img-action-btn" onclick="useVideoAsMaterial(${i})" style="flex:1;border-color:var(--accent);color:#92610E">📌 用作素材</button>`;
-        }
-        html += '</div>';
-        if (data.text) {
-          html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
-        }
-        card.innerHTML = html;
-        grid.appendChild(card);
-      });
-      // Store for download
-      window._vidResults = data.data;
-    } else {
-      const errMsg = data.detail || data.error?.message || '未生成视频';
-      grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">${esc(errMsg)}</div>`;
-    }
-  } catch(e) {
-    grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
-  }
-  btn.disabled = false; btn.innerHTML = '🎬 生成视频';
-  hideCancelBtn();
+  const params = {prompt: finalPrompt, model};
+  if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
+  TaskManager.create('video', params);
 }
 
-function downloadVideo(idx) {
-  const v = window._vidResults?.[idx];
-  if (!v?.b64_json) return;
-  const a = document.createElement('a');
-  a.href = 'data:video/mp4;base64,' + v.b64_json;
-  a.download = `video_${Date.now()}.mp4`;
-  a.click();
-}
-
-async function doMusicGen() {
+function doMusicGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
   const model = document.getElementById('imgModel').value;
-  const btn = document.getElementById('musicGenBtn');
-  const grid = document.getElementById('musicResultGrid');
-  const info = document.getElementById('musicResultInfo');
-
-  btn.disabled = true; btn.innerHTML = '🎵 生成中...';
-  showCancelBtn();
-  showResultZone('music');
-  document.getElementById('musicResultEmpty').style.display = 'none';
-  const hasImg = !!uploadedImageB64;
-  info.textContent = hasImg
-    ? '正在根据素材生成音乐，Lyria 需要 30-90 秒...'
-    : '正在生成音乐，Lyria 需要 30-90 秒...';
-  grid.innerHTML = '<div class="gallery-empty">🎵 音乐生成中...</div>';
-
-  const start = Date.now();
   let finalPrompt = prompt;
   if (musicSelectedStyle && musicSelectedStyle !== 'none') finalPrompt = `${musicSelectedStyle} style. ${prompt}`;
-  const body = { prompt: finalPrompt, model };
-  if (hasImg) { body.image = uploadedImageB64; body.media_type = uploadedMediaType; }
-  try {
-    const resp = await fetch('/v1/music/generations', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await resp.json();
-    const sec = ((Date.now() - start) / 1000).toFixed(1);
-
-    if (data.data && data.data.length > 0) {
-      const m = data.data[0];
-      info.textContent = `${sec}s · 音乐已生成`;
-      grid.innerHTML = '';
-      const card = document.createElement('div');
-      card.style.cssText = 'background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border)';
-      let html = '';
-
-      // Audio player
-      if (m.audio_b64) {
-        html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎧 音频 (MP3)</div>`;
-        html += `<audio controls style="width:100%" src="data:audio/mpeg;base64,${m.audio_b64}"></audio></div>`;
-      }
-
-      // Video player (music video with cover art)
-      if (m.video_b64) {
-        html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎬 音乐视频 (MP4)</div>`;
-        html += `<video controls style="width:100%;border-radius:6px;max-height:300px" src="data:video/mp4;base64,${m.video_b64}"></video></div>`;
-      }
-
-      // Action buttons
-      html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
-      if (m.audio_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('audio')" style="flex:1">⬇ MP3</button>`;
-      if (m.video_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('video')" style="flex:1">⬇ MP4</button>`;
-      if (m.audio_b64) html += `<button class="img-action-btn" onclick="useMusicAsMaterial()" style="flex:1;border-color:var(--accent);color:#92610E">📌 用作素材</button>`;
-      html += '</div>';
-
-      // Text response
-      if (data.text) {
-        html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
-      }
-      card.innerHTML = html;
-      grid.appendChild(card);
-      window._musicResult = m;
-    } else {
-      const errMsg = data.detail || data.error?.message || '未生成音乐';
-      grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">${esc(errMsg)}</div>`;
-    }
-  } catch(e) {
-    grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
-  }
-  btn.disabled = false; btn.innerHTML = '🎵 生成音乐';
-  hideCancelBtn();
-}
-
-function useVideoAsMaterial(idx) {
-  const v = window._vidResults?.[idx];
-  if (!v?.b64_json) return;
-  uploadedImageB64 = v.b64_json;
-  uploadedMediaType = 'video';
-  editSessionId = null;
-  const preview = document.getElementById('imgUploadPreview');
-  const img = document.getElementById('imgPreviewImg');
-  img.style.display = 'none';
-  const oldVid = document.getElementById('vidPreviewPlayer');
-  if (oldVid) oldVid.remove();
-  const oldAud = document.getElementById('audPreviewPlayer');
-  if (oldAud) oldAud.remove();
-  const vid = document.createElement('video');
-  vid.id = 'vidPreviewPlayer'; vid.controls = true;
-  vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
-  vid.src = 'data:video/mp4;base64,' + v.b64_json;
-  img.parentNode.insertBefore(vid, img);
-  preview.style.display = '';
-  document.getElementById('imgUploadEmpty').style.display = 'none';
-  document.getElementById('imgFileInfo').innerHTML = '从生成结果加载 · 🎬 视频';
-  updateButtonsForMediaType();
-  document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  toast('视频已加载到素材区', 'ok');
-}
-
-function useMusicAsMaterial() {
-  const m = window._musicResult;
-  if (!m?.audio_b64) return;
-  uploadedImageB64 = m.audio_b64;
-  uploadedMediaType = 'audio';
-  editSessionId = null;
-  const preview = document.getElementById('imgUploadPreview');
-  const img = document.getElementById('imgPreviewImg');
-  img.style.display = 'none';
-  const oldVid = document.getElementById('vidPreviewPlayer');
-  if (oldVid) oldVid.remove();
-  const oldAud = document.getElementById('audPreviewPlayer');
-  if (oldAud) oldAud.remove();
-  const aud = document.createElement('audio');
-  aud.id = 'audPreviewPlayer'; aud.controls = true;
-  aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
-  aud.src = 'data:audio/mpeg;base64,' + m.audio_b64;
-  img.parentNode.insertBefore(aud, img);
-  preview.style.display = '';
-  document.getElementById('imgUploadEmpty').style.display = 'none';
-  document.getElementById('imgFileInfo').innerHTML = '从生成结果加载 · 🎵 音频';
-  updateButtonsForMediaType();
-  document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  toast('音频已加载到素材区', 'ok');
-}
-
-function downloadMusic(type) {
-  const m = window._musicResult;
-  if (!m) return;
-  const a = document.createElement('a');
-  if (type === 'audio' && m.audio_b64) {
-    a.href = 'data:audio/mpeg;base64,' + m.audio_b64;
-    a.download = `music_${Date.now()}.mp3`;
-  } else if (type === 'video' && m.video_b64) {
-    a.href = 'data:video/mp4;base64,' + m.video_b64;
-    a.download = `music_${Date.now()}.mp4`;
-  }
-  a.click();
+  const params = {prompt: finalPrompt, model};
+  if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
+  TaskManager.create('music', params);
 }
 
 // ── Section Toggle ────────────────────────────────────────

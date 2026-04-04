@@ -199,6 +199,31 @@ MODEL_TRUTH_FILE = ROOT_DIR / "state" / "model-truth.json"
 container_groups: dict[int, str] = {}  # num -> group name (e.g. "pro", "was")
 group_defs: list[str] = []  # defined group names, created by user
 group_round_robin: dict[str, int] = {}  # group -> round robin index
+
+# ── Generation Task System ───────────────────────────────────────────────
+
+from dataclasses import dataclass, field as dc_field
+
+@dataclass
+class GenerationTask:
+    task_id: str
+    task_type: str  # "image" | "video" | "music"
+    status: str = "pending"  # pending | running | success | failed | cancelled
+    events: asyncio.Queue = dc_field(default_factory=asyncio.Queue)
+    result: dict | None = None
+    error: str | None = None
+    created_at: float = dc_field(default_factory=time.time)
+    cancelled: bool = False
+
+_generation_tasks: dict[str, GenerationTask] = {}
+_TASK_TTL = 600  # cleanup completed tasks after 10 min
+
+def _cleanup_old_tasks():
+    now = time.time()
+    expired = [tid for tid, t in _generation_tasks.items()
+               if t.status in ("success", "failed", "cancelled") and now - t.created_at > _TASK_TTL]
+    for tid in expired:
+        del _generation_tasks[tid]
 _models_cache: list[dict] = []
 _models_cache_time: float = 0
 MODELS_CACHE_TTL = 300  # seconds
@@ -930,6 +955,227 @@ def _build_music_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
     new_body = json.dumps(body_json).encode("utf-8")
     headers["content-length"] = str(len(new_body))
     return body_json, new_body, headers
+
+
+# ── Generation Task Endpoints ────────────────────────────────────────────
+
+@app.post("/v1/tasks/create", dependencies=[Depends(verify_auth)])
+async def create_generation_task(request: Request):
+    """Submit a generation task. Returns task_id immediately."""
+    body = await request.body()
+    body_json = json.loads(body)
+    task_type = body_json.pop("task_type", "image")
+    if task_type not in ("image", "video", "music"):
+        raise HTTPException(400, f"Invalid task_type: {task_type}")
+
+    task_id = str(_uuid.uuid4())[:8]
+    task = GenerationTask(task_id=task_id, task_type=task_type)
+    _generation_tasks[task_id] = task
+    _cleanup_old_tasks()
+
+    asyncio.create_task(_run_generation_task(task, body_json, dict(request.headers)))
+    return JSONResponse({"task_id": task_id})
+
+
+@app.get("/v1/tasks/{task_id}/stream", dependencies=[Depends(verify_auth)])
+async def stream_task_status(task_id: str):
+    """SSE stream of task status events."""
+    task = _generation_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    async def event_generator():
+        while True:
+            try:
+                event = await asyncio.wait_for(task.events.get(), timeout=300)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("final"):
+                    break
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'timeout', 'final': True})}\n\n"
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/v1/tasks/{task_id}/cancel", dependencies=[Depends(verify_auth)])
+async def cancel_generation_task(task_id: str):
+    """Cancel a running task."""
+    task = _generation_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    task.cancelled = True
+    return JSONResponse({"status": "cancelled"})
+
+
+async def _run_generation_task(task: GenerationTask, body_json: dict, headers: dict):
+    """Background worker: run generation with retries, emitting SSE events."""
+    task.status = "running"
+    headers.pop("host", None)
+    if API_KEY:
+        headers["authorization"] = f"Bearer {API_KEY}"
+
+    # Determine path and apply prompt builders
+    path_map = {"image": "images/generations", "video": "videos/generations", "music": "music/generations"}
+    path = path_map[task.task_type]
+    is_image_req = task.task_type in ("image", "video")
+
+    # Apply prompt builders
+    if task.task_type == "image":
+        body_json, body, headers = _build_image_prompt(body_json, headers)
+    elif task.task_type == "video":
+        body_json, body, headers = _build_video_prompt(body_json, headers)
+    elif task.task_type == "music":
+        body_json, body, headers = _build_music_prompt(body_json, headers)
+    else:
+        body = json.dumps(body_json).encode("utf-8")
+
+    # Parse group routing
+    target_group = None
+    model = body_json.get("model", "")
+    if model:
+        target_group, real_model = parse_group_from_model(model)
+        if target_group:
+            body_json["model"] = real_model
+            body = json.dumps(body_json).encode("utf-8")
+            headers["content-length"] = str(len(body))
+
+    # Count available containers
+    if target_group:
+        pool_available = sum(1 for n, g in container_groups.items()
+                             if g == target_group and n in containers and containers[n].available
+                             and (not is_image_req or not containers[n].img_blocked))
+    else:
+        pool_available = sum(1 for n, c in containers.items() if c.available
+                             and n not in container_groups
+                             and (not is_image_req or not c.img_blocked))
+        if pool_available == 0:
+            pool_available = sum(1 for c in containers.values() if c.available
+                                 and (not is_image_req or not c.img_blocked))
+
+    retries = min(MAX_RETRIES, pool_available)
+    if retries == 0:
+        task.status = "failed"
+        task.error = "没有可用容器"
+        await task.events.put({"type": "failed", "error": task.error, "final": True})
+        return
+
+    await task.events.put({"type": "start", "retries_available": retries, "task_type": task.task_type})
+
+    # Timeouts per type
+    timeout_map = {"image": 180.0, "video": 330.0, "music": 120.0}
+    read_timeout = timeout_map.get(task.task_type, 300.0)
+
+    last_error = ""
+    for attempt in range(retries):
+        if task.cancelled:
+            task.status = "cancelled"
+            await task.events.put({"type": "cancelled", "final": True})
+            return
+
+        c = get_next_available(target_group, is_image=is_image_req)
+        if not c:
+            break
+
+        container_label = account_names.get(c.num, f"容器{c.num}")
+        await task.events.put({
+            "type": "trying", "attempt": attempt + 1,
+            "container": container_label, "container_num": c.num,
+        })
+
+        target_url = f"{c.url}/v1/{path}"
+        c.total_requests += 1
+        c.busy = True
+
+        try:
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0)
+            )
+            try:
+                req = client.build_request("POST", target_url, content=body, headers=headers)
+                resp = await client.send(req, stream=False)
+
+                if resp.status_code >= 500 or resp.status_code == 422:
+                    error_body = resp.text[:200]
+                    c.busy = False
+                    c.error_count += 1
+                    c.last_error = error_body
+                    last_error = error_body
+                    await task.events.put({
+                        "type": "retry", "attempt": attempt + 1,
+                        "container": container_label, "error": error_body[:100],
+                    })
+                    # Image blocking detection
+                    if is_image_req and resp.status_code == 500:
+                        lower_err = error_body.lower()
+                        if any(kw in lower_err for kw in ("blocked", "safety", "policy", "restricted", "not available")):
+                            c.img_blocked = True
+                    continue
+
+                # Success
+                c.busy = False
+                c.error_count = 0
+                c.last_error = ""
+                c.cooldown_until = 0
+                if task.task_type in ("image", "video"):
+                    c.image_requests += 1
+                else:
+                    c.chat_requests += 1
+
+                resp_json = resp.json()
+
+                # Capture session affinity for images
+                if task.task_type == "image":
+                    sid = resp_json.get("session_id")
+                    if sid:
+                        _session_routes[sid] = (c.num, time.time())
+
+                task.status = "success"
+                task.result = resp_json
+                await task.events.put({
+                    "type": "success", "container": container_label,
+                    "result": resp_json, "final": True,
+                })
+                return
+
+            finally:
+                await client.aclose()
+
+        except Exception as e:
+            c.busy = False
+            error_msg = str(e)[:200] or f"{type(e).__name__}"
+            error_lower = error_msg.lower()
+            c.total_errors += 1
+            c.error_count += 1
+            c.last_error = error_msg
+            last_error = error_msg
+
+            await task.events.put({
+                "type": "retry", "attempt": attempt + 1,
+                "container": container_label, "error": error_msg[:100],
+            })
+
+            # Cooldown logic (same as proxy)
+            if "timeout" in error_lower or "timed out" in error_lower:
+                c.cooldown_until = time.time() + 60
+            elif "tls" in error_lower or "ssl" in error_lower:
+                c.cooldown_until = time.time() + 60 * min(c.error_count, 5)
+            elif is_image_req and any(kw in error_lower for kw in ("blocked", "safety", "policy")):
+                c.img_blocked = True
+            elif is_auth_error(error_msg):
+                c.needs_cookie = True
+                c.healthy = False
+            else:
+                c.cooldown_until = time.time() + 30 * min(c.error_count, 4)
+            continue
+
+    task.status = "failed"
+    task.error = last_error or "所有容器都失败了"
+    await task.events.put({"type": "failed", "error": task.error, "final": True})
 
 
 @app.get("/v1/research", dependencies=[Depends(verify_auth)])
