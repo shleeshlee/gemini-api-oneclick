@@ -1,6 +1,6 @@
 # 🎀 Gemini API OneClick
 
-一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、图片/视频生成与编辑，一个端口搞定。
+一键部署 Gemini API 多账号智能网关 — 自动轮询、分组路由、图片/视频/音乐生成与编辑、Deep Research，一个端口搞定。
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE) [![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](https://github.com/shleeshlee/gemini-api-oneclick/releases)
 
@@ -52,9 +52,12 @@ bash scripts/install.sh
 
 - 🎨 **图片生成** — OpenAI 兼容端点，30+ 内置风格模板
 - 🎬 **视频生成** — Veo 视频生成，支持图片/视频作为输入素材
-- ✏️ **素材编辑** — 上传图片或视频，用自然语言描述修改内容
-- 🔍 **风格解析** — AI 分析图片/视频的视觉风格，保存为可复用模板
-- ✨ **提示词优化** — AI 自动优化生成提示词
+- 🎵 **音乐生成** — Lyria 音乐生成，返回 MP3 + MP4 音乐视频
+- 🔬 **Deep Research** — 深度研究，异步任务模式，自动提取来源引用
+- ✏️ **多模态编辑** — 上传图片/视频/音频，转换为任意格式（图→视频、视频→配乐等）
+- 🔍 **风格解析** — AI 分析素材的视觉/音频风格，保存为可复用模板
+- ✨ **提示词优化** — 按目标（图片/视频/音乐）分别优化提示词
+- 📋 **并行任务** — 多任务同时生成，每个任务独立 tab，实时显示容器调度过程
 - 🖼️ **项目图库** — 保存、管理、拖拽编辑生成的图片
 - 🎥 **项目视频库** — 保存、播放、下载生成的视频
 
@@ -107,6 +110,11 @@ bash scripts/install.sh
 | `POST /v1/chat/completions` | 聊天（OpenAI 兼容，支持流式） |
 | `POST /v1/images/generations` | 图片生成/编辑（支持风格/质量/素材上传） |
 | `POST /v1/videos/generations` | 视频生成（支持文本/图片/视频输入） |
+| `POST /v1/music/generations` | 音乐生成（Lyria，返回 MP3 + MP4） |
+| `POST /v1/tasks/create` | 创建并行生成任务，立即返回 task_id |
+| `GET /v1/tasks/{id}/stream` | SSE 流式获取任务状态和结果 |
+| `POST /v1/research` | 启动 Deep Research，返回 task_id |
+| `GET /v1/research/{id}` | 查询研究进度和结果 |
 | `GET /v1/models` | 可用模型列表 |
 | `GET /` | 管理面板 + 创作工作室 |
 
@@ -125,10 +133,10 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 
 ## 超时与容错
 
-| 层级 | 生图 | 生视频 | 生文 |
-|------|------|--------|------|
-| 容器内部 | 300s | 300s | 300s |
-| Gateway | 180s | 330s | 300s |
+| 层级 | 生图 | 生视频 | 生音乐 | 生文 | Deep Research |
+|------|------|--------|--------|------|---------------|
+| 容器内部 | 300s | 300s | 300s | 300s | 异步任务 |
+| Gateway | 180s | 330s | 120s | 300s | 60s（返回 task_id） |
 | 客户端建议 | ≥120s | ≥360s | ≥120s |
 
 ## 常用命令
