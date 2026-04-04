@@ -285,6 +285,45 @@ def _extract_candidate_text(candidate_data: list[Any]) -> str:
     return re.sub(r"http://googleusercontent\.com/\w+/\d+\n*", "", text)
 
 
+def _extract_research_sources(refs_data: Any) -> list[dict]:
+    """Extract source URLs and titles from Deep Research immersive [30][0][5] data."""
+    if not isinstance(refs_data, list):
+        return []
+
+    sources = []
+    seen_urls: set[str] = set()
+
+    for section in refs_data:
+        if not isinstance(section, dict):
+            continue
+        citations = section.get("44", [])
+        if not isinstance(citations, list):
+            continue
+        for cite_group in citations:
+            if not isinstance(cite_group, list) or len(cite_group) < 2:
+                continue
+            cite_nums = get_nested_value(cite_group, [0, 0], "")
+            entries = cite_group[1] if isinstance(cite_group[1], list) else []
+            for entry in entries:
+                if not isinstance(entry, list):
+                    continue
+                source_data = get_nested_value(entry, [3, 0])
+                if not isinstance(source_data, list) or len(source_data) < 3:
+                    continue
+                url = source_data[1] if isinstance(source_data[1], str) else ""
+                title = source_data[2] if isinstance(source_data[2], str) else ""
+                # Skip favicon URLs and duplicates
+                if url and "gstatic.com/faviconV2" not in url and url not in seen_urls:
+                    seen_urls.add(url)
+                    sources.append({
+                        "citation": cite_nums,
+                        "url": url,
+                        "title": title,
+                    })
+
+    return sources
+
+
 class GeminiClient(GemMixin, ResearchMixin):
     """
     Async client interface for gemini.google.com using curl_cffi.
@@ -1670,14 +1709,17 @@ class GeminiClient(GemMixin, ResearchMixin):
                     # Standard text path
                     text = get_nested_value(inner, [1, 0], "")
 
-                    # Deep Research immersive result: stored at [30][0][4]
+                    # Deep Research immersive result
                     immersive_text = get_nested_value(inner, [30, 0, 4])
+                    sources = []
                     if isinstance(immersive_text, str) and len(immersive_text) > len(text or ""):
                         text = immersive_text
+                        # Extract sources from [30][0][5]
+                        sources = _extract_research_sources(get_nested_value(inner, [30, 0, 5]))
 
                     if text:
                         output_candidates.append(
-                            Candidate(rcid=rcid, text=text)
+                            Candidate(rcid=rcid, text=text, sources=sources)
                         )
 
                 if output_candidates:

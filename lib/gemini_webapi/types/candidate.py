@@ -36,6 +36,7 @@ class Candidate(BaseModel):
     generated_images: list[GeneratedImage] = Field(default_factory=list)
     generated_videos: list[GeneratedVideo] = Field(default_factory=list)
     deep_research_plan: DeepResearchPlan | None = None
+    sources: list[dict] = Field(default_factory=list)
 
     def __str__(self):
         return self.text

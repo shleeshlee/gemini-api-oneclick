@@ -988,9 +988,17 @@ async def _run_research_background(slot_num: int, client, prompt: str, poll_inte
             "steps": result.plan.steps,
             "eta_text": result.plan.eta_text,
         }
+        # Extract sources from the final output
+        sources = []
+        if result.final_output and result.final_output.candidates:
+            for c in result.final_output.candidates:
+                if c.sources:
+                    sources = c.sources
+                    break
+        task["sources"] = sources
         task["finished"] = True
         task["finished_at"] = int(time.time())
-        logger.info("Slot %d research [%s] finished. done=%s text_len=%d", slot_num, task_id[:8], result.done, len(result.text))
+        logger.info("Slot %d research [%s] finished. done=%s text_len=%d sources=%d", slot_num, task_id[:8], result.done, len(result.text), len(sources))
 
     except Exception as e:
         task["finished"] = True
@@ -1026,6 +1034,7 @@ async def slot_deep_research(
             "plan": None,
             "statuses": [],
             "last_state": "starting",
+            "sources": [],
             "error": None,
         }
 
@@ -1071,8 +1080,9 @@ async def get_research_status(
         "last_state": task["last_state"],
         "plan": task["plan"],
         "statuses_count": len(task["statuses"]),
-        "statuses": task["statuses"][-5:],  # last 5 statuses
+        "statuses": task["statuses"][-5:],
         "text": task["text"],
+        "sources": task.get("sources", []),
         "error": task["error"],
     }
 
