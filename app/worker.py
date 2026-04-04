@@ -982,18 +982,13 @@ async def slot_music_generation(
         logger.info("Slot %d music: '%s'", num, request.prompt[:200])
         slot_log(num, f"Music: {request.prompt[:60]}")
 
-        # Music uses default model (not BASIC_FLASH like image/video)
-        # Lyria needs the account's default model to work
         model = None
         if request.model:
-            model, model_trace = resolve_model_for_chat(request.model, client)
+            model, model_trace = resolve_model_for_media(request.model)
             trace_headers = build_model_trace_headers(model_trace, "music")
 
         tracer = RawCaptureTracer()
-        kwargs: dict[str, Any] = {}
-        if model:
-            kwargs["model"] = model
-        gemini_response = await client.generate_content(request.prompt, tracer=tracer, **kwargs)
+        gemini_response = await client.generate_content(request.prompt, tracer=tracer, model=model)
 
         if not gemini_response.media:
             raise HTTPException(
