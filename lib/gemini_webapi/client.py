@@ -1394,7 +1394,7 @@ class GeminiClient(GemMixin, ResearchMixin):
             try:
                 dump_dir = Path("/tmp/gemini_debug")
                 dump_dir.mkdir(exist_ok=True)
-                dump_file = dump_dir / f"candidate_{index}_{rcid}.json"
+                dump_file = dump_dir / f"candidate_{index}_{rcid}_{int(time.time()*1000)}.json"
                 dump_file.write_bytes(json.dumps(candidate_data, default=str, option=json.OPT_INDENT_2))
                 logger.info(f"[RAW_CANDIDATE] dumped to {dump_file}")
             except Exception as e:
@@ -1414,9 +1414,11 @@ class GeminiClient(GemMixin, ResearchMixin):
             candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs
         )
 
-        # Parse music/audio data from [12][86]
+        # Parse music/audio data — try [12][0][87] first, fallback to [12][86]
         generated_media: list[GeneratedMedia] = []
-        media_data = get_nested_value(candidate_data, [12, 86], [])
+        media_data = get_nested_value(candidate_data, [12, 0, 87], None)
+        if media_data is None:
+            media_data = get_nested_value(candidate_data, [12, 86], None)
         if media_data:
             mp3_url = ""
             mp3_thumb = ""
