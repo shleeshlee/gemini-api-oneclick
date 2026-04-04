@@ -800,27 +800,49 @@ body::before {
                 <div id="editSessionInfo" style="display:none;font-size:0.72rem;color:var(--success);text-align:center;margin-top:0.2rem">🔗 编辑会话进行中 — 继续输入指令修改图片</div>
               </div>
             </div>
-            <input type="file" id="imgFileInput" accept="image/*,video/*" style="display:none" onchange="handleImageSelect(this)">
+            <input type="file" id="imgFileInput" accept="image/*,video/*,audio/*" style="display:none" onchange="handleImageSelect(this)">
           </div>
-          <!-- Right: Action buttons, fixed width, top-aligned compact -->
+          <!-- Right: Action buttons — switch between Create and Edit menus -->
           <div id="imgBtnCol" style="flex:0 0 120px;display:flex;flex-direction:column;gap:0.4rem">
-            <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
-            <button class="btn btn-primary" id="imgEditBtn" onclick="doImgEdit()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">✏️ 编辑图片</button>
-            <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入图库</button>
-            <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除</button>
-            <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消请求</button>
-            <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
-            <div style="position:relative">
-              <button class="btn btn-ghost" id="imgOptBtn" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
-              <div id="optBubbles" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);display:none;gap:0.3rem;z-index:10">
-                <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
-                <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
-                <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
+            <!-- ═══ Create menu (no material) ═══ -->
+            <div id="menuCreate">
+              <div style="font-size:0.68rem;color:var(--text-light);text-align:center;margin-bottom:0.3rem;font-weight:600">✨ 创作</div>
+              <div style="display:flex;flex-direction:column;gap:0.4rem">
+                <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
+                <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
+                <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
+                <div style="position:relative">
+                  <button class="btn btn-ghost" id="imgOptBtn" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+                  <div id="optBubbles" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);gap:0.3rem;z-index:10">
+                    <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
+                    <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
+                    <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
+                  </div>
+                </div>
               </div>
             </div>
-            <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
-            <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
-            <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
+            <!-- ═══ Edit menu (has material) ═══ -->
+            <div id="menuEdit" style="display:none">
+              <div style="font-size:0.68rem;color:var(--text-light);text-align:center;margin-bottom:0.3rem;font-weight:600">✏️ 编辑 · 转换</div>
+              <div style="display:flex;flex-direction:column;gap:0.4rem">
+                <button class="btn btn-primary" onclick="doEditTo('image')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 → 图片</button>
+                <button class="btn btn-primary" onclick="doEditTo('video')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 → 视频</button>
+                <button class="btn btn-primary" onclick="doEditTo('music')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 → 音乐</button>
+                <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
+                <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
+                <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入</button>
+                <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除素材</button>
+                <div style="position:relative">
+                  <button class="btn btn-ghost" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+                  <div id="optBubblesEdit" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);gap:0.3rem;z-index:10">
+                    <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
+                    <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
+                    <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消</button>
           </div>
         </div>
       </div>
@@ -1802,23 +1824,18 @@ function updateImgGroupSelect() {
 function showOptBubbles() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  // If has media, auto-detect target
-  if (uploadedImageB64) {
-    const target = uploadedMediaType === 'audio' ? 'music' : uploadedMediaType === 'video' ? 'video' : 'image';
-    doOptimize(target);
-    return;
-  }
-  // Show bubbles
-  const el = document.getElementById('optBubbles');
-  el.style.display = 'flex';
-  // Re-trigger animation
-  el.querySelectorAll('.opt-bubble').forEach(b => { b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; });
-  // Auto-hide after 4s
+  // Show bubbles in whichever menu is active
+  const els = [document.getElementById('optBubbles'), document.getElementById('optBubblesEdit')];
+  els.forEach(el => {
+    if (!el) return;
+    el.style.display = 'flex';
+    el.querySelectorAll('.opt-bubble').forEach(b => { b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; });
+  });
   clearTimeout(window._optBubbleTimer);
-  window._optBubbleTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+  window._optBubbleTimer = setTimeout(() => { els.forEach(el => { if (el) el.style.display = 'none'; }); }, 4000);
 }
 function doOptimize(target) {
-  document.getElementById('optBubbles').style.display = 'none';
+  ['optBubbles','optBubblesEdit'].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
   optimizePrompt(target);
 }
 
@@ -2114,6 +2131,7 @@ function setEditImage(b64, info) {
   document.getElementById('imgUploadEmpty').style.display = 'none';
   document.getElementById('editSessionInfo').style.display = 'none';
   document.getElementById('imgFileInfo').innerHTML = info || '';
+  switchStudioMenu();
   // Scroll to edit area
   document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
@@ -2206,11 +2224,20 @@ function clearUploadImage() {
   updateButtonsForMediaType();
 }
 function updateButtonsForMediaType() {
-  const isVid = uploadedMediaType === 'video';
-  const isAud = uploadedMediaType === 'audio';
-  document.getElementById('analyzeBtn').innerHTML = '🔍 解析风格';
-  document.getElementById('imgEditBtn').innerHTML = '✏️ 编辑';
-  document.getElementById('saveMediaBtn').innerHTML = '💾 存入';
+  switchStudioMenu();
+}
+function switchStudioMenu() {
+  const hasMaterial = !!uploadedImageB64;
+  document.getElementById('menuCreate').style.display = hasMaterial ? 'none' : '';
+  document.getElementById('menuEdit').style.display = hasMaterial ? '' : 'none';
+}
+function doEditTo(target) {
+  if (!uploadedImageB64) { toast('请先上传素材', 'err'); return; }
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请输入编辑指令', 'err'); return; }
+  if (target === 'image') doImgEdit();
+  else if (target === 'video') doVidGen();
+  else if (target === 'music') doMusicGen();
 }
 
 // Load gallery image into edit zone
