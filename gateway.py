@@ -358,6 +358,10 @@ def get_next_available(group: str | None = None, is_image: bool = False) -> Cont
         nums = sorted(n for n in containers if containers[n].available
                        and n not in container_groups
                        and (not is_image or not containers[n].img_blocked))
+        # Fallback: if no ungrouped containers, use all available
+        if not nums:
+            nums = sorted(n for n in containers if containers[n].available
+                           and (not is_image or not containers[n].img_blocked))
 
     if not nums:
         return None
@@ -1015,9 +1019,13 @@ async def proxy(request: Request, path: str):
                              if g == target_group and n in containers and containers[n].available
                              and (not is_image_req or not containers[n].img_blocked))
     else:
+        # First try ungrouped containers, fallback to all available
         pool_available = sum(1 for n, c in containers.items() if c.available
                              and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
+        if pool_available == 0:
+            pool_available = sum(1 for c in containers.values() if c.available
+                                 and (not is_image_req or not c.img_blocked))
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
