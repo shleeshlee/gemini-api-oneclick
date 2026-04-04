@@ -360,6 +360,19 @@ body::before {
 }
 .batch-bar .info { color: var(--text-muted); flex: 1; }
 
+/* Optimize prompt bubbles */
+.opt-bubble {
+  width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--border);
+  background: var(--surface); font-size: 1rem; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.opt-bubble:hover { transform: scale(1.15); border-color: var(--primary); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+@keyframes bubblePop {
+  0% { opacity: 0; transform: scale(0.3); }
+  70% { transform: scale(1.1); }
+  100% { opacity: 1; transform: scale(1); }
+}
 /* Image Studio chips */
 .img-chip {
   padding: 0.22rem 0.5rem; border: 1.5px solid var(--border); border-radius: 14px;
@@ -726,10 +739,22 @@ body::before {
         <div id="negPresets" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem"></div>
         <input type="text" id="imgNeg" placeholder="自定义排除内容" style="width:100%;margin-top:0.4rem;padding:0.4rem 0.8rem;border:2px solid var(--border);border-radius:var(--radius-sm);font-family:'Outfit',sans-serif;font-size:0.82rem">
       </details>
-      <!-- Style: presets (scrollable single row) -->
+      <!-- Style: three panels with toggle buttons -->
       <div style="margin-bottom:0.6rem">
-        <div class="studio-label" style="margin-bottom:0.3rem">风格</div>
-        <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.3rem;padding-bottom:0.3rem"></div>
+        <div style="display:flex;gap:0.3rem;margin-bottom:0.4rem">
+          <button class="style-tab-btn" id="styleTabImg" onclick="toggleStylePanel('img')" style="flex:1;padding:0.35rem 0;font-size:0.78rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;background:var(--surface);transition:all 0.2s">🎨 图片风格</button>
+          <button class="style-tab-btn" id="styleTabVid" onclick="toggleStylePanel('vid')" style="flex:1;padding:0.35rem 0;font-size:0.78rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;background:var(--surface);transition:all 0.2s">🎬 视频风格</button>
+          <button class="style-tab-btn" id="styleTabMusic" onclick="toggleStylePanel('music')" style="flex:1;padding:0.35rem 0;font-size:0.78rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;background:var(--surface);transition:all 0.2s">🎵 音乐风格</button>
+        </div>
+        <div id="stylePanelImg" style="display:none">
+          <div id="imgStyles" style="display:flex;flex-wrap:wrap;gap:0.3rem;padding-bottom:0.3rem"></div>
+        </div>
+        <div id="stylePanelVid" style="display:none">
+          <div id="vidStyles" style="display:flex;flex-wrap:wrap;gap:0.3rem;padding-bottom:0.3rem"></div>
+        </div>
+        <div id="stylePanelMusic" style="display:none">
+          <div id="musicStyles" style="display:flex;flex-wrap:wrap;gap:0.3rem;padding-bottom:0.3rem"></div>
+        </div>
       </div>
       <!-- Custom templates (compact inline) -->
       <div id="styleTemplateZone" style="margin-bottom:0.6rem;display:none">
@@ -785,7 +810,14 @@ body::before {
             <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除</button>
             <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消请求</button>
             <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
-            <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+            <div style="position:relative">
+              <button class="btn btn-ghost" id="imgOptBtn" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+              <div id="optBubbles" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);display:none;gap:0.3rem;z-index:10">
+                <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
+                <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
+                <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
+              </div>
+            </div>
             <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
             <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
             <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
@@ -1591,7 +1623,30 @@ const IMG_RATIOS = [
   {id:'1792x1024',label:'3:2',icon:'▬'},
   {id:'1024x1792',label:'2:3',icon:'▮'},
 ];
-let imgSelectedStyle = 'none', imgSelectedRatio = '1024x1024';
+const VID_STYLES = [
+  {id:'none',label:'无风格',icon:'🎯'},
+  {id:'Cinematic',label:'电影感',icon:'🎬'},{id:'Documentary',label:'纪录片',icon:'📹'},
+  {id:'Slow Motion',label:'慢动作',icon:'🐌'},{id:'Timelapse',label:'延时',icon:'⏩'},
+  {id:'Animation',label:'动画',icon:'🎞️'},{id:'Drone Shot',label:'航拍',icon:'🚁'},
+  {id:'First Person',label:'第一人称',icon:'👁️'},{id:'Tracking Shot',label:'跟踪镜头',icon:'🎯'},
+  {id:'Stop Motion',label:'定格动画',icon:'🧱'},{id:'VHS',label:'VHS复古',icon:'📼'},
+  {id:'Film Noir',label:'黑色电影',icon:'🌑'},{id:'Music Video',label:'MV',icon:'🎤'},
+  {id:'Commercial',label:'广告',icon:'📺'},{id:'Vlog',label:'Vlog',icon:'📱'},
+];
+const MUSIC_STYLES = [
+  {id:'none',label:'无风格',icon:'🎯'},
+  {id:'Pop',label:'流行',icon:'🎤'},{id:'Rock',label:'摇滚',icon:'🎸'},
+  {id:'Classical',label:'古典',icon:'🎻'},{id:'Jazz',label:'爵士',icon:'🎷'},
+  {id:'Electronic',label:'电子',icon:'🎹'},{id:'R&B',label:'R&B',icon:'🎙️'},
+  {id:'Folk',label:'民谣',icon:'🪕'},{id:'Hip Hop',label:'嘻哈',icon:'🎧'},
+  {id:'Lo-fi',label:'Lo-fi',icon:'☕'},{id:'Ambient',label:'氛围',icon:'🌊'},
+  {id:'Country',label:'乡村',icon:'🤠'},{id:'Reggae',label:'雷鬼',icon:'🌴'},
+  {id:'Bossa Nova',label:'波萨诺瓦',icon:'🌺'},{id:'Orchestral',label:'管弦乐',icon:'🎼'},
+  {id:'Acoustic',label:'原声',icon:'🪗'},{id:'Synthwave',label:'合成器浪潮',icon:'🌆'},
+  {id:'Lullaby',label:'摇篮曲',icon:'🌙'},{id:'Cinematic Score',label:'电影配乐',icon:'🎬'},
+];
+let imgSelectedStyle = 'none', vidSelectedStyle = 'none', musicSelectedStyle = 'none';
+let imgSelectedRatio = '1024x1024';
 const NEG_PRESETS = [
   {id:'bold lines, thick lines, messy lines',label:'粗线条'},
   {id:'comic book style bold outlining',label:'漫画描边'},
@@ -1610,13 +1665,39 @@ let vidGalleryItems = [];
 let vidGalleryOffset = 0;
 const VID_GALLERY_PAGE = 12;
 
+let activeStylePanel = null;
 function renderStyleChips() {
-  const stylesEl = document.getElementById('imgStyles');
-  if (!stylesEl) return;
-  const styles = IMG_STYLES;
-  stylesEl.innerHTML = styles.map(s =>
+  const imgEl = document.getElementById('imgStyles');
+  if (imgEl) imgEl.innerHTML = IMG_STYLES.map(s =>
     `<button class="img-chip${s.id===imgSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectImgStyle('${s.id}')">${s.icon} ${s.label}</button>`
   ).join('');
+  const vidEl = document.getElementById('vidStyles');
+  if (vidEl) vidEl.innerHTML = VID_STYLES.map(s =>
+    `<button class="img-chip${s.id===vidSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectVidStyle('${s.id}')">${s.icon} ${s.label}</button>`
+  ).join('');
+  const musicEl = document.getElementById('musicStyles');
+  if (musicEl) musicEl.innerHTML = MUSIC_STYLES.map(s =>
+    `<button class="img-chip${s.id===musicSelectedStyle?' active':''}" data-style="${s.id}" onclick="selectMusicStyle('${s.id}')">${s.icon} ${s.label}</button>`
+  ).join('');
+}
+function toggleStylePanel(type) {
+  const panels = {img:'stylePanelImg', vid:'stylePanelVid', music:'stylePanelMusic'};
+  const btns = {img:'styleTabImg', vid:'styleTabVid', music:'styleTabMusic'};
+  if (activeStylePanel === type) {
+    // Close current
+    document.getElementById(panels[type]).style.display = 'none';
+    document.getElementById(btns[type]).style.background = 'var(--surface)';
+    document.getElementById(btns[type]).style.borderColor = 'var(--border)';
+    activeStylePanel = null;
+    return;
+  }
+  // Close all, open target
+  for (const [k, id] of Object.entries(panels)) {
+    document.getElementById(id).style.display = k === type ? '' : 'none';
+    document.getElementById(btns[k]).style.background = k === type ? 'var(--accent-light)' : 'var(--surface)';
+    document.getElementById(btns[k]).style.borderColor = k === type ? 'var(--accent)' : 'var(--border)';
+  }
+  activeStylePanel = type;
 }
 
 function initImgStudio() {
@@ -1701,6 +1782,14 @@ function selectImgStyle(id) {
   imgSelectedStyle = id;
   document.querySelectorAll('#imgStyles .img-chip').forEach(el => el.classList.toggle('active', el.dataset.style === id));
 }
+function selectVidStyle(id) {
+  vidSelectedStyle = id;
+  document.querySelectorAll('#vidStyles .img-chip').forEach(el => el.classList.toggle('active', el.dataset.style === id));
+}
+function selectMusicStyle(id) {
+  musicSelectedStyle = id;
+  document.querySelectorAll('#musicStyles .img-chip').forEach(el => el.classList.toggle('active', el.dataset.style === id));
+}
 function selectImgRatio(id) {
   imgSelectedRatio = id;
   document.querySelectorAll('#imgRatios .img-chip').forEach(el => el.classList.toggle('active', el.dataset.ratio === id));
@@ -1710,34 +1799,72 @@ function updateImgGroupSelect() {
   // Legacy — now using model selector instead
 }
 
-async function optimizePrompt() {
+function showOptBubbles() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
+  // If has media, auto-detect target
+  if (uploadedImageB64) {
+    const target = uploadedMediaType === 'audio' ? 'music' : uploadedMediaType === 'video' ? 'video' : 'image';
+    doOptimize(target);
+    return;
+  }
+  // Show bubbles
+  const el = document.getElementById('optBubbles');
+  el.style.display = 'flex';
+  // Re-trigger animation
+  el.querySelectorAll('.opt-bubble').forEach(b => { b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; });
+  // Auto-hide after 4s
+  clearTimeout(window._optBubbleTimer);
+  window._optBubbleTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+function doOptimize(target) {
+  document.getElementById('optBubbles').style.display = 'none';
+  optimizePrompt(target);
+}
+
+async function optimizePrompt(target = 'image') {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) { toast('请先输入提示词', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('imgOptBtn');
 
   btn.disabled = true; btn.textContent = '✨ 优化中...';
 
-  // Fetch style preset constraints if a style is selected
-  let styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
-  if (styleId) {
-    try {
-      const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
-      if (presetResp.ok) {
-        const presetData = await presetResp.json();
-        const preset = presetData.presets?.[styleId];
-        if (preset) {
-          styleConstraint = (preset.prefix || '') + '. ' + (preset.suffix || '');
+  let userPrompt;
+  if (target === 'video') {
+    const styleId = vidSelectedStyle !== 'none' ? vidSelectedStyle : '';
+    const styleLine = styleId ? `\n视频风格：${styleId}` : '';
+    userPrompt = `请你作为专业 AI 视频提示词工程师。
+
+我的视频构思是：${prompt}${styleLine}
+
+请帮我扩写成一段适合视频生成模型的英文提示词，包含镜头运动、光影氛围、节奏节拍等描述。直接输出最终英文提示词。`;
+  } else if (target === 'music') {
+    const styleId = musicSelectedStyle !== 'none' ? musicSelectedStyle : '';
+    const styleLine = styleId ? `\n音乐风格：${styleId}` : '';
+    userPrompt = `请你作为专业 AI 音乐提示词工程师。
+
+我的音乐构思是：${prompt}${styleLine}
+
+请帮我扩写成一段适合音乐生成模型的英文提示词，包含曲风、情绪、乐器、节奏、人声风格等描述。直接输出最终英文提示词。`;
+  } else {
+    const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
+    let styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
+    if (styleId) {
+      try {
+        const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
+        if (presetResp.ok) {
+          const presetData = await presetResp.json();
+          const preset = presetData.presets?.[styleId];
+          if (preset) {
+            styleConstraint = (preset.prefix || '') + '. ' + (preset.suffix || '');
+          }
         }
-      }
-    } catch(e) { /* use default constraint */ }
-  }
-
-  const neg = getNegativePrompt();
-  const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
-
-  const userPrompt = `请你作为我的专业 AI 图像提示词工程师。
+      } catch(e) { /* use default constraint */ }
+    }
+    const neg = getNegativePrompt();
+    const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
+    userPrompt = `请你作为我的专业 AI 图像提示词工程师。
 
 我会给你一个简单的中文画面构思，请你帮我扩写成一段结构严谨、细节丰富、适合生图模型（如 Midjourney 或 具有 Pro 细节还原能力的大模型）的英文提示词。
 
@@ -1746,6 +1873,7 @@ async function optimizePrompt() {
 我需要的特定风格和物理约束是：${styleConstraint}${negLine}
 
 请直接输出最终的英文提示词，并用逗号分隔各个核心元素。`;
+  }
 
   try {
     const resp = await fetch('/v1/chat/completions', {
@@ -1761,8 +1889,11 @@ async function optimizePrompt() {
     if (optimized) {
       document.getElementById('imgPrompt').value = optimized;
       // Style already fused into optimized prompt — switch to no-style to avoid double injection
-      selectImgStyle('none');
-      toast('提示词已优化，风格已融入', 'ok');
+      if (target === 'image') selectImgStyle('none');
+      else if (target === 'video') selectVidStyle('none');
+      else if (target === 'music') selectMusicStyle('none');
+      const targetLabel = {image:'生图',video:'视频',music:'音乐'}[target] || '';
+      toast(`${targetLabel}提示词已优化`, 'ok');
     } else {
       toast('优化失败：空响应', 'err');
     }
@@ -2077,9 +2208,9 @@ function clearUploadImage() {
 function updateButtonsForMediaType() {
   const isVid = uploadedMediaType === 'video';
   const isAud = uploadedMediaType === 'audio';
-  document.getElementById('analyzeBtn').innerHTML = isVid ? '🔍 解析视频' : isAud ? '🔍 解析音频' : '🔍 解析风格';
-  document.getElementById('imgEditBtn').innerHTML = isVid ? '✏️ 编辑视频' : isAud ? '🎵 编辑音乐' : '✏️ 编辑图片';
-  document.getElementById('saveMediaBtn').innerHTML = isVid ? '💾 存入视频库' : isAud ? '💾 存入音频库' : '💾 存入图库';
+  document.getElementById('analyzeBtn').innerHTML = '🔍 解析风格';
+  document.getElementById('imgEditBtn').innerHTML = '✏️ 编辑';
+  document.getElementById('saveMediaBtn').innerHTML = '💾 存入';
 }
 
 // Load gallery image into edit zone
@@ -2924,7 +3055,9 @@ async function doVidGen() {
   grid.innerHTML = '<div class="gallery-empty">🎬 视频生成中...</div>';
 
   const start = Date.now();
-  const body = { prompt, model };
+  let finalPrompt = prompt;
+  if (vidSelectedStyle && vidSelectedStyle !== 'none') finalPrompt = `${vidSelectedStyle} style. ${prompt}`;
+  const body = { prompt: finalPrompt, model };
   if (hasImg) body.image = uploadedImageB64; body.media_type = uploadedMediaType;
   try {
     const resp = await fetch('/v1/videos/generations', {
@@ -2951,6 +3084,7 @@ async function doVidGen() {
         if (v.b64_json) {
           html += `<button class="img-action-btn dl" onclick="downloadVideo(${i})" style="flex:1">⬇ 下载</button>`;
           html += `<button class="img-action-btn save" onclick="saveVideoToGallery(${i})" style="flex:1">💾 保存</button>`;
+          html += `<button class="img-action-btn" onclick="useVideoAsMaterial(${i})" style="flex:1;border-color:var(--accent);color:#92610E">🔄 继续</button>`;
         }
         html += '</div>';
         if (data.text) {
@@ -2998,7 +3132,9 @@ async function doMusicGen() {
   grid.innerHTML = '<div class="gallery-empty">🎵 音乐生成中...</div>';
 
   const start = Date.now();
-  const body = { prompt, model };
+  let finalPrompt = prompt;
+  if (musicSelectedStyle && musicSelectedStyle !== 'none') finalPrompt = `${musicSelectedStyle} style. ${prompt}`;
+  const body = { prompt: finalPrompt, model };
   if (hasImg) { body.image = uploadedImageB64; body.media_type = uploadedMediaType; }
   try {
     const resp = await fetch('/v1/music/generations', {
@@ -3033,6 +3169,7 @@ async function doMusicGen() {
       html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
       if (m.audio_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('audio')" style="flex:1">⬇ MP3</button>`;
       if (m.video_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('video')" style="flex:1">⬇ MP4</button>`;
+      if (m.audio_b64) html += `<button class="img-action-btn" onclick="useMusicAsMaterial()" style="flex:1;border-color:var(--accent);color:#92610E">🔄 继续</button>`;
       html += '</div>';
 
       // Text response
@@ -3050,6 +3187,58 @@ async function doMusicGen() {
     grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
   }
   btn.disabled = false; btn.innerHTML = '🎵 生成音乐';
+}
+
+function useVideoAsMaterial(idx) {
+  const v = window._vidResults?.[idx];
+  if (!v?.b64_json) return;
+  uploadedImageB64 = v.b64_json;
+  uploadedMediaType = 'video';
+  editSessionId = null;
+  const preview = document.getElementById('imgUploadPreview');
+  const img = document.getElementById('imgPreviewImg');
+  img.style.display = 'none';
+  const oldVid = document.getElementById('vidPreviewPlayer');
+  if (oldVid) oldVid.remove();
+  const oldAud = document.getElementById('audPreviewPlayer');
+  if (oldAud) oldAud.remove();
+  const vid = document.createElement('video');
+  vid.id = 'vidPreviewPlayer'; vid.controls = true;
+  vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
+  vid.src = 'data:video/mp4;base64,' + v.b64_json;
+  img.parentNode.insertBefore(vid, img);
+  preview.style.display = '';
+  document.getElementById('imgUploadEmpty').style.display = 'none';
+  document.getElementById('imgFileInfo').innerHTML = '从生成结果加载 · 🎬 视频';
+  updateButtonsForMediaType();
+  document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('视频已加载到素材区', 'ok');
+}
+
+function useMusicAsMaterial() {
+  const m = window._musicResult;
+  if (!m?.audio_b64) return;
+  uploadedImageB64 = m.audio_b64;
+  uploadedMediaType = 'audio';
+  editSessionId = null;
+  const preview = document.getElementById('imgUploadPreview');
+  const img = document.getElementById('imgPreviewImg');
+  img.style.display = 'none';
+  const oldVid = document.getElementById('vidPreviewPlayer');
+  if (oldVid) oldVid.remove();
+  const oldAud = document.getElementById('audPreviewPlayer');
+  if (oldAud) oldAud.remove();
+  const aud = document.createElement('audio');
+  aud.id = 'audPreviewPlayer'; aud.controls = true;
+  aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
+  aud.src = 'data:audio/mpeg;base64,' + m.audio_b64;
+  img.parentNode.insertBefore(aud, img);
+  preview.style.display = '';
+  document.getElementById('imgUploadEmpty').style.display = 'none';
+  document.getElementById('imgFileInfo').innerHTML = '从生成结果加载 · 🎵 音频';
+  updateButtonsForMediaType();
+  document.getElementById('imgUploadArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('音频已加载到素材区', 'ok');
 }
 
 function downloadMusic(type) {
