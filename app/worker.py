@@ -988,7 +988,13 @@ async def slot_music_generation(
             trace_headers = build_model_trace_headers(model_trace, "music")
 
         tracer = RawCaptureTracer()
-        gemini_response = await client.generate_content(request.prompt, tracer=tracer, model=model)
+        # Music generation can take long — extend watchdog to avoid zombie detection
+        orig_watchdog = client.watchdog_timeout
+        client.watchdog_timeout = 300
+        try:
+            gemini_response = await client.generate_content(request.prompt, tracer=tracer, model=model)
+        finally:
+            client.watchdog_timeout = orig_watchdog
 
         if not gemini_response.media:
             raise HTTPException(
