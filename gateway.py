@@ -944,13 +944,13 @@ def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
 
 
 def _build_music_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, dict]:
-    """Prepend music generation instruction to prompt."""
+    """Build music generation prompt. Use Chinese to clearly signal music intent."""
     prompt = body_json.get("prompt", "")
     has_media = bool(body_json.get("image"))
     if has_media:
-        final_prompt = f"Create music based on this input. Instructions: {prompt}"
+        final_prompt = f"根据这个素材创作一段音乐。要求：{prompt}"
     else:
-        final_prompt = f"Create a song: {prompt}"
+        final_prompt = f"创作一段音乐：{prompt}"
     body_json["prompt"] = final_prompt
     new_body = json.dumps(body_json).encode("utf-8")
     headers["content-length"] = str(len(new_body))
