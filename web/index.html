@@ -800,10 +800,6 @@ body::before {
           <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0">生图</span>
           <select id="imgModel" class="img-select img-model-sel" style="font-size:0.78rem"></select>
           <select id="imgQuality" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;flex-shrink:0"><option value="standard">标准</option><option value="hd">HD</option></select>
-          <div style="display:flex;align-items:center;gap:0.2rem;flex-shrink:0">
-            <span style="font-size:0.75rem;color:var(--text-muted)">×</span>
-            <select id="imgCount" class="img-select" style="padding:0.3rem 0.5rem;font-size:0.78rem;min-width:36px"><option value="1">1</option><option value="2">2</option><option value="4">4</option></select>
-          </div>
         </div>
       </div>
       <!-- Row 3: Image area (upload + edit) left, buttons right -->
@@ -1935,18 +1931,18 @@ function doImgGen() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) return;
   const quality = document.getElementById('imgQuality').value;
-  const n = parseInt(document.getElementById('imgCount').value) || 1;
   const neg = getNegativePrompt();
   const style = imgSelectedStyle === 'none' ? null : imgSelectedStyle;
   const size = imgSelectedRatio;
   const model = document.getElementById('imgModel').value;
   const dimsPrompt = getActiveDimsPrompt();
   const finalPrompt = dimsPrompt ? prompt + '. ' + dimsPrompt : prompt;
-  const params = {prompt: finalPrompt, model, n, size, quality};
+  const params = {prompt: finalPrompt, model, size, quality};
   if (style) params.style = style;
   if (neg) params.negative_prompt = neg;
   if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
   TaskManager.create('image', params);
+  toast('🎨 图片生成已提交', 'ok');
 }
 
 function openImageFull(dataUrl) {
@@ -3317,6 +3313,7 @@ function doVidGen() {
   const params = {prompt: finalPrompt, model};
   if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
   TaskManager.create('video', params);
+  toast('🎬 视频生成已提交', 'ok');
 }
 
 function doMusicGen() {
@@ -3328,6 +3325,7 @@ function doMusicGen() {
   const params = {prompt: finalPrompt, model};
   if (uploadedImageB64) { params.image = uploadedImageB64; params.media_type = uploadedMediaType; }
   TaskManager.create('music', params);
+  toast('🎵 音乐生成已提交', 'ok');
 }
 
 // ── Section Toggle ────────────────────────────────────────
