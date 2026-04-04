@@ -835,14 +835,7 @@ body::before {
                 <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
                 <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
                 <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
-                <div style="position:relative">
-                  <button class="btn btn-ghost" id="imgOptBtn" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
-                  <div id="optBubbles" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);gap:0.3rem;z-index:10">
-                    <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
-                    <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
-                    <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
-                  </div>
-                </div>
+                <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
               </div>
             </div>
             <!-- ═══ Edit menu (has material) ═══ -->
@@ -856,14 +849,7 @@ body::before {
                 <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
                 <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入</button>
                 <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除素材</button>
-                <div style="position:relative">
-                  <button class="btn btn-ghost" onclick="showOptBubbles()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
-                  <div id="optBubblesEdit" style="display:none;position:absolute;right:110%;top:50%;transform:translateY(-50%);gap:0.3rem;z-index:10">
-                    <button onclick="doOptimize('image')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0s both">🎨</button>
-                    <button onclick="doOptimize('video')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.1s both">🎬</button>
-                    <button onclick="doOptimize('music')" class="opt-bubble" style="animation:bubblePop 0.3s ease-out 0.2s both">🎵</button>
-                  </div>
-                </div>
+                <button class="btn btn-ghost" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
               </div>
             </div>
             <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消</button>
@@ -1670,6 +1656,42 @@ const MUSIC_STYLES = [
   {id:'Acoustic',label:'原声',icon:'🪗'},{id:'Synthwave',label:'合成器浪潮',icon:'🌆'},
   {id:'Lullaby',label:'摇篮曲',icon:'🌙'},{id:'Cinematic Score',label:'电影配乐',icon:'🎬'},
 ];
+const VID_STYLE_PROMPTS = {
+  "Cinematic": "Cinematic film style with dramatic Rembrandt lighting, anamorphic lens flares, shallow depth of field, smooth dolly and crane camera movements, rich color grading with teal-orange contrast, atmospheric haze, 24fps filmic motion blur",
+  "Documentary": "Documentary style with handheld camera naturalism, available-light photography, observational long takes, steady tracking shots following subjects, muted desaturated color palette, shallow focus rack between subjects, intimate close-ups",
+  "Slow Motion": "High-speed slow motion capture at 120-240fps, ultra-smooth temporal interpolation, every micro-detail visible — splashing droplets, fabric ripples, hair strands in wind, dramatic impact moments stretched in time, sharp focus throughout",
+  "Timelapse": "Timelapse photography with smooth long-exposure motion trails, clouds streaming across sky, shadows rotating with sun, city lights flickering on at dusk, fluid crowd movement, hyperlapse forward-tracking through environments",
+  "Animation": "Stylized animation with fluid character motion, exaggerated squash-and-stretch, smooth interpolated keyframes, vibrant saturated color palette, clean vector-like edges, expressive timing and spacing",
+  "Drone Shot": "Aerial drone cinematography with smooth sweeping reveals, slow ascending crane-up over landscapes, bird's-eye top-down perspective, parallax depth between foreground and background layers, golden hour warm lighting, vast scale establishing shots",
+  "First Person": "First-person POV camera with natural head-bob motion, hands and objects entering frame edge, immersive spatial depth, reactive camera movement, environmental awareness, subtle breathing sway",
+  "Tracking Shot": "Smooth lateral tracking shot on dolly rails, subject moving parallel to camera, background sliding in parallax layers, steady unwavering horizontal movement, medium shot framing, continuous unbroken take",
+  "Stop Motion": "Stop-motion animation aesthetic with visible frame-by-frame stepping, tactile real-world material textures — clay, felt, paper, wire armatures — slight jitter between poses, handcrafted miniature sets, warm practical lighting",
+  "VHS": "VHS retro video aesthetic with analog scan lines, chromatic aberration bleeding, tracking glitches and static noise, washed-out warm color shift, soft fuzzy resolution, tape-worn distortion artifacts, 4:3 aspect ratio feel",
+  "Film Noir": "Film noir style with high-contrast black and white, deep angular shadows cast through venetian blinds, low-key dramatic side lighting, rain-slicked reflective streets, smoke wisps catching light beams, Dutch angle tension",
+  "Music Video": "Music video style with rhythmic edit cuts synced to beat, dynamic whip pans and zoom punches, vibrant neon color washes, strobe and party lighting effects, high-energy performance framing, stylized lens effects",
+  "Commercial": "Commercial advertising style with pristine product lighting, smooth controlled camera glide, hero-shot dramatic reveals, clean bright high-key lighting, shallow DOF isolating subject, polished color-corrected finish",
+  "Vlog": "Vlog casual style with front-facing handheld camera, natural daylight, eye-contact direct-to-camera framing, slightly shaky authentic movement, warm approachable color tone, jump-cut pacing",
+};
+const MUSIC_STYLE_PROMPTS = {
+  "Pop": "Polished pop production with catchy melodic hooks, four-on-the-floor beat at 110-130 BPM, layered synth pads and bright piano, crisp snare and punchy kick, radio-ready vocal mixing with subtle auto-tune shimmer, uplifting major key progressions",
+  "Rock": "Driving rock energy with distorted electric guitars, powerful drum kit with crashing cymbals, thumping bass guitar groove, raw aggressive vocal delivery, 120-140 BPM, dynamic verse-chorus-bridge structure, stadium-filling wall of sound",
+  "Classical": "Classical orchestral composition with full symphony — strings section legato, woodwind countermelodies, brass fanfares, timpani accents, expressive dynamic range from pianissimo to fortissimo, formal sonata or rondo structure, concert hall reverb",
+  "Jazz": "Sophisticated jazz arrangement with walking upright bass, brush-swept ride cymbal swing, Rhodes electric piano comping, mellow saxophone solo lines, complex extended chord voicings — 7ths, 9ths, 13ths, relaxed swing feel at 120-160 BPM, smoky intimate club atmosphere",
+  "Electronic": "Electronic dance production with synthesizer-driven sound design, pulsing sidechain-compressed bass, crisp hi-hat patterns, layered arpeggiated sequences, build-ups with rising white noise sweeps into euphoric drops, 125-140 BPM, wide stereo spatial effects",
+  "R&B": "Smooth R&B production with lush neo-soul harmonies, mellow Rhodes and warm pad textures, tight programmed drums with lazy swing, silky vocal runs and falsetto, deep sub-bass, sensual intimate mood, 70-100 BPM slow groove",
+  "Folk": "Organic folk arrangement with fingerpicked acoustic guitar, warm upright bass or cello, gentle hand percussion — cajón, tambourine, harmonica accents, honest heartfelt vocal storytelling, natural room ambience, 90-120 BPM",
+  "Hip Hop": "Hard-hitting hip-hop beat with deep 808 sub-bass, crisp trap hi-hats with rolls, punchy layered snare, atmospheric dark pads, vocal chops as melodic hooks, 80-95 BPM half-time feel, spacious mix with heavy low end",
+  "Lo-fi": "Lo-fi chill production with vinyl crackle and tape hiss textures, dusty detuned piano chords, mellow jazz guitar samples, lazy boom-bap drum loop with side-chain wobble, warm saturated low-pass filter, nostalgic melancholic mood, 70-85 BPM",
+  "Ambient": "Atmospheric ambient soundscape with evolving synthesizer pads, shimmering granular textures, deep reverb-drenched spaces, subtle field recordings — rain, wind, distant bells, no percussion pulse, weightless floating sensation, wide stereo panorama, meditative calm",
+  "Country": "Country music with bright steel-string acoustic guitar strumming, pedal steel guitar slides, fiddle melodies, steady two-step or train-beat drum pattern, twangy vocal delivery, storytelling narrative lyrics, honky-tonk piano fills, 100-130 BPM",
+  "Reggae": "Reggae rhythm with offbeat guitar skank, deep dub bass drops, rim-shot one-drop drum pattern on beat three, organ bubble comping, brass stabs, echo and reverb delay throws, laid-back island groove at 70-90 BPM, warm sun-drenched feel",
+  "Bossa Nova": "Bossa nova with nylon-string classical guitar syncopated picking pattern, gentle brushed snare, soft upright bass walking line, breathy intimate vocal, subtle flute or saxophone, sophisticated jazz harmony with samba rhythm, 120-140 BPM, elegant understated groove",
+  "Orchestral": "Epic orchestral score with full symphony and choir, soaring string legato melodies, thundering brass fanfares, dramatic timpani and percussion crescendos, harp arpeggios, French horn noble themes, massive dynamic swells from whisper to fortissimo, cinematic scale and grandeur",
+  "Acoustic": "Pure acoustic arrangement with warm steel-string guitar, gentle fingerpicking patterns, natural room reverb, minimal production — voice and instrument only, intimate close-mic recording, organic imperfections preserved, heartfelt stripped-down simplicity",
+  "Synthwave": "Retro synthwave with analog polysynth pads, pulsing arpeggiator sequences, gated reverb snare, driving four-on-the-floor kick, neon-lit 1980s aesthetic, Moog bass growl, vocoder processed vocals, 100-118 BPM, nostalgic futuristic atmosphere",
+  "Lullaby": "Gentle lullaby with music box melody, soft celesta tinkling, delicate harp glissandos, warm cello sustain, whisper-soft female vocal, minimal sparse arrangement, soothing repetitive melodic pattern, very slow tempo 60-70 BPM, peaceful sleepy dreamlike quality",
+  "Cinematic Score": "Cinematic film score with dramatic orchestral swells, emotional piano themes, tension-building string tremolo, heroic brass crescendos, hybrid electronic-orchestral layers, taiko drum impacts, ethereal choir, sweeping dynamic arc from intimate to epic",
+};
 let imgSelectedStyle = 'none', vidSelectedStyle = 'none', musicSelectedStyle = 'none';
 let imgSelectedRatio = '1024x1024';
 const NEG_PRESETS = [
@@ -1824,25 +1846,7 @@ function updateImgGroupSelect() {
   // Legacy — now using model selector instead
 }
 
-function showOptBubbles() {
-  const prompt = document.getElementById('imgPrompt').value.trim();
-  if (!prompt) { toast('请先输入提示词', 'err'); return; }
-  // Show bubbles in whichever menu is active
-  const els = [document.getElementById('optBubbles'), document.getElementById('optBubblesEdit')];
-  els.forEach(el => {
-    if (!el) return;
-    el.style.display = 'flex';
-    el.querySelectorAll('.opt-bubble').forEach(b => { b.style.animation = 'none'; b.offsetHeight; b.style.animation = ''; });
-  });
-  clearTimeout(window._optBubbleTimer);
-  window._optBubbleTimer = setTimeout(() => { els.forEach(el => { if (el) el.style.display = 'none'; }); }, 4000);
-}
-function doOptimize(target) {
-  ['optBubbles','optBubblesEdit'].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
-  optimizePrompt(target);
-}
-
-async function optimizePrompt(target = 'image') {
+async function optimizePrompt() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
@@ -1850,26 +1854,12 @@ async function optimizePrompt(target = 'image') {
 
   btn.disabled = true; btn.textContent = '✨ 优化中...';
 
-  let userPrompt;
-  if (target === 'video') {
-    const styleId = vidSelectedStyle !== 'none' ? vidSelectedStyle : '';
-    const styleLine = styleId ? `\n视频风格：${styleId}` : '';
-    userPrompt = `请你作为专业 AI 视频提示词工程师。
-
-我的视频构思是：${prompt}${styleLine}
-
-请帮我扩写成一段适合视频生成模型的英文提示词，包含镜头运动、光影氛围、节奏节拍等描述。直接输出最终英文提示词。`;
-  } else if (target === 'music') {
-    const styleId = musicSelectedStyle !== 'none' ? musicSelectedStyle : '';
-    const styleLine = styleId ? `\n音乐风格：${styleId}` : '';
-    userPrompt = `请你作为专业 AI 音乐提示词工程师。
-
-我的音乐构思是：${prompt}${styleLine}
-
-请帮我扩写成一段适合音乐生成模型的英文提示词，包含曲风、情绪、乐器、节奏、人声风格等描述。直接输出最终英文提示词。`;
-  } else {
+  // Collect style from whichever panel is active
+  const activeTarget = activeStylePanel || 'img';
+  let styleConstraint = '';
+  if (activeTarget === 'img') {
     const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
-    let styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
+    styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
     if (styleId) {
       try {
         const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
@@ -1882,18 +1872,33 @@ async function optimizePrompt(target = 'image') {
         }
       } catch(e) { /* use default constraint */ }
     }
-    const neg = getNegativePrompt();
-    const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
-    userPrompt = `请你作为我的专业 AI 图像提示词工程师。
+  } else if (activeTarget === 'vid') {
+    const styleId = vidSelectedStyle !== 'none' ? vidSelectedStyle : '';
+    if (styleId && VID_STYLE_PROMPTS[styleId]) {
+      styleConstraint = VID_STYLE_PROMPTS[styleId];
+    } else if (styleId) {
+      styleConstraint = `${styleId} style video.`;
+    }
+  } else if (activeTarget === 'music') {
+    const styleId = musicSelectedStyle !== 'none' ? musicSelectedStyle : '';
+    if (styleId && MUSIC_STYLE_PROMPTS[styleId]) {
+      styleConstraint = MUSIC_STYLE_PROMPTS[styleId];
+    } else if (styleId) {
+      styleConstraint = `${styleId} style music.`;
+    }
+  }
+  if (!styleConstraint) styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
+  const neg = getNegativePrompt();
+  const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
+  const userPrompt = `请你作为我的专业 AI 提示词工程师。
 
-我会给你一个简单的中文画面构思，请你帮我扩写成一段结构严谨、细节丰富、适合生图模型（如 Midjourney 或 具有 Pro 细节还原能力的大模型）的英文提示词。
+我会给你一个简单的中文构思，请你帮我扩写成一段结构严谨、细节丰富的英文提示词。
 
 我的基本构思是：${prompt}
 
 我需要的特定风格和物理约束是：${styleConstraint}${negLine}
 
 请直接输出最终的英文提示词，并用逗号分隔各个核心元素。`;
-  }
 
   try {
     const resp = await fetch('/v1/chat/completions', {
@@ -1905,15 +1910,19 @@ async function optimizePrompt(target = 'image') {
     });
     const data = await resp.json();
     let optimized = data.choices?.[0]?.message?.content || '';
-    optimized = optimized.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    optimized = optimized.replace(/<think>[\s\S]*?<\/think>/g, '')
+      .replace(/\*\*/g, '').replace(/^#+\s.*/gm, '').replace(/^---$/gm, '')
+      .replace(/^[>\-\*]\s/gm, '').replace(/^```[\s\S]*?```$/gm, '')
+      .replace(/^(Prompt|提示词|Here|这是|以下|根据|为您|已为).*$/gm, '')
+      .replace(/!\[.*?\]\(.*?\)/g, '')
+      .replace(/\n{2,}/g, '\n').trim();
     if (optimized) {
       document.getElementById('imgPrompt').value = optimized;
       // Style already fused into optimized prompt — switch to no-style to avoid double injection
-      if (target === 'image') selectImgStyle('none');
-      else if (target === 'video') selectVidStyle('none');
-      else if (target === 'music') selectMusicStyle('none');
-      const targetLabel = {image:'生图',video:'视频',music:'音乐'}[target] || '';
-      toast(`${targetLabel}提示词已优化`, 'ok');
+      if (activeTarget === 'img') selectImgStyle('none');
+      else if (activeTarget === 'vid') selectVidStyle('none');
+      else if (activeTarget === 'music') selectMusicStyle('none');
+      toast('提示词已优化', 'ok');
     } else {
       toast('优化失败：空响应', 'err');
     }
