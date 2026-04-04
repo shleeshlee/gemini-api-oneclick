@@ -2592,10 +2592,8 @@ async function doImgEdit(btn) {
       tempImages = data.data.map((d, i) => ({
         b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: '', size: '', quality: '', channel: model, index: i
       }));
-      // Show edit result as a toast (result is in the preview area)
+      renderTempGrid();
       toast(`编辑完成 · ${tempImages.length} 张`, 'ok');
-
-      toast('编辑完成', 'ok');
     } else {
       const errMsg = data.detail || data.error?.message || '编辑失败';
       toast(errMsg, 'err');
