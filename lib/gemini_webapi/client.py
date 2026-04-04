@@ -840,6 +840,7 @@ class GeminiClient(GemMixin, ResearchMixin):
 
             streaming_state = _StreamingState()
             output: ModelOutput | None = None
+            accumulated_media: list[GeneratedMedia] = []
             async for output in self._generate(  # noqa: B007 - output used after loop
                 prompt=prompt,
                 req_file_data=file_data,
@@ -852,10 +853,24 @@ class GeminiClient(GemMixin, ResearchMixin):
                 tracer=tracer,
                 **kwargs,
             ):
-                pass  # Consume generator to get final output; 'output' is used after loop
+                # Music/audio data appears in intermediate frames, not the final one.
+                # Accumulate across frames so we don't lose it.
+                if output and output.candidates:
+                    for c in output.candidates:
+                        if c.generated_media:
+                            accumulated_media.extend(c.generated_media)
 
             if output is None:
                 raise GeminiError("Failed to generate contents. No output data found in response.")
+
+            # Merge accumulated music/audio media into final output
+            if accumulated_media and output.candidates:
+                final_media = output.candidates[output.chosen].generated_media
+                seen_urls = {m.mp3_url for m in final_media if m.mp3_url}
+                for m in accumulated_media:
+                    if m.mp3_url not in seen_urls:
+                        final_media.append(m)
+                        seen_urls.add(m.mp3_url)
 
             # Check if video generation is pending and poll for completion
             if output.candidates:
