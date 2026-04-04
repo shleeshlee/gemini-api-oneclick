@@ -835,7 +835,7 @@ body::before {
                 <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
                 <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
                 <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
-                <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+                <button class="btn btn-ghost" onclick="optimizePrompt(this)" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
               </div>
             </div>
             <!-- ═══ Edit menu (has material) ═══ -->
@@ -849,7 +849,7 @@ body::before {
                 <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
                 <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入</button>
                 <button class="btn btn-ghost" onclick="clearUploadImage()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--danger-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--danger);text-align:center">✕ 移除素材</button>
-                <button class="btn btn-ghost" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
+                <button class="btn btn-ghost" onclick="optimizePrompt(this)" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
               </div>
             </div>
             <button class="btn btn-ghost" id="imgCancelBtn" onclick="cancelImgRequest()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--text-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--text-muted);text-align:center;display:none">⏹ 取消</button>
@@ -1846,13 +1846,12 @@ function updateImgGroupSelect() {
   // Legacy — now using model selector instead
 }
 
-async function optimizePrompt() {
+async function optimizePrompt(btn) {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
-  const btn = document.getElementById('imgOptBtn');
 
-  btn.disabled = true; btn.textContent = '✨ 优化中...';
+  if (btn) { btn.disabled = true; btn.textContent = '✨ 优化中...'; }
 
   // Collect style from whichever panel is active
   const activeTarget = activeStylePanel || 'img';
@@ -1929,7 +1928,7 @@ async function optimizePrompt() {
   } catch(e) {
     toast('优化失败: ' + e.message, 'err');
   }
-  btn.disabled = false; btn.textContent = '✨ 优化提示词';
+  if (btn) { btn.disabled = false; btn.textContent = '✨ 优化提示词'; }
 }
 
 function doImgGen() {
