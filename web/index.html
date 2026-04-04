@@ -838,9 +838,9 @@ body::before {
             <div id="menuEdit" style="display:none">
               <div style="font-size:0.68rem;color:var(--text-light);text-align:center;margin-bottom:0.3rem;font-weight:600">✏️ 编辑 · 转换</div>
               <div style="display:flex;flex-direction:column;gap:0.4rem">
-                <button class="btn btn-primary" onclick="doEditTo('image')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 → 图片</button>
-                <button class="btn btn-primary" onclick="doEditTo('video')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 → 视频</button>
-                <button class="btn btn-primary" onclick="doEditTo('music')" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 → 音乐</button>
+                <button class="btn btn-primary" onclick="doEditTo('image',this)" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 → 图片</button>
+                <button class="btn btn-primary" onclick="doEditTo('video',this)" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 → 视频</button>
+                <button class="btn btn-primary" onclick="doEditTo('music',this)" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 → 音乐</button>
                 <div style="border-top:1px solid var(--border);margin:0.1rem 0"></div>
                 <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeStyle()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--accent-light);border-radius:var(--radius-sm);white-space:nowrap;color:#92610E;background:var(--accent-light);text-align:center">🔍 解析风格</button>
                 <button class="btn btn-ghost" id="saveMediaBtn" onclick="saveUploadedToGallery()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--success-light);border-radius:var(--radius-sm);white-space:nowrap;color:var(--success);text-align:center">💾 存入</button>
@@ -2489,11 +2489,11 @@ function switchStudioMenu() {
   document.getElementById('menuCreate').style.display = hasMaterial ? 'none' : '';
   document.getElementById('menuEdit').style.display = hasMaterial ? '' : 'none';
 }
-function doEditTo(target) {
+function doEditTo(target, btn) {
   if (!uploadedImageB64) { toast('请先上传素材', 'err'); return; }
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请输入编辑指令', 'err'); return; }
-  if (target === 'image') doImgEdit();
+  if (target === 'image') doImgEdit(btn);
   else if (target === 'video') doVidGen();
   else if (target === 'music') doMusicGen();
 }
@@ -2543,7 +2543,7 @@ async function saveUploadedToGallery() {
 }
 
 // Edit image/video/audio: route to appropriate endpoint based on media type
-async function doImgEdit() {
+async function doImgEdit(btn) {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请输入编辑指令', 'err'); return; }
   if (!uploadedImageB64) { toast('请先上传素材', 'err'); return; }
@@ -2555,9 +2555,8 @@ async function doImgEdit() {
     return;
   }
 
-  const btn = document.getElementById('imgEditBtn');
   const model = document.getElementById('imgModel').value;
-  btn.disabled = true; btn.innerHTML = '✏️ 编辑中...';
+  if (btn) { btn.disabled = true; btn.innerHTML = '✏️ 编辑中...'; }
   activeAbortController = new AbortController();
   showCancelBtn();
 
@@ -2607,7 +2606,7 @@ async function doImgEdit() {
   }
   activeAbortController = null;
   hideCancelBtn();
-  btn.disabled = false; btn.innerHTML = '✏️ 编辑';
+  if (btn) { btn.disabled = false; btn.innerHTML = '🎨 → 图片'; }
 }
 
 // ── Style Templates ────────────────────────────────────────
