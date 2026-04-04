@@ -930,13 +930,13 @@ def _build_image_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
 
 
 def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, dict]:
-    """Prepend video generation instruction to prompt so Gemini knows the desired output format."""
+    """Build video generation prompt. Keep it short and action-oriented to avoid Gemini misinterpreting as image request."""
     prompt = body_json.get("prompt", "")
     has_media = bool(body_json.get("image"))
     if has_media:
-        final_prompt = f"Generate a video based on this input. Instructions: {prompt}"
+        final_prompt = f"把这个图片做成视频。动作描述：{prompt}"
     else:
-        final_prompt = f"Generate a video: {prompt}"
+        final_prompt = f"生成一段视频：{prompt}"
     body_json["prompt"] = final_prompt
     new_body = json.dumps(body_json).encode("utf-8")
     headers["content-length"] = str(len(new_body))
