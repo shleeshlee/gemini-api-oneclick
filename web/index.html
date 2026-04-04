@@ -759,15 +759,15 @@ body::before {
       </div>
       <!-- Row 3: Image area (upload + edit) left, buttons right -->
       <div>
-        <div class="studio-label" style="margin-bottom:0.3rem">素材（拖拽上传图片/视频）</div>
+        <div class="studio-label" style="margin-bottom:0.3rem">素材（拖拽上传图片/视频/音频）</div>
         <div id="imgEditRow" style="display:flex;gap:1.2rem;align-items:flex-start">
           <!-- Left: Image display + edit zone -->
           <div style="flex:1 1 0;min-width:0">
             <div id="imgUploadArea" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:0.8rem;cursor:pointer;transition:all 0.2s;font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:center" onclick="if(!uploadedImageB64)document.getElementById('imgFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='var(--primary)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="event.preventDefault();this.style.borderColor='var(--border)';handleImageDrop(event)">
               <div id="imgUploadEmpty" style="text-align:center;padding:1rem">
                 <div style="font-size:1.5rem;margin-bottom:0.3rem">🖼️</div>
-                <div>拖拽或点击上传图片/视频</div>
-                <div style="font-size:0.72rem;margin-top:0.2rem">支持从图库拖入 · 图片或视频均可</div>
+                <div>拖拽或点击上传图片/视频/音频</div>
+                <div style="font-size:0.72rem;margin-top:0.2rem">支持从图库拖入 · 图片/视频/音频均可</div>
               </div>
               <div id="imgUploadPreview" style="display:none;width:100%">
                 <img id="imgPreviewImg" style="width:100%;max-height:500px;border-radius:6px;object-fit:contain;display:block">
@@ -1944,7 +1944,7 @@ function downloadAllTemp() {
 
 // ── Image Upload + Edit ───────────────────────────────────
 let uploadedImageB64 = null;
-let uploadedMediaType = 'image'; // 'image' or 'video'
+let uploadedMediaType = 'image'; // 'image', 'video', or 'audio'
 let editSessionId = null;
 let lastGenSessionId = null; // session_id from last generation (for Pro redo)
 let activeAbortController = null;
@@ -1989,21 +1989,47 @@ function setEditImage(b64, info) {
 function readUploadFile(file) {
   const isImage = file.type.startsWith('image/');
   const isVideo = file.type.startsWith('video/');
-  if (!isImage && !isVideo) { toast('请上传图片或视频文件', 'err'); return; }
+  const isAudio = file.type.startsWith('audio/');
+  if (!isImage && !isVideo && !isAudio) { toast('请上传图片、视频或音频文件', 'err'); return; }
   const reader = new FileReader();
   reader.onload = (e) => {
     const b64 = e.target.result.split(',')[1];
     const sizeMB = (file.size / 1024 / 1024).toFixed(2);
-    if (isVideo) {
+    if (isAudio) {
+      uploadedMediaType = 'audio';
+      uploadedImageB64 = b64;
+      editSessionId = null;
+      const preview = document.getElementById('imgUploadPreview');
+      const img = document.getElementById('imgPreviewImg');
+      img.style.display = 'none';
+      // Remove old video/audio preview if exists
+      const oldVid = document.getElementById('vidPreviewPlayer');
+      if (oldVid) oldVid.remove();
+      const oldAud = document.getElementById('audPreviewPlayer');
+      if (oldAud) oldAud.remove();
+      const aud = document.createElement('audio');
+      aud.id = 'audPreviewPlayer';
+      aud.controls = true;
+      aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
+      aud.src = e.target.result;
+      img.parentNode.insertBefore(aud, img);
+      preview.style.display = '';
+      document.getElementById('imgUploadEmpty').style.display = 'none';
+      document.getElementById('editSessionInfo').style.display = 'none';
+      document.getElementById('imgFileInfo').innerHTML = `<b>${esc(file.name)}</b><br>🎵 音频 · ${sizeMB} MB`;
+      updateButtonsForMediaType();
+    } else if (isVideo) {
       uploadedMediaType = 'video';
       uploadedImageB64 = b64;
       editSessionId = null;
       const preview = document.getElementById('imgUploadPreview');
       const img = document.getElementById('imgPreviewImg');
       img.style.display = 'none';
-      // Remove old video preview if exists
+      // Remove old video/audio preview if exists
       const oldVid = document.getElementById('vidPreviewPlayer');
       if (oldVid) oldVid.remove();
+      const oldAud = document.getElementById('audPreviewPlayer');
+      if (oldAud) oldAud.remove();
       const vid = document.createElement('video');
       vid.id = 'vidPreviewPlayer';
       vid.controls = true;
@@ -2019,9 +2045,11 @@ function readUploadFile(file) {
       uploadedMediaType = 'image';
       const tmpImg = new Image();
       tmpImg.onload = () => {
-        // Make sure image preview is visible, remove video preview
+        // Make sure image preview is visible, remove video/audio preview
         const oldVid = document.getElementById('vidPreviewPlayer');
         if (oldVid) oldVid.remove();
+        const oldAud = document.getElementById('audPreviewPlayer');
+        if (oldAud) oldAud.remove();
         document.getElementById('imgPreviewImg').style.display = '';
         setEditImage(b64, `<b>${esc(file.name)}</b><br>${tmpImg.naturalWidth} × ${tmpImg.naturalHeight} · ${sizeMB} MB`);
         updateButtonsForMediaType();
@@ -2042,13 +2070,16 @@ function clearUploadImage() {
   document.getElementById('imgPreviewImg').style.display = '';
   const oldVid = document.getElementById('vidPreviewPlayer');
   if (oldVid) oldVid.remove();
+  const oldAud = document.getElementById('audPreviewPlayer');
+  if (oldAud) oldAud.remove();
   updateButtonsForMediaType();
 }
 function updateButtonsForMediaType() {
   const isVid = uploadedMediaType === 'video';
-  document.getElementById('analyzeBtn').innerHTML = isVid ? '🔍 解析视频' : '🔍 解析风格';
-  document.getElementById('imgEditBtn').innerHTML = isVid ? '✏️ 编辑视频' : '✏️ 编辑图片';
-  document.getElementById('saveMediaBtn').innerHTML = isVid ? '💾 存入视频库' : '💾 存入图库';
+  const isAud = uploadedMediaType === 'audio';
+  document.getElementById('analyzeBtn').innerHTML = isVid ? '🔍 解析视频' : isAud ? '🔍 解析音频' : '🔍 解析风格';
+  document.getElementById('imgEditBtn').innerHTML = isVid ? '✏️ 编辑视频' : isAud ? '🎵 编辑音乐' : '✏️ 编辑图片';
+  document.getElementById('saveMediaBtn').innerHTML = isVid ? '💾 存入视频库' : isAud ? '💾 存入音频库' : '💾 存入图库';
 }
 
 // Load gallery image into edit zone
@@ -2095,11 +2126,18 @@ async function saveUploadedToGallery() {
   } catch(e) { toast('保存失败: ' + e.message, 'err'); }
 }
 
-// Edit image: send image + prompt, continue with session
+// Edit image/video/audio: route to appropriate endpoint based on media type
 async function doImgEdit() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请输入编辑指令', 'err'); return; }
   if (!uploadedImageB64) { toast('请先上传素材', 'err'); return; }
+
+  // Audio editing goes to music endpoint
+  if (uploadedMediaType === 'audio') {
+    document.getElementById('imgPrompt').value = prompt;
+    doMusicGen();
+    return;
+  }
 
   const btn = document.getElementById('imgEditBtn');
   const model = document.getElementById('imgModel').value;
