@@ -1862,44 +1862,27 @@ function updateImgGroupSelect() {
 async function optimizePrompt(btn) {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { toast('请先输入提示词', 'err'); return; }
+  const activeTarget = activeStylePanel || 'img';
+  if (activeTarget !== 'img') { toast('提示词优化仅支持图片模式', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
 
   if (btn) { btn.disabled = true; btn.textContent = '✨ 优化中...'; }
 
-  // Collect style from whichever panel is active
-  const activeTarget = activeStylePanel || 'img';
-  let styleConstraint = '';
-  if (activeTarget === 'img') {
-    const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
-    styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
-    if (styleId) {
-      try {
-        const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
-        if (presetResp.ok) {
-          const presetData = await presetResp.json();
-          const preset = presetData.presets?.[styleId];
-          if (preset) {
-            styleConstraint = (preset.prefix || '') + '. ' + (preset.suffix || '');
-          }
+  // Image-only: collect style constraint
+  const styleId = imgSelectedStyle !== 'none' ? imgSelectedStyle : '';
+  let styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
+  if (styleId) {
+    try {
+      const presetResp = await fetch('/gateway/style-presets', { headers: authHeaders() });
+      if (presetResp.ok) {
+        const presetData = await presetResp.json();
+        const preset = presetData.presets?.[styleId];
+        if (preset) {
+          styleConstraint = (preset.prefix || '') + '. ' + (preset.suffix || '');
         }
-      } catch(e) { /* use default constraint */ }
-    }
-  } else if (activeTarget === 'vid') {
-    const styleId = vidSelectedStyle !== 'none' ? vidSelectedStyle : '';
-    if (styleId && VID_STYLE_PROMPTS[styleId]) {
-      styleConstraint = VID_STYLE_PROMPTS[styleId];
-    } else if (styleId) {
-      styleConstraint = `${styleId} style video.`;
-    }
-  } else if (activeTarget === 'music') {
-    const styleId = musicSelectedStyle !== 'none' ? musicSelectedStyle : '';
-    if (styleId && MUSIC_STYLE_PROMPTS[styleId]) {
-      styleConstraint = MUSIC_STYLE_PROMPTS[styleId];
-    } else if (styleId) {
-      styleConstraint = `${styleId} style music.`;
-    }
+      }
+    } catch(e) { /* use default constraint */ }
   }
-  if (!styleConstraint) styleConstraint = 'extremely detailed, high fidelity detailing, pristine clean edges, smooth color gradients, like novelai quality.';
   const neg = getNegativePrompt();
   const negLine = neg ? `\n\n必须排除的元素：${neg}` : '';
   const userPrompt = `请你作为我的专业 AI 提示词工程师。
@@ -1931,9 +1914,7 @@ async function optimizePrompt(btn) {
     if (optimized) {
       document.getElementById('imgPrompt').value = optimized;
       // Style already fused into optimized prompt — switch to no-style to avoid double injection
-      if (activeTarget === 'img') selectImgStyle('none');
-      else if (activeTarget === 'vid') selectVidStyle('none');
-      else if (activeTarget === 'music') selectMusicStyle('none');
+      selectImgStyle('none');
       toast('提示词已优化', 'ok');
     } else {
       toast('优化失败：空响应', 'err');
@@ -2385,7 +2366,8 @@ const TaskManager = {
       html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)">`;
       html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
       html += `<a class="img-action-btn dl" href="data:image/png;base64,${img.b64_json}" download="img_${Date.now()}_${i}.png" style="flex:1;text-align:center;text-decoration:none">⬇</a>`;
-      html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">📌 素材</button>`;
+      html += `<button class="img-action-btn" onclick="TaskManager._saveImage('${taskId}',${i})" style="flex:1">💾 图库</button>`;
+      html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
       html += `</div></div>`;
     });
     html += '</div>';
@@ -2403,7 +2385,7 @@ const TaskManager = {
       html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
       if (v.b64_json) {
         html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${v.b64_json}" download="video_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ 下载</a>`;
-        html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">📌 素材</button>`;
+        html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
       }
       html += '</div></div>';
     });
@@ -2421,10 +2403,24 @@ const TaskManager = {
     html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
     if (m.audio_b64) html += `<a class="img-action-btn dl" href="data:audio/mpeg;base64,${m.audio_b64}" download="music_${Date.now()}.mp3" style="flex:1;text-align:center;text-decoration:none">⬇ MP3</a>`;
     if (m.video_b64) html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${m.video_b64}" download="music_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ MP4</a>`;
-    if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">📌 素材</button>`;
+    if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">✏️ 编辑</button>`;
     html += '</div></div>';
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
     el.innerHTML = html;
+  },
+
+  async _saveImage(taskId, idx) {
+    const imgs = window[`_taskImgs_${taskId}`];
+    if (!imgs?.[idx]?.b64_json) return;
+    try {
+      const resp = await fetch('/gateway/images/save', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ b64: imgs[idx].b64_json, prompt: '', final_prompt: '', style: '', size: '', quality: '', channel: '' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到图库', 'ok'); loadGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
 
   _useImageAsMaterial(taskId, idx) {
