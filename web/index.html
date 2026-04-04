@@ -2097,8 +2097,15 @@ let editSessionId = null;
 let lastGenSessionId = null; // session_id from last generation (for Pro redo)
 let activeAbortController = null;
 
-function showCancelBtn() { document.getElementById('imgCancelBtn').style.display = ''; }
-function hideCancelBtn() { document.getElementById('imgCancelBtn').style.display = 'none'; }
+function showCancelBtn() {
+  document.getElementById('imgCancelBtn').style.display = '';
+  // Disable all action buttons in both menus
+  document.querySelectorAll('#menuCreate button, #menuEdit button').forEach(b => b.disabled = true);
+}
+function hideCancelBtn() {
+  document.getElementById('imgCancelBtn').style.display = 'none';
+  document.querySelectorAll('#menuCreate button, #menuEdit button').forEach(b => b.disabled = false);
+}
 function cancelImgRequest() {
   if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
   hideCancelBtn();
@@ -3074,6 +3081,7 @@ async function doVidGen() {
   const info = document.getElementById('vidResultInfo');
 
   btn.disabled = true; btn.innerHTML = '🎬 生成中...';
+  showCancelBtn();
   zone.style.display = '';
   const hasImg = !!uploadedImageB64;
   info.textContent = hasImg
@@ -3111,7 +3119,7 @@ async function doVidGen() {
         if (v.b64_json) {
           html += `<button class="img-action-btn dl" onclick="downloadVideo(${i})" style="flex:1">⬇ 下载</button>`;
           html += `<button class="img-action-btn save" onclick="saveVideoToGallery(${i})" style="flex:1">💾 保存</button>`;
-          html += `<button class="img-action-btn" onclick="useVideoAsMaterial(${i})" style="flex:1;border-color:var(--accent);color:#92610E">🔄 继续</button>`;
+          html += `<button class="img-action-btn" onclick="useVideoAsMaterial(${i})" style="flex:1;border-color:var(--accent);color:#92610E">📌 用作素材</button>`;
         }
         html += '</div>';
         if (data.text) {
@@ -3130,6 +3138,7 @@ async function doVidGen() {
     grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
   }
   btn.disabled = false; btn.innerHTML = '🎬 生成视频';
+  hideCancelBtn();
 }
 
 function downloadVideo(idx) {
@@ -3151,6 +3160,7 @@ async function doMusicGen() {
   const info = document.getElementById('musicResultInfo');
 
   btn.disabled = true; btn.innerHTML = '🎵 生成中...';
+  showCancelBtn();
   zone.style.display = '';
   const hasImg = !!uploadedImageB64;
   info.textContent = hasImg
@@ -3196,7 +3206,7 @@ async function doMusicGen() {
       html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
       if (m.audio_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('audio')" style="flex:1">⬇ MP3</button>`;
       if (m.video_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('video')" style="flex:1">⬇ MP4</button>`;
-      if (m.audio_b64) html += `<button class="img-action-btn" onclick="useMusicAsMaterial()" style="flex:1;border-color:var(--accent);color:#92610E">🔄 继续</button>`;
+      if (m.audio_b64) html += `<button class="img-action-btn" onclick="useMusicAsMaterial()" style="flex:1;border-color:var(--accent);color:#92610E">📌 用作素材</button>`;
       html += '</div>';
 
       // Text response
@@ -3214,6 +3224,7 @@ async function doMusicGen() {
     grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
   }
   btn.disabled = false; btn.innerHTML = '🎵 生成音乐';
+  hideCancelBtn();
 }
 
 function useVideoAsMaterial(idx) {
