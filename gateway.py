@@ -914,6 +914,20 @@ def _build_video_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, di
     return body_json, new_body, headers
 
 
+def _build_music_prompt(body_json: dict, headers: dict) -> tuple[dict, bytes, dict]:
+    """Prepend music generation instruction to prompt."""
+    prompt = body_json.get("prompt", "")
+    has_media = bool(body_json.get("image"))
+    if has_media:
+        final_prompt = f"Create music based on this input. Instructions: {prompt}"
+    else:
+        final_prompt = f"Create a song: {prompt}"
+    body_json["prompt"] = final_prompt
+    new_body = json.dumps(body_json).encode("utf-8")
+    headers["content-length"] = str(len(new_body))
+    return body_json, new_body, headers
+
+
 @app.get("/v1/research", dependencies=[Depends(verify_auth)])
 @app.get("/v1/research/{task_id}", dependencies=[Depends(verify_auth)])
 async def proxy_research_query(request: Request, task_id: str = ""):
@@ -968,8 +982,9 @@ async def proxy(request: Request, path: str):
             pass
 
     is_research_req = "research" in path
-    is_media_req = "images" in path or "videos" in path or "music" in path
-    is_image_req = is_media_req  # reuse for img_blocked filtering
+    is_music_req = "music" in path
+    is_media_req = "images" in path or "videos" in path or is_music_req
+    is_image_req = "images" in path or "videos" in path  # img_blocked filtering, music excluded
 
     # Session affinity: route session_id requests to the container that created them
     # Lazy cleanup: purge expired session routes every request (cheap dict scan)
@@ -991,6 +1006,8 @@ async def proxy(request: Request, path: str):
         body_json, body, headers = _build_image_prompt(body_json, headers)
     elif body_json and "videos" in path:
         body_json, body, headers = _build_video_prompt(body_json, headers)
+    elif body_json and is_music_req:
+        body_json, body, headers = _build_music_prompt(body_json, headers)
 
     # Count available containers in target pool
     if target_group:
@@ -1037,6 +1054,8 @@ async def proxy(request: Request, path: str):
                 read_timeout = 330.0
             elif "images" in path:
                 read_timeout = 180.0
+            elif is_music_req:
+                read_timeout = 120.0
             else:
                 read_timeout = 300.0
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
