@@ -2357,9 +2357,14 @@ const TaskManager = {
 
   _renderImageResult(el, data, taskId) {
     if (!data.data?.length) { el.innerHTML = `<div style="color:var(--danger);padding:0.5rem">${esc(data.detail || '未生成图片')}</div>`; return; }
-    // Store for download
+    // Store for download and Pro redo
     window[`_taskImgs_${taskId}`] = data.data;
+    window[`_taskSession_${taskId}`] = data.session_id || null;
+    window[`_taskPrompt_${taskId}`] = data.final_prompt || '';
     let html = `<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem">${data.data.length} 张图片</div>`;
+    if (data.session_id) {
+      html += `<div style="margin-bottom:0.4rem"><button class="img-action-btn pro" onclick="TaskManager._proRedo('${taskId}')" style="font-size:0.76rem">✨ Pro 精修</button></div>`;
+    }
     html += '<div class="img-grid cols-2">';
     data.data.forEach((img, i) => {
       if (!img.b64_json) return;
@@ -2409,6 +2414,18 @@ const TaskManager = {
     html += '</div></div>';
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
     el.innerHTML = html;
+  },
+
+  async _proRedo(taskId) {
+    const sessionId = window[`_taskSession_${taskId}`];
+    if (!sessionId) { toast('无可精修的会话', 'err'); return; }
+    const imgs = window[`_taskImgs_${taskId}`];
+    const prompt = window[`_taskPrompt_${taskId}`] || '';
+    const model = imgs?.[0]?.channel || 'gemini-3.0-flash';
+    // Submit as new task with session_id + use_pro
+    const params = { prompt, session_id: sessionId, use_pro: true, model };
+    TaskManager.create('image', params);
+    toast('✨ Pro 精修已提交', 'ok');
   },
 
   async _saveImage(taskId, idx) {
