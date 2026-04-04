@@ -281,7 +281,7 @@ class ResearchMixin:
         chat = self.start_chat(metadata=list(plan.metadata), cid=plan.cid)
 
         _poll_count = 0
-        _CHAT_CHECK_INTERVAL = 30  # Check chat history every N polls
+        _CHAT_CHECK_INTERVAL = 6  # Check chat history every N polls (~1min at 10s interval)
         while (time.time() - start) < timeout:
             _poll_count += 1
             status = None
@@ -315,14 +315,15 @@ class ResearchMixin:
                 if status.done:
                     break
 
-            # Periodically check chat history as fallback completion detection
+            # Periodically check chat history for completion (status RPC never says "done")
             if plan.cid and _poll_count % _CHAT_CHECK_INTERVAL == 0:
                 try:
                     latest = await self.fetch_latest_chat_response(plan.cid)
                     if latest and latest.text and len(latest.text) > 500:
                         logger.info(
-                            f"Deep research [{plan.research_id}] found result via chat history "
-                            f"(text_len={len(latest.text)}) after {_poll_count} polls"
+                            f"Deep research [{plan.research_id}] completed! "
+                            f"Result retrieved via chat history (text_len={len(latest.text)}) "
+                            f"after {_poll_count} polls"
                         )
                         return DeepResearchResult(
                             plan=plan,

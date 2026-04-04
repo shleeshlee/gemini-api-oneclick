@@ -1610,6 +1610,7 @@ class GeminiClient(GemMixin, ResearchMixin):
     async def fetch_latest_chat_response(self, cid: str) -> ModelOutput | None:
         """
         Fetch the latest model response from an existing chat by reading chat history.
+        Also handles Deep Research immersive results stored at candidate[0][30][0][4].
 
         Parameters
         ----------
@@ -1659,10 +1660,19 @@ class GeminiClient(GemMixin, ResearchMixin):
                     rcid = get_nested_value(candidate_data, [0])
                     if not rcid:
                         continue
+
+                    # Standard text path
                     text = _extract_candidate_text(candidate_data)
-                    output_candidates.append(
-                        Candidate(rcid=rcid, text=text)
-                    )
+
+                    # Deep Research immersive result: stored at [30][0][4]
+                    immersive_text = get_nested_value(candidate_data, [30, 0, 4])
+                    if isinstance(immersive_text, str) and len(immersive_text) > len(text or ""):
+                        text = immersive_text
+
+                    if text:
+                        output_candidates.append(
+                            Candidate(rcid=rcid, text=text)
+                        )
 
                 if output_candidates:
                     metadata_raw = get_nested_value(part_json, [0, 0, 0], [])
