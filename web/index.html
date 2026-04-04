@@ -3395,6 +3395,7 @@ function renderVideoGallery() {
       <video controls style="width:100%;border-radius:6px" src="${src}" preload="metadata"></video>
       <div class="img-card-actions">
         <a class="img-action-btn dl" download="${v.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+        <button class="img-action-btn" onclick="event.stopPropagation();loadVideoToEdit('${v.filename}')" title="用作素材">📌</button>
         <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteVideo('${v.id}')">🗑</button>
       </div>
@@ -3402,6 +3403,34 @@ function renderVideoGallery() {
       <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.2rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
     </div>`;
   }).join('');
+}
+
+async function loadVideoToEdit(filename) {
+  try {
+    const resp = await fetch(`/data/videos/${filename}`);
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const b64 = e.target.result.split(',')[1];
+      uploadedImageB64 = b64;
+      uploadedMediaType = 'video';
+      editSessionId = null;
+      const preview = document.getElementById('imgUploadPreview');
+      const img = document.getElementById('imgPreviewImg'); img.style.display = 'none';
+      const oldVid = document.getElementById('vidPreviewPlayer'); if (oldVid) oldVid.remove();
+      const oldAud = document.getElementById('audPreviewPlayer'); if (oldAud) oldAud.remove();
+      const vid = document.createElement('video'); vid.id = 'vidPreviewPlayer'; vid.controls = true;
+      vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
+      vid.src = e.target.result;
+      img.parentNode.insertBefore(vid, img);
+      preview.style.display = ''; document.getElementById('imgUploadEmpty').style.display = 'none';
+      document.getElementById('imgFileInfo').innerHTML = `从视频库加载 · 🎬 ${filename}`;
+      updateButtonsForMediaType();
+      document.getElementById('imgUploadArea').scrollIntoView({behavior:'smooth',block:'center'});
+      toast('视频已加载到素材区', 'ok');
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) { toast('加载失败: ' + e.message, 'err'); }
 }
 
 async function deleteVideo(vid_id) {
