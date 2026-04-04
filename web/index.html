@@ -360,6 +360,15 @@ body::before {
 }
 .batch-bar .info { color: var(--text-muted); flex: 1; }
 
+/* Result tabs */
+.result-tab {
+  padding: 0.4rem 1rem; font-size: 0.78rem; font-weight: 600; border: none;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s;
+  font-family: 'Outfit', sans-serif;
+}
+.result-tab:hover { color: var(--text); }
+.result-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 /* Optimize prompt bubbles */
 .opt-bubble {
   width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--border);
@@ -848,31 +857,38 @@ body::before {
       </div>
     </div>
 
-    <!-- Zone 2: Temp Images -->
-    <div class="studio-section" id="imgTempZone" style="display:none">
-      <div class="studio-section-title" style="justify-content:space-between">
-        <span>📸 生成结果</span>
-        <div class="batch-bar" style="padding:0;margin:0">
-          <button class="img-action-btn dl" onclick="downloadAllTemp()">⬇ 下载全部</button>
-          <button class="img-action-btn save" onclick="saveAllTemp()">💾 全部保存</button>
-        </div>
+    <!-- Zone 2: Results (tabbed) -->
+    <div class="studio-section" id="resultZone" style="display:none">
+      <div style="display:flex;align-items:center;gap:0;margin-bottom:0.5rem;border-bottom:2px solid var(--border)">
+        <button class="result-tab active" id="resultTabImg" onclick="switchResultTab('img')">🎨 图片</button>
+        <button class="result-tab" id="resultTabVid" onclick="switchResultTab('vid')">🎬 视频</button>
+        <button class="result-tab" id="resultTabMusic" onclick="switchResultTab('music')">🎵 音乐</button>
       </div>
-      <div id="imgTempInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
-      <details id="imgPromptPreview" style="margin-bottom:0.5rem;display:none"><summary style="cursor:pointer;font-size:0.72rem;color:var(--text-light);user-select:none">📝 查看发送的提示词</summary><pre id="imgPromptText" onclick="navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="margin-top:0.3rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.72rem;line-height:1.4;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border:1px solid var(--border);cursor:pointer"></pre></details>
-      <div id="imgTempGrid" class="img-grid cols-2"></div>
-    </div>
-
-    <!-- Zone 2b: Video Results -->
-    <div class="studio-section" id="vidResultZone" style="display:none">
-      <div class="studio-section-title"><span>🎬 视频结果</span></div>
-      <div id="vidResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
-      <div id="vidResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
-    </div>
-
-    <div class="studio-section" id="musicResultZone" style="display:none">
-      <div class="studio-section-title"><span>🎵 音乐结果</span></div>
-      <div id="musicResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
-      <div id="musicResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
+      <!-- Image results -->
+      <div id="resultPanelImg">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">
+          <div id="imgTempInfo" style="font-size:0.78rem;color:var(--text-muted)"></div>
+          <div class="batch-bar" style="padding:0;margin:0">
+            <button class="img-action-btn dl" onclick="downloadAllTemp()">⬇ 全部下载</button>
+            <button class="img-action-btn save" onclick="saveAllTemp()">💾 全部保存</button>
+          </div>
+        </div>
+        <details id="imgPromptPreview" style="margin-bottom:0.5rem;display:none"><summary style="cursor:pointer;font-size:0.72rem;color:var(--text-light);user-select:none">📝 查看发送的提示词</summary><pre id="imgPromptText" onclick="navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="margin-top:0.3rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius-sm);font-size:0.72rem;line-height:1.4;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border:1px solid var(--border);cursor:pointer"></pre></details>
+        <div id="imgTempGrid" class="img-grid cols-2"></div>
+        <div id="imgResultEmpty" class="gallery-empty">还没有生成图片</div>
+      </div>
+      <!-- Video results -->
+      <div id="resultPanelVid" style="display:none">
+        <div id="vidResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
+        <div id="vidResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
+        <div id="vidResultEmpty" class="gallery-empty">还没有生成视频</div>
+      </div>
+      <!-- Music results -->
+      <div id="resultPanelMusic" style="display:none">
+        <div id="musicResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
+        <div id="musicResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
+        <div id="musicResultEmpty" class="gallery-empty">还没有生成音乐</div>
+      </div>
     </div>
 
     <!-- Zone 3: Project Gallery -->
@@ -1930,13 +1946,12 @@ async function doImgGen() {
   const size = imgSelectedRatio;
   const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('imgGenBtn');
-  const zone = document.getElementById('imgTempZone');
-
   btn.disabled = true; btn.innerHTML = '🍪 生成中...';
   activeAbortController = new AbortController();
   showCancelBtn();
   tempImages = [];
-  zone.style.display = '';
+  showResultZone('img');
+  document.getElementById('imgResultEmpty').style.display = 'none';
   document.getElementById('imgTempInfo').textContent = `正在生成${n>1?` ${n} 张`:''}图片，预计 30-120 秒...`;
   document.getElementById('imgTempGrid').innerHTML = '<div class="gallery-empty">🎨 生成中...</div>';
   const promptPreview = document.getElementById('imgPromptPreview');
@@ -2233,6 +2248,18 @@ function clearUploadImage() {
 function updateButtonsForMediaType() {
   switchStudioMenu();
 }
+function switchResultTab(tab) {
+  const panels = {img:'resultPanelImg', vid:'resultPanelVid', music:'resultPanelMusic'};
+  const tabs = {img:'resultTabImg', vid:'resultTabVid', music:'resultTabMusic'};
+  for (const [k, id] of Object.entries(panels)) {
+    document.getElementById(id).style.display = k === tab ? '' : 'none';
+    document.getElementById(tabs[k]).classList.toggle('active', k === tab);
+  }
+}
+function showResultZone(tab) {
+  document.getElementById('resultZone').style.display = '';
+  switchResultTab(tab);
+}
 function switchStudioMenu() {
   const hasMaterial = !!uploadedImageB64;
   document.getElementById('menuCreate').style.display = hasMaterial ? 'none' : '';
@@ -2342,7 +2369,8 @@ async function doImgEdit() {
       tempImages = data.data.map((d, i) => ({
         b64: d.b64_json, prompt, final_prompt: data.final_prompt || '', style: '', size: '', quality: '', channel: model, index: i
       }));
-      document.getElementById('imgTempZone').style.display = '';
+      showResultZone('img');
+      document.getElementById('imgResultEmpty').style.display = 'none';
       document.getElementById('imgTempInfo').textContent = `编辑完成 · ${tempImages.length} 张`;
       renderTempGrid();
 
@@ -3076,13 +3104,13 @@ async function doVidGen() {
   if (!prompt) return;
   const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('vidGenBtn');
-  const zone = document.getElementById('vidResultZone');
   const grid = document.getElementById('vidResultGrid');
   const info = document.getElementById('vidResultInfo');
 
   btn.disabled = true; btn.innerHTML = '🎬 生成中...';
   showCancelBtn();
-  zone.style.display = '';
+  showResultZone('vid');
+  document.getElementById('vidResultEmpty').style.display = 'none';
   const hasImg = !!uploadedImageB64;
   info.textContent = hasImg
     ? '正在根据图片生成视频，Veo 需要 1-5 分钟，请耐心等待...'
@@ -3155,13 +3183,13 @@ async function doMusicGen() {
   if (!prompt) return;
   const model = document.getElementById('imgModel').value;
   const btn = document.getElementById('musicGenBtn');
-  const zone = document.getElementById('musicResultZone');
   const grid = document.getElementById('musicResultGrid');
   const info = document.getElementById('musicResultInfo');
 
   btn.disabled = true; btn.innerHTML = '🎵 生成中...';
   showCancelBtn();
-  zone.style.display = '';
+  showResultZone('music');
+  document.getElementById('musicResultEmpty').style.display = 'none';
   const hasImg = !!uploadedImageB64;
   info.textContent = hasImg
     ? '正在根据素材生成音乐，Lyria 需要 30-90 秒...'
