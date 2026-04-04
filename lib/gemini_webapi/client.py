@@ -1657,15 +1657,21 @@ class GeminiClient(GemMixin, ResearchMixin):
 
                 output_candidates = []
                 for candidate_data in candidates_data:
-                    rcid = get_nested_value(candidate_data, [0])
-                    if not rcid:
+                    # READ_CHAT wraps candidates in an extra layer:
+                    # candidate_data[0] = [rcid, [text], ...metadata...]
+                    inner = candidate_data
+                    if isinstance(get_nested_value(candidate_data, [0]), list):
+                        inner = candidate_data[0]
+
+                    rcid = get_nested_value(inner, [0])
+                    if not isinstance(rcid, str):
                         continue
 
                     # Standard text path
-                    text = _extract_candidate_text(candidate_data)
+                    text = get_nested_value(inner, [1, 0], "")
 
                     # Deep Research immersive result: stored at [30][0][4]
-                    immersive_text = get_nested_value(candidate_data, [30, 0, 4])
+                    immersive_text = get_nested_value(inner, [30, 0, 4])
                     if isinstance(immersive_text, str) and len(immersive_text) > len(text or ""):
                         text = immersive_text
 
