@@ -788,6 +788,7 @@ body::before {
             <button class="btn btn-ghost" id="imgOptBtn" onclick="optimizePrompt()" style="width:100%;padding:0.4rem 0;font-size:0.74rem;font-weight:600;border:2px solid var(--border);border-radius:var(--radius-sm);white-space:nowrap;text-align:center">✨ 优化提示词</button>
             <button class="btn btn-primary" id="imgGenBtn" onclick="doImgGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center">🎨 生成图片</button>
             <button class="btn btn-primary" id="vidGenBtn" onclick="doVidGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎬 生成视频</button>
+            <button class="btn btn-primary" id="musicGenBtn" onclick="doMusicGen()" style="width:100%;padding:0.4rem 0;font-size:0.8rem;font-weight:700;white-space:nowrap;border-radius:var(--radius-sm);text-align:center;background:linear-gradient(135deg,#f59e0b,#ef4444)">🎵 生成音乐</button>
           </div>
         </div>
       </div>
@@ -812,6 +813,12 @@ body::before {
       <div class="studio-section-title"><span>🎬 视频结果</span></div>
       <div id="vidResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
       <div id="vidResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
+    </div>
+
+    <div class="studio-section" id="musicResultZone" style="display:none">
+      <div class="studio-section-title"><span>🎵 音乐结果</span></div>
+      <div id="musicResultInfo" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.3rem"></div>
+      <div id="musicResultGrid" style="display:flex;flex-direction:column;gap:0.8rem"></div>
     </div>
 
     <!-- Zone 3: Project Gallery -->
@@ -2932,6 +2939,92 @@ function downloadVideo(idx) {
   const a = document.createElement('a');
   a.href = 'data:video/mp4;base64,' + v.b64_json;
   a.download = `video_${Date.now()}.mp4`;
+  a.click();
+}
+
+async function doMusicGen() {
+  const prompt = document.getElementById('imgPrompt').value.trim();
+  if (!prompt) return;
+  const model = document.getElementById('imgModel').value;
+  const btn = document.getElementById('musicGenBtn');
+  const zone = document.getElementById('musicResultZone');
+  const grid = document.getElementById('musicResultGrid');
+  const info = document.getElementById('musicResultInfo');
+
+  btn.disabled = true; btn.innerHTML = '🎵 生成中...';
+  zone.style.display = '';
+  const hasImg = !!uploadedImageB64;
+  info.textContent = hasImg
+    ? '正在根据素材生成音乐，Lyria 需要 30-90 秒...'
+    : '正在生成音乐，Lyria 需要 30-90 秒...';
+  grid.innerHTML = '<div class="gallery-empty">🎵 音乐生成中...</div>';
+
+  const start = Date.now();
+  const body = { prompt, model };
+  if (hasImg) { body.image = uploadedImageB64; body.media_type = uploadedMediaType; }
+  try {
+    const resp = await fetch('/v1/music/generations', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    const sec = ((Date.now() - start) / 1000).toFixed(1);
+
+    if (data.data && data.data.length > 0) {
+      const m = data.data[0];
+      info.textContent = `${sec}s · 音乐已生成`;
+      grid.innerHTML = '';
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border)';
+      let html = '';
+
+      // Audio player
+      if (m.audio_b64) {
+        html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎧 音频 (MP3)</div>`;
+        html += `<audio controls style="width:100%" src="data:audio/mpeg;base64,${m.audio_b64}"></audio></div>`;
+      }
+
+      // Video player (music video with cover art)
+      if (m.video_b64) {
+        html += `<div style="margin-bottom:0.5rem"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem">🎬 音乐视频 (MP4)</div>`;
+        html += `<video controls style="width:100%;border-radius:6px;max-height:300px" src="data:video/mp4;base64,${m.video_b64}"></video></div>`;
+      }
+
+      // Action buttons
+      html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
+      if (m.audio_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('audio')" style="flex:1">⬇ MP3</button>`;
+      if (m.video_b64) html += `<button class="img-action-btn dl" onclick="downloadMusic('video')" style="flex:1">⬇ MP4</button>`;
+      html += '</div>';
+
+      // Text response
+      if (data.text) {
+        html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
+      }
+      card.innerHTML = html;
+      grid.appendChild(card);
+      window._musicResult = m;
+    } else {
+      const errMsg = data.detail || data.error?.message || '未生成音乐';
+      grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">${esc(errMsg)}</div>`;
+    }
+  } catch(e) {
+    grid.innerHTML = `<div style="color:var(--danger);padding:1rem;background:var(--danger-light);border-radius:var(--radius-sm)">请求失败: ${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.innerHTML = '🎵 生成音乐';
+}
+
+function downloadMusic(type) {
+  const m = window._musicResult;
+  if (!m) return;
+  const a = document.createElement('a');
+  if (type === 'audio' && m.audio_b64) {
+    a.href = 'data:audio/mpeg;base64,' + m.audio_b64;
+    a.download = `music_${Date.now()}.mp3`;
+  } else if (type === 'video' && m.video_b64) {
+    a.href = 'data:video/mp4;base64,' + m.video_b64;
+    a.download = `music_${Date.now()}.mp4`;
+  }
   a.click();
 }
 
