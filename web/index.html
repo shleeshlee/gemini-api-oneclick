@@ -2385,6 +2385,7 @@ const TaskManager = {
       html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
       if (v.b64_json) {
         html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${v.b64_json}" download="video_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ 下载</a>`;
+        html += `<button class="img-action-btn" onclick="TaskManager._saveVideo('${taskId}',${i})" style="flex:1">💾 视频库</button>`;
         html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
       }
       html += '</div></div>';
@@ -2403,6 +2404,7 @@ const TaskManager = {
     html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
     if (m.audio_b64) html += `<a class="img-action-btn dl" href="data:audio/mpeg;base64,${m.audio_b64}" download="music_${Date.now()}.mp3" style="flex:1;text-align:center;text-decoration:none">⬇ MP3</a>`;
     if (m.video_b64) html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${m.video_b64}" download="music_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ MP4</a>`;
+    if (m.video_b64) html += `<button class="img-action-btn" onclick="TaskManager._saveVideo('${taskId}',-1)" style="flex:1">💾 视频库</button>`;
     if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">✏️ 编辑</button>`;
     html += '</div></div>';
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
@@ -2419,6 +2421,27 @@ const TaskManager = {
       });
       const data = await resp.json();
       if (data.ok) { toast('已保存到图库', 'ok'); loadGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+  },
+
+  async _saveVideo(taskId, idx) {
+    let b64;
+    if (idx === -1) {
+      const m = window[`_taskMusic_${taskId}`];
+      b64 = m?.video_b64;
+    } else {
+      const vids = window[`_taskVids_${taskId}`];
+      b64 = vids?.[idx]?.b64_json;
+    }
+    if (!b64) { toast('无视频数据', 'err'); return; }
+    try {
+      const resp = await fetch('/gateway/videos/save', {
+        method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({ b64, prompt: '' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到视频库', 'ok'); }
       else { toast(data.detail || '保存失败', 'err'); }
     } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
