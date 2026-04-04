@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from .candidate import Candidate
 from .image import Image
 from .research import DeepResearchPlan
-from .video import GeneratedVideo
+from .video import GeneratedMedia, GeneratedVideo
 
 
 class ModelOutput(BaseModel):
@@ -58,6 +58,10 @@ class ModelOutput(BaseModel):
     @property
     def rcid(self) -> str:
         return self.candidates[self.chosen].rcid
+
+    @property
+    def media(self) -> list[GeneratedMedia]:
+        return self.candidates[self.chosen].media
 
     @property
     def deep_research_plan(self) -> DeepResearchPlan | None:

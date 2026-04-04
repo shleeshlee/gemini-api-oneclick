@@ -8,6 +8,7 @@
 #   POST /slot/{num}/v1/chat/completions
 #   POST /slot/{num}/v1/images/generations
 #   POST /slot/{num}/v1/videos/generations
+#   POST /slot/{num}/v1/music/generations
 #   POST /slot/{num}/v1/research
 #
 # Management:
@@ -422,6 +423,11 @@ class VideoGenerationRequest(BaseModel):
     model: Optional[str] = "gemini-3-flash"
     image: Optional[str] = None
     media_type: Optional[str] = "image"
+
+
+class MusicGenerationRequest(BaseModel):
+    prompt: str
+    model: Optional[str] = "gemini-3-flash"
 
 
 # ── Conversation prep ────────────────────────────────────────────────
@@ -938,6 +944,131 @@ async def slot_video_generation(
                 os.unlink(tf)
             except Exception:
                 pass
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Music endpoint — /slot/{num}/v1/music/generations
+# ═══════════════════════════════════════════════════════════════════════
+
+async def download_audio_as_base64(url: str, cookies: dict | None = None, account_index: int = 0) -> str | None:
+    try:
+        req_cookies = cookies or {}
+        async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=60.0) as http_client:
+            if "usercontent.google.com" in url and "authuser" not in url:
+                url += f"&authuser={account_index}" if "?" in url else f"?authuser={account_index}"
+            resp = await http_client.get(url)
+            if resp.status_code == 200:
+                return base64.b64encode(resp.content).decode("utf-8")
+            else:
+                logger.warning("Failed to download audio: %d %s", resp.status_code, url[:80])
+                return None
+    except Exception as e:
+        logger.error("Error downloading audio: %s", e)
+        return None
+
+
+@app.post("/slot/{num}/v1/music/generations")
+async def slot_music_generation(
+    num: int,
+    request: MusicGenerationRequest,
+    response: Response,
+    api_key: str = Depends(_verify_api_key),
+):
+    slot = _get_slot(num)
+    trace_headers: dict[str, str] = {}
+    tracer: RawCaptureTracer | None = None
+    try:
+        client = await _get_client(slot)
+        logger.info("Slot %d music: '%s'", num, request.prompt[:200])
+        slot_log(num, f"Music: {request.prompt[:60]}")
+
+        model = None
+        if request.model:
+            model, model_trace = resolve_model_for_media(request.model)
+            trace_headers = build_model_trace_headers(model_trace, "music")
+
+        tracer = RawCaptureTracer()
+        gemini_response = await client.generate_content(request.prompt, tracer=tracer, model=model)
+
+        if not gemini_response.media:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Gemini did not generate music. Response: {gemini_response.text[:300] if gemini_response.text else 'empty'}"
+            )
+
+        media_item = gemini_response.media[0]
+        result_data = []
+
+        # Download MP3
+        mp3_b64 = None
+        if media_item.mp3_url:
+            req_cookies = {}
+            if media_item.cookies:
+                if isinstance(media_item.cookies, dict):
+                    req_cookies = media_item.cookies
+                elif hasattr(media_item.cookies, "jar"):
+                    req_cookies = {c.name: c.value for c in media_item.cookies.jar}
+            mp3_b64 = await download_audio_as_base64(media_item.mp3_url, req_cookies, media_item.account_index)
+
+        # Download MP4 video
+        mp4_b64 = None
+        if media_item.url:
+            mp4_b64 = await download_video_as_base64(media_item)
+
+        entry: dict[str, Any] = {}
+        if mp3_b64:
+            entry["audio_b64"] = mp3_b64
+            entry["audio_url"] = media_item.mp3_url
+        if mp4_b64:
+            entry["video_b64"] = mp4_b64
+            entry["video_url"] = media_item.url
+        if media_item.mp3_thumbnail:
+            entry["audio_thumbnail"] = media_item.mp3_thumbnail
+        if media_item.thumbnail_url:
+            entry["video_thumbnail"] = media_item.thumbnail_url
+        result_data.append(entry)
+
+        worker_event = build_worker_event("music", trace_headers, gemini_response)
+        worker_event = log_worker_event(worker_event, payload={
+            "request": {"model": request.model, "prompt": request.prompt},
+            "response": build_gemini_response_snapshot(gemini_response),
+            "raw_capture": tracer.get_snapshot() if tracer else None,
+        })
+        trace_headers.update(build_worker_event_headers(worker_event))
+
+        result = {
+            "created": int(time.time()),
+            "data": result_data,
+            "text": gemini_response.text or "",
+        }
+        raw_urls = []
+        if media_item.mp3_url:
+            raw_urls.append(media_item.mp3_url)
+        if media_item.url:
+            raw_urls.append(media_item.url)
+        if raw_urls:
+            result["raw_urls"] = raw_urls
+
+        response.headers.update(trace_headers)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Slot %d music error: %s", num, e, exc_info=True)
+        error_event = build_worker_event(
+            "music", trace_headers, None,
+            raw_response_preview=str(e), error_summary=str(e),
+        )
+        log_worker_event(error_event, payload={
+            "request": {"model": request.model, "prompt": request.prompt},
+            "error": str(e),
+            "raw_capture": tracer.get_snapshot() if tracer else None,
+        })
+        slot.report_error(e)
+        if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota']):
+            raise HTTPException(status_code=429, detail=f"Music rate limited: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Music generation failed: {str(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

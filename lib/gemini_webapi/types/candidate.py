@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .image import GeneratedImage, Image, WebImage
 from .research import DeepResearchPlan
-from .video import GeneratedVideo
+from .video import GeneratedMedia, GeneratedVideo
 
 
 class Candidate(BaseModel):
@@ -35,6 +35,7 @@ class Candidate(BaseModel):
     web_images: list[WebImage] = Field(default_factory=list)
     generated_images: list[GeneratedImage] = Field(default_factory=list)
     generated_videos: list[GeneratedVideo] = Field(default_factory=list)
+    generated_media: list[GeneratedMedia] = Field(default_factory=list)
     deep_research_plan: DeepResearchPlan | None = None
     sources: list[dict] = Field(default_factory=list)
 
@@ -62,3 +63,7 @@ class Candidate(BaseModel):
     @property
     def videos(self) -> list[GeneratedVideo]:
         return self.generated_videos
+
+    @property
+    def media(self) -> list[GeneratedMedia]:
+        return self.generated_media

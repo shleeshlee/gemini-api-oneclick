@@ -50,6 +50,7 @@ from .types import (
     RPCData,
     WebImage,
 )
+from .types.video import GeneratedMedia
 from .utils import (
     extract_deep_research_plan,
     extract_json_from_response,
@@ -1413,6 +1414,38 @@ class GeminiClient(GemMixin, ResearchMixin):
             candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs
         )
 
+        # Parse music/audio data from [12][86]
+        generated_media: list[GeneratedMedia] = []
+        media_data = get_nested_value(candidate_data, [12, 86], [])
+        if media_data:
+            mp3_url = ""
+            mp3_thumb = ""
+            mp3_list = get_nested_value(media_data, [0, 1, 7], [])
+            if isinstance(mp3_list, list) and len(mp3_list) >= 2:
+                mp3_thumb = mp3_list[0] or ""
+                mp3_url = mp3_list[1] or ""
+
+            mp4_url = ""
+            mp4_thumb = ""
+            mp4_list = get_nested_value(media_data, [1, 1, 7], [])
+            if isinstance(mp4_list, list) and len(mp4_list) >= 2:
+                mp4_thumb = mp4_list[0] or ""
+                mp4_url = mp4_list[1] or ""
+
+            if mp3_url or mp4_url:
+                generated_media.append(
+                    GeneratedMedia(
+                        url=mp4_url or "",
+                        thumbnail_url=mp4_thumb,
+                        mp3_url=mp3_url,
+                        mp3_thumbnail=mp3_thumb,
+                        cookies=self.cookies,
+                        proxy=self.proxy,
+                        account_index=self.account_index,
+                        session_kwargs=self.session_kwargs,
+                    )
+                )
+
         # Determine if this frame represents the final state
         flags.is_final_chunk = isinstance(get_nested_value(candidate_data, [2]), list) or get_nested_value(candidate_data, [8, 0], 1) == 2
 
@@ -1444,7 +1477,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                 if rid:
                     deep_research_plan = DeepResearchPlan(research_id=rid, response_text=text)
 
-        if text_delta or thoughts_delta or web_images or generated_images or generated_videos or deep_research_plan:
+        if text_delta or thoughts_delta or web_images or generated_images or generated_videos or generated_media or deep_research_plan:
             flags.has_candidates = True
 
         # Update state
@@ -1460,6 +1493,7 @@ class GeminiClient(GemMixin, ResearchMixin):
             web_images=web_images,
             generated_images=generated_images,
             generated_videos=generated_videos,
+            generated_media=generated_media,
             deep_research_plan=deep_research_plan,
         )
 

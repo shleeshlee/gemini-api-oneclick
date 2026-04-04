@@ -8,7 +8,7 @@ from .image import GeneratedImage, Image, WebImage
 from .modeloutput import ModelOutput
 from .research import DeepResearchPlan, DeepResearchStatus
 from .researchresult import DeepResearchResult
-from .video import GeneratedVideo
+from .video import GeneratedMedia, GeneratedVideo
 
 __all__ = [
     "Candidate",
@@ -22,6 +22,7 @@ __all__ = [
     "Gem",
     "GemJar",
     "GeneratedImage",
+    "GeneratedMedia",
     "GeneratedVideo",
     "Image",
     "ModelOutput",

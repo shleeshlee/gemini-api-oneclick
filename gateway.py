@@ -968,7 +968,7 @@ async def proxy(request: Request, path: str):
             pass
 
     is_research_req = "research" in path
-    is_media_req = "images" in path or "videos" in path
+    is_media_req = "images" in path or "videos" in path or "music" in path
     is_image_req = is_media_req  # reuse for img_blocked filtering
 
     # Session affinity: route session_id requests to the container that created them
