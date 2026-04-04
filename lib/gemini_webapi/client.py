@@ -1414,9 +1414,10 @@ class GeminiClient(GemMixin, ResearchMixin):
             candidate_data, self.proxy, self.cookies, self.account_index, self.session_kwargs
         )
 
-        # Parse music/audio data from [12][0][87]
+        # Parse music/audio data from [12][0]["87"]
+        # Gemini returns [12][0] as a dict with string keys, not a list
         generated_media: list[GeneratedMedia] = []
-        media_data = get_nested_value(candidate_data, [12, 0, 87], [])
+        media_data = get_nested_value(candidate_data, [12, 0, "87"], [])
         if media_data:
             mp3_url = ""
             mp3_thumb = ""
