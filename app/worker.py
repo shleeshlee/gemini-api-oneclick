@@ -39,6 +39,8 @@ from pydantic import BaseModel
 from parsers import (
     build_chat_completion_payload,
     build_chat_reply_text,
+    collect_generated_image_urls,
+    collect_generated_video_urls,
     iter_chat_stream_chunks,
     parse_image_generation_result,
     parse_video_generation_result,
@@ -470,6 +472,41 @@ def prepare_conversation(messages: list) -> tuple[str, list[str]]:
 
 # ── Image / video download ───────────────────────────────────────────
 
+_DOWNLOAD_RETRIES = 3
+_RECOVERABLE_MEDIA_ERRORS = (
+    "stream interrupted or truncated",
+    "response stalled",
+    "no response from gemini within",
+    "timed out while waiting for gemini",
+)
+
+
+def _is_recoverable_media_error(exc: Exception) -> bool:
+    return any(token in str(exc).lower() for token in _RECOVERABLE_MEDIA_ERRORS)
+
+
+async def _retry_media_request(label: str, factory, retries: int = 2):
+    """Retry a media generation request on transient errors.
+
+    factory(tracer, attempt) -> result.
+    Returns (result, tracer). On failure, attaches the last tracer to the exception.
+    """
+    last_tracer: RawCaptureTracer | None = None
+    for attempt in range(1, retries + 1):
+        tracer = RawCaptureTracer()
+        last_tracer = tracer
+        try:
+            result = await factory(tracer, attempt)
+            return result, tracer
+        except Exception as exc:
+            if attempt >= retries or not _is_recoverable_media_error(exc):
+                exc._last_tracer = last_tracer  # type: ignore[attr-defined]
+                raise
+            logger.warning("%s transient failure (attempt %d/%d): %s", label, attempt, retries, exc)
+            await asyncio.sleep(min(attempt, 2))
+    raise RuntimeError(f"{label} failed")
+
+
 async def download_image_as_base64(image, cookies=None) -> str | None:
     try:
         url = image.url
@@ -484,13 +521,17 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
                     req_cookies = {k: v for k, v in raw_cookies.items()} if hasattr(raw_cookies, 'items') else raw_cookies
             else:
                 req_cookies = raw_cookies
-        async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=45.0) as http_client:
-            resp = await http_client.get(url)
-            if resp.status_code == 200:
-                return base64.b64encode(resp.content).decode("utf-8")
-            else:
-                logger.warning("Failed to download image: %d %s", resp.status_code, url[:80])
-                return None
+        for attempt in range(1, _DOWNLOAD_RETRIES + 1):
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=90.0) as http_client:
+                resp = await http_client.get(url)
+                if resp.status_code == 200:
+                    return base64.b64encode(resp.content).decode("utf-8")
+                logger.warning("Failed to download image (attempt %d/%d): %d %s",
+                               attempt, _DOWNLOAD_RETRIES, resp.status_code, url[:80])
+                if resp.status_code in {401, 403, 404}:
+                    return None
+            if attempt < _DOWNLOAD_RETRIES:
+                await asyncio.sleep(attempt)
     except Exception as e:
         logger.error("Error downloading image: %s", e)
         return None
@@ -505,15 +546,19 @@ async def download_video_as_base64(video: GeneratedVideo) -> str | None:
                 req_cookies = video.cookies
             elif hasattr(video.cookies, "jar"):
                 req_cookies = {c.name: c.value for c in video.cookies.jar}
-        async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=60.0) as http_client:
-            if "usercontent.google.com" in url and "authuser" not in url:
-                url += f"&authuser={video.account_index}" if "?" in url else f"?authuser={video.account_index}"
-            resp = await http_client.get(url)
-            if resp.status_code == 200:
-                return base64.b64encode(resp.content).decode("utf-8")
-            else:
-                logger.warning("Failed to download video: %d %s", resp.status_code, url[:80])
-                return None
+        if "usercontent.google.com" in url and "authuser" not in url:
+            url += f"&authuser={video.account_index}" if "?" in url else f"?authuser={video.account_index}"
+        for attempt in range(1, _DOWNLOAD_RETRIES + 1):
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=120.0) as http_client:
+                resp = await http_client.get(url)
+                if resp.status_code == 200:
+                    return base64.b64encode(resp.content).decode("utf-8")
+                logger.warning("Failed to download video (attempt %d/%d): %d %s",
+                               attempt, _DOWNLOAD_RETRIES, resp.status_code, url[:80])
+                if resp.status_code in {401, 403, 404}:
+                    return None
+            if attempt < _DOWNLOAD_RETRIES:
+                await asyncio.sleep(attempt)
     except Exception as e:
         logger.error("Error downloading video: %s", e)
         return None
@@ -737,13 +782,14 @@ async def slot_image_generation(
             model, model_trace = resolve_model_for_media(request.model)
             trace_headers = build_model_trace_headers(model_trace, "image")
 
-        tracer = RawCaptureTracer()
-
         if session_id and session_id in slot.edit_sessions:
             chat, _ = slot.edit_sessions[session_id]
             slot.edit_sessions[session_id] = (chat, time.time())
             logger.info("Continuing edit session %s, use_pro=%s", session_id, request.use_pro)
-            gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
+            gemini_response, tracer = await _retry_media_request(
+                "image session continue",
+                lambda t, _a: chat.send_message(prompt, tracer=t, use_pro=request.use_pro),
+            )
         else:
             kwargs: dict[str, Any] = {}
             if model:
@@ -760,24 +806,34 @@ async def slot_image_generation(
                 except Exception as e:
                     raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
 
-                chat = client.start_chat()
-                if model:
-                    chat.model = model
-                gemini_response = await chat.send_message(prompt, files=temp_files, tracer=tracer, use_pro=request.use_pro)
+                async def _edit_factory(attempt_tracer, _attempt):
+                    new_chat = client.start_chat()
+                    if model:
+                        new_chat.model = model
+                    resp = await new_chat.send_message(prompt, files=temp_files, tracer=attempt_tracer, use_pro=request.use_pro)
+                    return resp, new_chat
+
+                (gemini_response, chat), tracer = await _retry_media_request("image edit", _edit_factory)
                 session_id = str(uuid.uuid4())[:12]
                 slot.edit_sessions[session_id] = (chat, time.time())
             else:
-                chat = client.start_chat()
-                if model:
-                    chat.model = model
-                gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
+                async def _gen_factory(attempt_tracer, _attempt):
+                    new_chat = client.start_chat()
+                    if model:
+                        new_chat.model = model
+                    resp = await new_chat.send_message(prompt, tracer=attempt_tracer, use_pro=request.use_pro)
+                    return resp, new_chat
+
+                (gemini_response, chat), tracer = await _retry_media_request("image generation", _gen_factory)
                 session_id = str(uuid.uuid4())[:12]
                 slot.edit_sessions[session_id] = (chat, time.time())
 
         images = gemini_response.images
         if not images and not request.image and not request.session_id:
-            tracer = RawCaptureTracer()
-            gemini_response = await chat.send_message(f"Create a picture: {request.prompt}", tracer=tracer)
+            gemini_response, tracer = await _retry_media_request(
+                "image fallback",
+                lambda t, _a: chat.send_message(f"Create a picture: {request.prompt}", tracer=t),
+            )
             images = gemini_response.images
 
         if not images:
@@ -823,6 +879,22 @@ async def slot_image_generation(
     except HTTPException:
         raise
     except Exception as e:
+        if tracer is None:
+            tracer = getattr(e, "_last_tracer", None)
+        raw_capture = tracer.get_snapshot() if tracer else None
+        recovered_urls = collect_generated_image_urls(raw_capture)
+        if recovered_urls:
+            logger.warning("Slot %d recovering %d image URLs from raw capture after: %s", num, len(recovered_urls), e)
+            result = {
+                "created": int(time.time()),
+                "data": [{"url": url} for url in recovered_urls[:request.n]],
+                "final_prompt": prompt,
+                "raw_image_urls": recovered_urls[:4],
+            }
+            if session_id:
+                result["session_id"] = session_id
+            response.headers.update(trace_headers)
+            return result
         logger.error("Slot %d image error: %s", num, e, exc_info=True)
         error_event = build_worker_event(
             "image", trace_headers, None,
@@ -837,7 +909,7 @@ async def slot_image_generation(
                 "session_id": session_id,
             },
             "error": str(e),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "raw_capture": raw_capture,
         })
         if session_id and session_id in slot.edit_sessions and not request.session_id:
             del slot.edit_sessions[session_id]
@@ -888,8 +960,10 @@ async def slot_video_generation(
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
 
-        tracer = RawCaptureTracer()
-        gemini_response = await client.generate_content(request.prompt, tracer=tracer, **kwargs)
+        gemini_response, tracer = await _retry_media_request(
+            "video generation",
+            lambda t, _a: client.generate_content(request.prompt, tracer=t, **kwargs),
+        )
 
         if not gemini_response.videos:
             raise HTTPException(
@@ -921,6 +995,20 @@ async def slot_video_generation(
     except HTTPException:
         raise
     except Exception as e:
+        if tracer is None:
+            tracer = getattr(e, "_last_tracer", None)
+        raw_capture = tracer.get_snapshot() if tracer else None
+        recovered_urls = collect_generated_video_urls(raw_capture)
+        if recovered_urls:
+            logger.warning("Slot %d recovering %d video URLs from raw capture after: %s", num, len(recovered_urls), e)
+            result = {
+                "created": int(time.time()),
+                "data": [{"url": url, "thumbnail_url": ""} for url in recovered_urls],
+                "text": "",
+                "raw_video_urls": recovered_urls[:4],
+            }
+            response.headers.update(trace_headers)
+            return result
         logger.error("Slot %d video error: %s", num, e, exc_info=True)
         error_event = build_worker_event(
             "video", trace_headers, None,
@@ -932,7 +1020,7 @@ async def slot_video_generation(
                 "has_input_media": bool(request.image), "media_type": request.media_type,
             },
             "error": str(e),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "raw_capture": raw_capture,
         })
         slot.report_error(e)
         if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
@@ -953,15 +1041,19 @@ async def slot_video_generation(
 async def download_audio_as_base64(url: str, cookies: dict | None = None, account_index: int = 0) -> str | None:
     try:
         req_cookies = cookies or {}
-        async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=60.0) as http_client:
-            if "usercontent.google.com" in url and "authuser" not in url:
-                url += f"&authuser={account_index}" if "?" in url else f"?authuser={account_index}"
-            resp = await http_client.get(url)
-            if resp.status_code == 200:
-                return base64.b64encode(resp.content).decode("utf-8")
-            else:
-                logger.warning("Failed to download audio: %d %s", resp.status_code, url[:80])
-                return None
+        if "usercontent.google.com" in url and "authuser" not in url:
+            url += f"&authuser={account_index}" if "?" in url else f"?authuser={account_index}"
+        for attempt in range(1, _DOWNLOAD_RETRIES + 1):
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=120.0) as http_client:
+                resp = await http_client.get(url)
+                if resp.status_code == 200:
+                    return base64.b64encode(resp.content).decode("utf-8")
+                logger.warning("Failed to download audio (attempt %d/%d): %d %s",
+                               attempt, _DOWNLOAD_RETRIES, resp.status_code, url[:80])
+                if resp.status_code in {401, 403, 404}:
+                    return None
+            if attempt < _DOWNLOAD_RETRIES:
+                await asyncio.sleep(attempt)
     except Exception as e:
         logger.error("Error downloading audio: %s", e)
         return None
@@ -1032,6 +1124,8 @@ async def slot_music_generation(
             entry["audio_thumbnail"] = media_item.mp3_thumbnail
         if media_item.thumbnail_url:
             entry["video_thumbnail"] = media_item.thumbnail_url
+        if not mp3_b64 and not mp4_b64:
+            raise HTTPException(status_code=500, detail="Music generated but all downloads failed")
         result_data.append(entry)
 
         worker_event = build_worker_event("music", trace_headers, gemini_response)

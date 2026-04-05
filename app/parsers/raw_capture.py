@@ -38,6 +38,15 @@ def _collect_media_urls(data: Any, result: dict[str, list[str]]) -> None:
             _collect_media_urls(value, result)
 
 
+def _candidate_score(candidate: dict[str, Any]) -> tuple[int, int, int, int]:
+    return (
+        len(candidate.get("generated_images", [])) + len(candidate.get("generated_videos", [])),
+        len(candidate.get("text", "") or ""),
+        len(candidate.get("thoughts", "") or ""),
+        len(candidate.get("web_images", [])),
+    )
+
+
 def build_snapshot_from_raw_capture(raw_capture: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw_capture, dict):
         return {}
@@ -106,10 +115,14 @@ def build_snapshot_from_raw_capture(raw_capture: dict[str, Any] | None) -> dict[
             candidates_by_rcid[rcid] = current
 
     candidates = list(candidates_by_rcid.values())
-    chosen = candidates[0] if candidates else {}
+    chosen_index = 0
+    if candidates:
+        chosen_index, chosen = max(enumerate(candidates), key=lambda item: _candidate_score(item[1]))
+    else:
+        chosen = {}
     return {
         "metadata": metadata,
-        "chosen": 0,
+        "chosen": chosen_index,
         "text": chosen.get("text", ""),
         "thoughts": chosen.get("thoughts") or None,
         "rcid": chosen.get("rcid", ""),
@@ -119,11 +132,13 @@ def build_snapshot_from_raw_capture(raw_capture: dict[str, Any] | None) -> dict[
 
 def collect_generated_image_urls(raw_capture: dict[str, Any] | None) -> list[str]:
     snapshot = build_snapshot_from_raw_capture(raw_capture)
-    chosen = snapshot.get("candidates", [{}])[0] if snapshot.get("candidates") else {}
+    idx = snapshot.get("chosen", 0)
+    chosen = snapshot.get("candidates", [{}])[idx] if snapshot.get("candidates") else {}
     return [img.get("url", "") for img in chosen.get("generated_images", []) if img.get("url")]
 
 
 def collect_generated_video_urls(raw_capture: dict[str, Any] | None) -> list[str]:
     snapshot = build_snapshot_from_raw_capture(raw_capture)
-    chosen = snapshot.get("candidates", [{}])[0] if snapshot.get("candidates") else {}
+    idx = snapshot.get("chosen", 0)
+    chosen = snapshot.get("candidates", [{}])[idx] if snapshot.get("candidates") else {}
     return [vid.get("url", "") for vid in chosen.get("generated_videos", []) if vid.get("url")]

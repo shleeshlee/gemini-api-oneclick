@@ -889,6 +889,21 @@ body::before {
         </div>
       </div>
     </div>
+
+    <!-- Zone 5: Audio Gallery -->
+    <div class="studio-section">
+      <div class="studio-section-title" style="justify-content:space-between">
+        <span class="section-toggle" onclick="toggleSection('audiogallery_collapsed','audioGalleryContent')">🎵 音频库</span>
+        <span id="audioGalleryCount" style="font-size:0.78rem;color:var(--text-muted);font-weight:400"></span>
+      </div>
+      <div id="audioGalleryContent">
+        <div id="audioGalleryGrid" style="display:flex;flex-direction:column;gap:0.6rem"></div>
+        <div id="audioGalleryEmpty" class="gallery-empty">还没有保存的音频</div>
+        <div id="audioGalleryMore" style="text-align:center;padding:0.6rem;display:none">
+          <button class="img-action-btn dl" onclick="loadMoreAudioGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1595,6 +1610,7 @@ function switchTab(tab) {
   if (tab === 'studio') {
     loadGallery();
     loadVideoGallery();
+    loadAudioGallery();
     // Sync upload area height with button column (must be visible to measure)
     requestAnimationFrame(() => {
       const col = document.getElementById('imgBtnCol');
@@ -1724,6 +1740,9 @@ const GALLERY_PAGE = 24;
 let vidGalleryItems = [];
 let vidGalleryOffset = 0;
 const VID_GALLERY_PAGE = 12;
+let audioGalleryItems = [];
+let audioGalleryOffset = 0;
+const AUDIO_GALLERY_PAGE = 16;
 
 let activeStylePanel = null;
 function renderStyleChips() {
@@ -2045,6 +2064,8 @@ function downloadAllTemp() {
 // ── Image Upload + Edit ───────────────────────────────────
 let uploadedImageB64 = null;
 let uploadedMediaType = 'image'; // 'image', 'video', or 'audio'
+let uploadedFileName = '';
+let uploadedMimeType = '';
 let editSessionId = null;
 let lastGenSessionId = null; // session_id from last generation (for Pro redo)
 let activeAbortController = null;
@@ -2096,6 +2117,8 @@ function readUploadFile(file) {
   reader.onload = (e) => {
     const b64 = e.target.result.split(',')[1];
     const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+    uploadedFileName = file.name || '';
+    uploadedMimeType = file.type || '';
     if (isAudio) {
       uploadedMediaType = 'audio';
       uploadedImageB64 = b64;
@@ -2163,6 +2186,8 @@ function readUploadFile(file) {
 function clearUploadImage() {
   uploadedImageB64 = null;
   uploadedMediaType = 'image';
+  uploadedFileName = '';
+  uploadedMimeType = '';
   editSessionId = null;
   document.getElementById('imgUploadPreview').style.display = 'none';
   document.getElementById('imgUploadEmpty').style.display = '';
@@ -2367,13 +2392,19 @@ const TaskManager = {
     }
     html += '<div class="img-grid cols-2">';
     data.data.forEach((img, i) => {
-      if (!img.b64_json) return;
-      html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)">`;
-      html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
-      html += `<a class="img-action-btn dl" href="data:image/png;base64,${img.b64_json}" download="img_${Date.now()}_${i}.png" style="flex:1;text-align:center;text-decoration:none">⬇</a>`;
-      html += `<button class="img-action-btn" onclick="TaskManager._saveImage('${taskId}',${i})" style="flex:1">💾 图库</button>`;
-      html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
-      html += `</div></div>`;
+      if (img.b64_json) {
+        html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)">`;
+        html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
+        html += `<a class="img-action-btn dl" href="data:image/png;base64,${img.b64_json}" download="img_${Date.now()}_${i}.png" style="flex:1;text-align:center;text-decoration:none">⬇</a>`;
+        html += `<button class="img-action-btn" onclick="TaskManager._saveImage('${taskId}',${i})" style="flex:1">💾 图库</button>`;
+        html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
+        html += `</div></div>`;
+      } else if (img.url) {
+        html += `<div class="img-card"><img src="${img.url}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)" crossorigin="anonymous">`;
+        html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
+        html += `<a class="img-action-btn dl" href="${img.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开</a>`;
+        html += `</div></div>`;
+      }
     });
     html += '</div>';
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
@@ -2386,14 +2417,20 @@ const TaskManager = {
     let html = '';
     data.data.forEach((v, i) => {
       html += '<div style="background:var(--surface);border-radius:var(--radius-sm);padding:0.6rem;border:1px solid var(--border);margin-bottom:0.5rem">';
-      if (v.b64_json) html += `<video controls style="width:100%;border-radius:6px;max-height:400px" src="data:video/mp4;base64,${v.b64_json}"></video>`;
-      html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
       if (v.b64_json) {
+        html += `<video controls style="width:100%;border-radius:6px;max-height:400px" src="data:video/mp4;base64,${v.b64_json}"></video>`;
+        html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
         html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${v.b64_json}" download="video_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ 下载</a>`;
         html += `<button class="img-action-btn" onclick="TaskManager._saveVideo('${taskId}',${i})" style="flex:1">💾 视频库</button>`;
         html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
+        html += '</div>';
+      } else if (v.url) {
+        html += `<div style="padding:0.5rem;color:var(--text-muted);font-size:0.82rem">⚠️ 视频下载失败，原始链接可能仍可用：</div>`;
+        html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
+        html += `<a class="img-action-btn dl" href="${v.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开原始链接</a>`;
+        html += '</div>';
       }
-      html += '</div></div>';
+      html += '</div>';
     });
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
     el.innerHTML = html;
@@ -2409,6 +2446,7 @@ const TaskManager = {
     html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
     if (m.audio_b64) html += `<a class="img-action-btn dl" href="data:audio/mpeg;base64,${m.audio_b64}" download="music_${Date.now()}.mp3" style="flex:1;text-align:center;text-decoration:none">⬇ MP3</a>`;
     if (m.video_b64) html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${m.video_b64}" download="music_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ MP4</a>`;
+    if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._saveAudio('${taskId}')" style="flex:1">💾 音频库</button>`;
     if (m.video_b64) html += `<button class="img-action-btn" onclick="TaskManager._saveVideo('${taskId}',-1)" style="flex:1">💾 视频库</button>`;
     if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">✏️ 编辑</button>`;
     html += '</div></div>';
@@ -2459,6 +2497,21 @@ const TaskManager = {
       });
       const data = await resp.json();
       if (data.ok) { toast('已保存到视频库', 'ok'); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+  },
+
+  async _saveAudio(taskId) {
+    const m = window[`_taskMusic_${taskId}`];
+    const b64 = m?.audio_b64;
+    if (!b64) { toast('无音频数据', 'err'); return; }
+    try {
+      const resp = await fetch('/gateway/audio/save', {
+        method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({ b64, prompt: '', filename: 'music.mp3', mime_type: 'audio/mpeg' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到音频库', 'ok'); loadAudioGallery(); }
       else { toast(data.detail || '保存失败', 'err'); }
     } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
@@ -2558,7 +2611,15 @@ async function saveUploadedToGallery() {
   if (!uploadedImageB64) { toast('没有素材可保存', 'err'); return; }
   const prompt = document.getElementById('imgPrompt').value.trim() || '手动上传';
   try {
-    if (uploadedMediaType === 'video') {
+    if (uploadedMediaType === 'audio') {
+      const resp = await fetch('/gateway/audio/save', {
+        method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({ b64: uploadedImageB64, prompt, filename: uploadedFileName || '', mime_type: uploadedMimeType || '' })
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到音频库', 'ok'); loadAudioGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
+    } else if (uploadedMediaType === 'video') {
       const resp = await fetch('/gateway/videos/save', {
         method: 'POST', headers: authHeaders(),
         body: JSON.stringify({ b64: uploadedImageB64, prompt, model: '', url: '' })
@@ -2609,6 +2670,7 @@ let activeDims = {}; // key: "templateId:dimKey" → value string
 
 async function analyzeStyle() {
   if (!uploadedImageB64) { toast('请先上传图片或视频', 'err'); return; }
+  if (uploadedMediaType === 'audio') { toast('音频不支持风格解析', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
@@ -3361,6 +3423,7 @@ function restoreSectionState(key, contentId) {
 }
 restoreSectionState('gallery_collapsed', 'galleryContent');
 restoreSectionState('vidgallery_collapsed', 'vidGalleryContent');
+restoreSectionState('audiogallery_collapsed', 'audioGalleryContent');
 
 // ── Video Gallery ─────────────────────────────────────────
 async function saveVideoToGallery(idx) {
@@ -3454,6 +3517,53 @@ async function deleteVideo(vid_id) {
     await fetch(`/gateway/videos/${vid_id}`, { method: 'DELETE', headers: authHeaders() });
     toast('已删除', 'ok');
     loadVideoGallery();
+  } catch(e) { toast('删除失败', 'err'); }
+}
+
+// ── Audio Gallery ─────────────────────────────────────────
+async function loadAudioGallery(append) {
+  if (!append) { audioGalleryOffset = 0; audioGalleryItems = []; }
+  try {
+    const resp = await fetch(`/gateway/audio?offset=${audioGalleryOffset}&limit=${AUDIO_GALLERY_PAGE}`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (!append) audioGalleryItems = [];
+    audioGalleryItems.push(...(data.audio || []));
+    audioGalleryOffset = audioGalleryItems.length;
+    renderAudioGallery();
+    const more = document.getElementById('audioGalleryMore');
+    more.style.display = (data.total > audioGalleryOffset) ? '' : 'none';
+    document.getElementById('audioGalleryCount').textContent = data.total ? `${data.total} 个` : '';
+    document.getElementById('audioGalleryEmpty').style.display = audioGalleryItems.length ? 'none' : '';
+  } catch(e) { console.error('Audio gallery load failed:', e); }
+}
+function loadMoreAudioGallery() { loadAudioGallery(true); }
+function renderAudioGallery() {
+  const grid = document.getElementById('audioGalleryGrid');
+  grid.innerHTML = audioGalleryItems.map(a => {
+    const src = `/data/audio/${a.filename}`;
+    const fp = esc(a.prompt || '');
+    const label = esc(a.filename_hint || a.filename);
+    return `<div class="img-card" style="padding:0.8rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-bottom:0.5rem">
+        <div style="font-size:0.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+        <div class="img-card-actions" style="margin:0">
+          <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+          <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
+          <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
+        </div>
+      </div>
+      <audio controls style="width:100%" src="${src}" preload="metadata"></audio>
+      <div class="gallery-meta">${a.mime_type ? esc(a.mime_type) : 'audio file'}</div>
+      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.35rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
+    </div>`;
+  }).join('');
+}
+async function deleteAudio(audio_id) {
+  if (!confirm('删除这个音频？')) return;
+  try {
+    await fetch(`/gateway/audio/${audio_id}`, { method: 'DELETE', headers: authHeaders() });
+    toast('已删除', 'ok');
+    loadAudioGallery();
   } catch(e) { toast('删除失败', 'err'); }
 }
 

@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import re
 import time
@@ -2219,11 +2220,39 @@ class MediaGallery:
             raise HTTPException(status_code=400, detail="Invalid filename")
         if not filepath.exists() or not filepath.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(filepath, media_type=self.media_type)
+        media_type = self.media_type or mimetypes.guess_type(filepath.name)[0] or "application/octet-stream"
+        return FileResponse(filepath, media_type=media_type)
+
+    def _resolve_suffix(self, suffix: str | None = None) -> str:
+        candidate = (suffix or self.suffix or "").strip()
+        if not candidate:
+            return ""
+        if not candidate.startswith("."):
+            candidate = "." + candidate
+        if not re.fullmatch(r"\.[a-zA-Z0-9]{1,10}", candidate):
+            raise HTTPException(status_code=400, detail="Invalid file suffix")
+        return candidate.lower()
+
+    def save_file_dynamic(self, b64_data: str, extra_fields: dict, *, suffix: str | None = None) -> dict:
+        """Like save_file but with a caller-provided suffix (for audio with varying formats)."""
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        file_id = _uuid.uuid4().hex[:12]
+        filename = f"{file_id}{self._resolve_suffix(suffix)}"
+        filepath = self.media_dir / filename
+        try:
+            filepath.write_bytes(base64.b64decode(b64_data))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 data: {e}")
+        entry = {"id": file_id, "filename": filename, "saved_at": _now_iso(), **extra_fields}
+        meta = self.load_meta()
+        meta.insert(0, entry)
+        self._save_meta(meta)
+        return entry
 
 
 _image_gallery = MediaGallery(ROOT_DIR / "data" / "images", ".png", "image/png")
 _video_gallery = MediaGallery(ROOT_DIR / "data" / "videos", ".mp4", "video/mp4")
+_audio_gallery = MediaGallery(ROOT_DIR / "data" / "audio", ".bin", "")
 
 
 @app.post("/gateway/images/save", dependencies=[Depends(verify_panel_auth)])
@@ -2282,6 +2311,46 @@ async def delete_video(vid_id: str):
 @app.get("/data/videos/{filename}")
 async def serve_video(filename: str):
     return _video_gallery.serve_file(filename)
+
+
+def _guess_audio_suffix(filename: str, mime_type: str) -> str:
+    suffix = Path(filename).suffix.lower() if filename else ""
+    if suffix and re.fullmatch(r"\.[a-zA-Z0-9]{1,10}", suffix):
+        return suffix
+    guessed = mimetypes.guess_extension(mime_type.strip()) if mime_type else None
+    return guessed or ".bin"
+
+
+@app.post("/gateway/audio/save", dependencies=[Depends(verify_panel_auth)])
+async def save_audio(request: Request):
+    body = await request.json()
+    if not body.get("b64"):
+        raise HTTPException(status_code=400, detail="b64 data required")
+    filename = (body.get("filename") or "").strip()
+    mime_type = (body.get("mime_type") or "").strip()
+    entry = _audio_gallery.save_file_dynamic(
+        body["b64"],
+        {"prompt": body.get("prompt", ""), "filename_hint": filename, "mime_type": mime_type},
+        suffix=_guess_audio_suffix(filename, mime_type),
+    )
+    return {"ok": True, "id": entry["id"], "filename": entry["filename"]}
+
+
+@app.get("/gateway/audio", dependencies=[Depends(verify_panel_auth)])
+async def list_audio(offset: int = 0, limit: int = 50):
+    meta = _audio_gallery.load_meta()
+    return {"audio": meta[offset:offset + limit], "total": len(meta)}
+
+
+@app.delete("/gateway/audio/{audio_id}", dependencies=[Depends(verify_panel_auth)])
+async def delete_audio(audio_id: str):
+    _audio_gallery.delete_file(audio_id)
+    return {"ok": True}
+
+
+@app.get("/data/audio/{filename}")
+async def serve_audio(filename: str):
+    return _audio_gallery.serve_file(filename)
 
 
 # Note: /data/images/ and /data/videos/ are intentionally unauthenticated.
