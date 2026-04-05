@@ -2389,14 +2389,14 @@ const TaskManager = {
     html += '<div class="img-grid cols-2">';
     data.data.forEach((img, i) => {
       if (img.b64_json) {
-        html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)">`;
+        html += `<div class="img-card"><img src="data:image/png;base64,${img.b64_json}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openImageFull(this.src)">`;
         html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
         html += `<a class="img-action-btn dl" href="data:image/png;base64,${img.b64_json}" download="img_${Date.now()}_${i}.png" style="flex:1;text-align:center;text-decoration:none">⬇</a>`;
         html += `<button class="img-action-btn" onclick="TaskManager._saveImage('${taskId}',${i})" style="flex:1">💾 图库</button>`;
         html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
         html += `</div></div>`;
       } else if (img.url) {
-        html += `<div class="img-card"><img src="${img.url}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)" onerror="this.style.display='none';this.nextElementSibling.style.display=''">`;
+        html += `<div class="img-card"><img src="${img.url}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openImageFull(this.src)" onerror="this.style.display='none';this.nextElementSibling.style.display=''">`;
         html += `<div style="display:none;padding:0.5rem;color:var(--warning);font-size:0.78rem">⚠️ 图片加载失败，链接可能已过期</div>`;
         html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
         html += `<a class="img-action-btn dl" href="${img.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开原始链接</a>`;
@@ -2493,7 +2493,7 @@ const TaskManager = {
         body: JSON.stringify({ b64, prompt: '' })
       });
       const data = await resp.json();
-      if (data.ok) { toast('已保存到视频库', 'ok'); }
+      if (data.ok) { toast('已保存到视频库', 'ok'); loadVideoGallery(); }
       else { toast(data.detail || '保存失败', 'err'); }
     } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
