@@ -2076,10 +2076,6 @@ function cancelImgRequest() {
   if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
   hideCancelBtn();
   toast('已取消请求', 'ok');
-  // Reset button states
-  document.getElementById('imgEditBtn').disabled = false;
-  document.getElementById('imgGenBtn').disabled = false;
-  updateButtonsForMediaType();
 }
 
 function handleImageSelect(input) {
@@ -2400,9 +2396,10 @@ const TaskManager = {
         html += `<button class="img-action-btn" onclick="TaskManager._useImageAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
         html += `</div></div>`;
       } else if (img.url) {
-        html += `<div class="img-card"><img src="${img.url}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)" crossorigin="anonymous">`;
+        html += `<div class="img-card"><img src="${img.url}" style="width:100%;border-radius:6px;cursor:pointer" onclick="openFullImage(this.src)" onerror="this.style.display='none';this.nextElementSibling.style.display=''">`;
+        html += `<div style="display:none;padding:0.5rem;color:var(--warning);font-size:0.78rem">⚠️ 图片加载失败，链接可能已过期</div>`;
         html += `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">`;
-        html += `<a class="img-action-btn dl" href="${img.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开</a>`;
+        html += `<a class="img-action-btn dl" href="${img.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开原始链接</a>`;
         html += `</div></div>`;
       }
     });
@@ -2425,9 +2422,9 @@ const TaskManager = {
         html += `<button class="img-action-btn" onclick="TaskManager._useVideoAsMaterial('${taskId}',${i})" style="flex:1">✏️ 编辑</button>`;
         html += '</div>';
       } else if (v.url) {
-        html += `<div style="padding:0.5rem;color:var(--text-muted);font-size:0.82rem">⚠️ 视频下载失败，原始链接可能仍可用：</div>`;
+        html += `<div style="padding:0.5rem;color:var(--warning);font-size:0.82rem">⚠️ 视频下载失败 — 原始链接需要 Google 登录态，可能无法直接访问</div>`;
         html += '<div style="display:flex;gap:0.4rem;margin-top:0.4rem">';
-        html += `<a class="img-action-btn dl" href="${v.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 打开原始链接</a>`;
+        html += `<a class="img-action-btn dl" href="${v.url}" target="_blank" style="flex:1;text-align:center;text-decoration:none">🔗 尝试打开（需登录）</a>`;
         html += '</div>';
       }
       html += '</div>';

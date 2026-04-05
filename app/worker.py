@@ -783,13 +783,14 @@ async def slot_image_generation(
             trace_headers = build_model_trace_headers(model_trace, "image")
 
         if session_id and session_id in slot.edit_sessions:
+            # Existing session: single attempt only — retrying would double-send
+            # the edit instruction into the same conversation, corrupting state.
+            # Recovery via raw_capture still works in the except block.
+            tracer = RawCaptureTracer()
             chat, _ = slot.edit_sessions[session_id]
             slot.edit_sessions[session_id] = (chat, time.time())
             logger.info("Continuing edit session %s, use_pro=%s", session_id, request.use_pro)
-            gemini_response, tracer = await _retry_media_request(
-                "image session continue",
-                lambda t, _a: chat.send_message(prompt, tracer=t, use_pro=request.use_pro),
-            )
+            gemini_response = await chat.send_message(prompt, tracer=tracer, use_pro=request.use_pro)
         else:
             kwargs: dict[str, Any] = {}
             if model:
