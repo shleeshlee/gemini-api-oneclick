@@ -2477,14 +2477,8 @@ const TaskManager = {
   },
 
   async _saveVideo(taskId, idx) {
-    let b64;
-    if (idx === -1) {
-      const m = window[`_taskMusic_${taskId}`];
-      b64 = m?.video_b64;
-    } else {
-      const vids = window[`_taskVids_${taskId}`];
-      b64 = vids?.[idx]?.b64_json;
-    }
+    const vids = window[`_taskVids_${taskId}`];
+    const b64 = vids?.[idx]?.b64_json;
     if (!b64) { toast('无视频数据', 'err'); return; }
     try {
       const resp = await fetch('/gateway/videos/save', {
