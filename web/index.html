@@ -3556,7 +3556,7 @@ function renderAudioGallery() {
     }
     return `<div class="img-card">
       ${media}
-      <div style="display:flex;gap:0.3rem;padding:0.3rem 0.5rem;justify-content:flex-end;flex-wrap:wrap">
+      <div class="img-card-actions">
         ${dlBtns}
         <button class="img-action-btn save" onclick="event.stopPropagation();loadAudioToEdit('${a.id}')" title="编辑">✏️</button>
         <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
