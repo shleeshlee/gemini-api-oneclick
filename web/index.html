@@ -3542,18 +3542,36 @@ function renderAudioGallery() {
     const src = `/data/audio/${a.filename}`;
     const fp = esc(a.prompt || '');
     const label = esc(a.filename_hint || a.filename);
-    return `<div class="img-card" style="padding:0.8rem">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-bottom:0.5rem">
+    const isVideo = a.filename.endsWith('.mp4');
+    const player = isVideo
+      ? `<video controls style="width:120px;height:120px;object-fit:cover;border-radius:6px;flex-shrink:0" src="${src}" preload="metadata"></video>`
+      : `<audio controls style="width:100%" src="${src}" preload="metadata"></audio>`;
+    if (isVideo) {
+      return `<div class="img-card" style="padding:0.6rem;display:flex;gap:0.8rem;align-items:center">
+        ${player}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+          <div class="gallery-meta" style="margin-top:0.2rem">${a.mime_type ? esc(a.mime_type) : 'video/mp4'}</div>
+          <div style="display:flex;gap:0.3rem;margin-top:0.4rem">
+            <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+            <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
+            <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
+          </div>
+          <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok')" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.35rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
+        </div>
+      </div>`;
+    }
+    return `<div class="img-card" style="padding:0.6rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-bottom:0.4rem">
         <div style="font-size:0.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
-        <div class="img-card-actions" style="margin:0">
+        <div style="display:flex;gap:0.3rem">
           <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
           <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
           <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
         </div>
       </div>
-      ${a.filename.endsWith('.mp4') ? `<video controls style="width:100%;max-width:240px;border-radius:6px" src="${src}" preload="metadata"></video>` : `<audio controls style="width:100%" src="${src}" preload="metadata"></audio>`}
-      <div class="gallery-meta">${a.mime_type ? esc(a.mime_type) : 'audio file'}</div>
-      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.35rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
+      ${player}
+      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok')" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.35rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
     </div>`;
   }).join('');
 }
