@@ -2495,23 +2495,17 @@ const TaskManager = {
     const m = window[`_taskMusic_${taskId}`];
     if (!m?.audio_b64 && !m?.video_b64) { toast('无音频数据', 'err'); return; }
     try {
-      let saved = 0;
-      if (m.audio_b64) {
-        const resp = await fetch('/gateway/audio/save', {
-          method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
-          body: JSON.stringify({ b64: m.audio_b64, prompt: '', filename: 'music.mp3', mime_type: 'audio/mpeg' })
-        });
-        if ((await resp.json()).ok) saved++;
-      }
-      if (m.video_b64) {
-        const resp = await fetch('/gateway/audio/save', {
-          method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
-          body: JSON.stringify({ b64: m.video_b64, prompt: '', filename: 'music.mp4', mime_type: 'video/mp4' })
-        });
-        if ((await resp.json()).ok) saved++;
-      }
-      if (saved) { toast(`已保存 ${saved} 个文件到音频库`, 'ok'); loadAudioGallery(); }
-      else { toast('保存失败', 'err'); }
+      const body = { prompt: '' };
+      if (m.audio_b64) { body.b64 = m.audio_b64; body.filename = 'music.mp3'; body.mime_type = 'audio/mpeg'; }
+      if (m.video_b64) { body.b64_alt = m.video_b64; body.filename_alt = 'music.mp4'; body.mime_type_alt = 'video/mp4'; }
+      if (!body.b64 && body.b64_alt) { body.b64 = body.b64_alt; body.filename = body.filename_alt; body.mime_type = body.mime_type_alt; delete body.b64_alt; delete body.filename_alt; delete body.mime_type_alt; }
+      const resp = await fetch('/gateway/audio/save', {
+        method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await resp.json();
+      if (data.ok) { toast('已保存到音频库', 'ok'); loadAudioGallery(); }
+      else { toast(data.detail || '保存失败', 'err'); }
     } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
 
@@ -3540,23 +3534,54 @@ function renderAudioGallery() {
   const grid = document.getElementById('audioGalleryGrid');
   grid.innerHTML = audioGalleryItems.map(a => {
     const src = `/data/audio/${a.filename}`;
+    const altFile = a.filename_alt || '';
+    const srcAlt = altFile ? `/data/audio/${altFile}` : '';
     const fp = esc(a.prompt || '');
-    const label = esc(a.filename_hint || a.filename);
-    const isVideo = a.filename.endsWith('.mp4');
-    const media = isVideo
-      ? `<video controls style="width:100%;border-radius:6px" src="${src}" preload="metadata"></video>`
+    const hasVideo = a.filename.endsWith('.mp4') || altFile.endsWith('.mp4');
+    const videoSrc = a.filename.endsWith('.mp4') ? src : srcAlt;
+    const mp3Src = a.filename.endsWith('.mp3') ? src : (altFile.endsWith('.mp3') ? srcAlt : '');
+    const mp3File = a.filename.endsWith('.mp3') ? a.filename : (altFile.endsWith('.mp3') ? altFile : '');
+    const mp4File = a.filename.endsWith('.mp4') ? a.filename : (altFile.endsWith('.mp4') ? altFile : '');
+    const mp4Src = mp4File ? `/data/audio/${mp4File}` : '';
+    const media = hasVideo
+      ? `<video controls style="width:100%;border-radius:6px" src="${videoSrc}" preload="metadata"></video>`
       : `<div style="padding:0.5rem"><audio controls style="width:100%" src="${src}" preload="metadata"></audio></div>`;
+    // Download buttons: show separate MP3/MP4 if both exist
+    let dlBtns = '';
+    if (mp3File && mp4File) {
+      dlBtns = `<a class="img-action-btn dl" download="${mp3File}" href="${mp3Src}" onclick="event.stopPropagation()" style="font-size:0.68rem">⬇MP3</a>`;
+      dlBtns += `<a class="img-action-btn dl" download="${mp4File}" href="${mp4Src}" onclick="event.stopPropagation()" style="font-size:0.68rem">⬇MP4</a>`;
+    } else {
+      dlBtns = `<a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>`;
+    }
     return `<div class="img-card">
       ${media}
-      <div class="img-card-actions">
-        <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+      <div style="display:flex;gap:0.3rem;padding:0.3rem 0.5rem;justify-content:flex-end;flex-wrap:wrap">
+        ${dlBtns}
+        <button class="img-action-btn save" onclick="event.stopPropagation();loadAudioToEdit('${a.id}')" title="编辑">✏️</button>
         <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
       </div>
-      <div class="gallery-meta">${label}</div>
       <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.2rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
     </div>`;
   }).join('');
+}
+async function loadAudioToEdit(audioId) {
+  const item = audioGalleryItems.find(a => a.id === audioId);
+  if (!item) { toast('未找到音频', 'err'); return; }
+  // Prefer MP4 (has visuals), fallback to primary
+  const fn = item.filename_alt?.endsWith('.mp4') ? item.filename_alt : item.filename;
+  try {
+    const resp = await fetch(`/data/audio/${fn}`);
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const b64 = e.target.result.split(',')[1];
+      useMusicAsMaterial_b64(b64);
+      toast('已加载到素材区', 'ok');
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) { toast('加载失败: ' + e.message, 'err'); }
 }
 async function deleteAudio(audio_id) {
   if (!confirm('删除这个音频？')) return;

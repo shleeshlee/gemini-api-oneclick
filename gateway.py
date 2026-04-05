@@ -2324,16 +2324,50 @@ def _guess_audio_suffix(filename: str, mime_type: str) -> str:
 @app.post("/gateway/audio/save", dependencies=[Depends(verify_panel_auth)])
 async def save_audio(request: Request):
     body = await request.json()
-    if not body.get("b64"):
+    # Support paired save: b64 (primary) + b64_alt (secondary, e.g. MP3+MP4)
+    if not body.get("b64") and not body.get("b64_alt"):
         raise HTTPException(status_code=400, detail="b64 data required")
-    filename = (body.get("filename") or "").strip()
-    mime_type = (body.get("mime_type") or "").strip()
-    entry = _audio_gallery.save_file_dynamic(
-        body["b64"],
-        {"prompt": body.get("prompt", ""), "filename_hint": filename, "mime_type": mime_type},
-        suffix=_guess_audio_suffix(filename, mime_type),
-    )
-    return {"ok": True, "id": entry["id"], "filename": entry["filename"]}
+    _audio_gallery.media_dir.mkdir(parents=True, exist_ok=True)
+    file_id = _uuid.uuid4().hex[:12]
+    extra = {"prompt": body.get("prompt", "")}
+    files_saved = {}
+
+    # Save primary file (e.g. MP3)
+    if body.get("b64"):
+        fn = (body.get("filename") or "").strip()
+        mt = (body.get("mime_type") or "").strip()
+        suffix = _guess_audio_suffix(fn, mt)
+        primary_name = f"{file_id}{suffix}"
+        try:
+            (_audio_gallery.media_dir / primary_name).write_bytes(base64.b64decode(body["b64"]))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+        files_saved["filename"] = primary_name
+        extra["mime_type"] = mt or f"audio/{suffix.lstrip('.')}"
+
+    # Save alt file (e.g. MP4)
+    if body.get("b64_alt"):
+        fn_alt = (body.get("filename_alt") or "").strip()
+        mt_alt = (body.get("mime_type_alt") or "").strip()
+        suffix_alt = _guess_audio_suffix(fn_alt, mt_alt)
+        alt_name = f"{file_id}{suffix_alt}"
+        try:
+            (_audio_gallery.media_dir / alt_name).write_bytes(base64.b64decode(body["b64_alt"]))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 alt: {e}")
+        files_saved["filename_alt"] = alt_name
+        extra["mime_type_alt"] = mt_alt or f"video/{suffix_alt.lstrip('.')}"
+
+    if not files_saved:
+        raise HTTPException(status_code=400, detail="No files to save")
+
+    # Use primary filename, fallback to alt
+    main_filename = files_saved.get("filename") or files_saved.get("filename_alt", "")
+    entry = {"id": file_id, "filename": main_filename, "saved_at": _now_iso(), **extra, **files_saved}
+    meta = _audio_gallery.load_meta()
+    meta.insert(0, entry)
+    _audio_gallery._save_meta(meta)
+    return {"ok": True, "id": file_id, "filename": main_filename}
 
 
 @app.get("/gateway/audio", dependencies=[Depends(verify_panel_auth)])
@@ -2344,7 +2378,19 @@ async def list_audio(offset: int = 0, limit: int = 50):
 
 @app.delete("/gateway/audio/{audio_id}", dependencies=[Depends(verify_panel_auth)])
 async def delete_audio(audio_id: str):
-    _audio_gallery.delete_file(audio_id)
+    meta = _audio_gallery.load_meta()
+    entry = next((m for m in meta if m["id"] == audio_id), None)
+    # Delete both primary and alt files
+    if entry:
+        for key in ("filename", "filename_alt"):
+            fn = entry.get(key)
+            if fn:
+                fp = (_audio_gallery.media_dir / fn).resolve()
+                if fp.parent == _audio_gallery.media_dir.resolve() and fp.exists():
+                    fp.unlink()
+        _audio_gallery._save_meta([m for m in meta if m["id"] != audio_id])
+    else:
+        _audio_gallery.delete_file(audio_id)
     return {"ok": True}
 
 
