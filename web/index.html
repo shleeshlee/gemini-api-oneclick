@@ -897,7 +897,7 @@ body::before {
         <span id="audioGalleryCount" style="font-size:0.78rem;color:var(--text-muted);font-weight:400"></span>
       </div>
       <div id="audioGalleryContent">
-        <div id="audioGalleryGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0.6rem"></div>
+        <div id="audioGalleryGrid" class="img-grid cols-4"></div>
         <div id="audioGalleryEmpty" class="gallery-empty">还没有保存的音频</div>
         <div id="audioGalleryMore" style="text-align:center;padding:0.6rem;display:none">
           <button class="img-action-btn dl" onclick="loadMoreAudioGallery()" style="padding:0.4rem 1.2rem">加载更多</button>
@@ -3468,16 +3468,16 @@ function renderVideoGallery() {
   grid.innerHTML = vidGalleryItems.map(v => {
     const src = `/data/videos/${v.filename}`;
     const fp = esc(v.prompt || '');
-    return `<div class="img-card" style="padding:0.5rem">
-      <video controls style="width:100%;border-radius:6px;aspect-ratio:16/9;object-fit:cover" src="${src}" preload="metadata"></video>
-      <div style="font-size:0.72rem;font-weight:600;margin-top:0.3rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((v.prompt||'').slice(0,40))}${v.model?' · '+v.model:''}</div>
-      <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
+    return `<div class="img-card">
+      <video controls style="width:100%;border-radius:6px" src="${src}" preload="metadata"></video>
+      <div class="img-card-actions">
+        <button class="img-action-btn save" onclick="event.stopPropagation();loadVideoToEdit('${v.filename}')" title="编辑">✏️</button>
         <a class="img-action-btn dl" download="${v.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
-        <button class="img-action-btn" onclick="event.stopPropagation();loadVideoToEdit('${v.filename}')" title="用作素材">📌</button>
-        <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="提示词">📝</button>
+        <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
         <button class="img-action-btn del" onclick="event.stopPropagation();deleteVideo('${v.id}')">🗑</button>
       </div>
-      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok')" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.3rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
+      <div class="gallery-meta">${esc((v.prompt||'').slice(0,40))}${v.model?' · '+v.model:''}</div>
+      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.2rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
     </div>`;
   }).join('');
 }
@@ -3543,23 +3543,18 @@ function renderAudioGallery() {
     const fp = esc(a.prompt || '');
     const label = esc(a.filename_hint || a.filename);
     const isVideo = a.filename.endsWith('.mp4');
-    const actions = `<div style="display:flex;gap:0.3rem;margin-top:0.3rem">
-          <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
-          <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="提示词">📝</button>
-          <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
-        </div>`;
-    const promptDiv = `<div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok')" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.3rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>`;
-    if (isVideo) {
-      return `<div class="img-card" style="padding:0.5rem">
-        <video controls style="width:100%;border-radius:6px;aspect-ratio:1;object-fit:cover" src="${src}" preload="metadata"></video>
-        <div style="font-size:0.72rem;font-weight:600;margin-top:0.3rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
-        ${actions}${promptDiv}
-      </div>`;
-    }
-    return `<div class="img-card" style="padding:0.5rem">
-      <div style="font-size:0.72rem;font-weight:600;margin-bottom:0.3rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
-      <audio controls style="width:100%" src="${src}" preload="metadata"></audio>
-      ${actions}${promptDiv}
+    const media = isVideo
+      ? `<video controls style="width:100%;border-radius:6px" src="${src}" preload="metadata"></video>`
+      : `<div style="padding:0.5rem"><audio controls style="width:100%" src="${src}" preload="metadata"></audio></div>`;
+    return `<div class="img-card">
+      ${media}
+      <div class="img-card-actions">
+        <a class="img-action-btn dl" download="${a.filename}" href="${src}" onclick="event.stopPropagation()">⬇</a>
+        <button class="img-action-btn" onclick="event.stopPropagation();const p=this.closest('.img-card').querySelector('.gallery-prompt');if(p)p.style.display=p.style.display==='none'?'':'none'" title="查看提示词">📝</button>
+        <button class="img-action-btn del" onclick="event.stopPropagation();deleteAudio('${a.id}')">🗑</button>
+      </div>
+      <div class="gallery-meta">${label}</div>
+      <div class="gallery-prompt" onclick="event.stopPropagation();navigator.clipboard.writeText(this.textContent);toast('已复制','ok');this.style.background='var(--accent-light)';setTimeout(()=>this.style.background='var(--bg)',600)" title="点击复制" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:0.3rem;background:var(--bg);border-radius:4px;margin-top:0.2rem;word-break:break-all;line-height:1.3;cursor:pointer">${fp}</div>
     </div>`;
   }).join('');
 }
