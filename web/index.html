@@ -2528,8 +2528,9 @@ const TaskManager = {
   },
   _useMusicAsMaterial(taskId) {
     const m = window[`_taskMusic_${taskId}`];
-    if (!m?.audio_b64) return;
-    useMusicAsMaterial_b64(m.audio_b64);
+    if (!m?.audio_b64 && !m?.video_b64) return;
+    if (m.video_b64) { useMusicAsMaterial_b64(m.video_b64, true); }
+    else { useMusicAsMaterial_b64(m.audio_b64, false); }
   },
 };
 
@@ -2550,21 +2551,29 @@ function useVideoAsMaterial_b64(b64) {
   toast('视频已加载到素材区', 'ok');
 }
 
-function useMusicAsMaterial_b64(b64) {
+function useMusicAsMaterial_b64(b64, isVideo) {
   uploadedImageB64 = b64; uploadedMediaType = 'audio'; editSessionId = null;
   const preview = document.getElementById('imgUploadPreview');
   const img = document.getElementById('imgPreviewImg'); img.style.display = 'none';
   const oldVid = document.getElementById('vidPreviewPlayer'); if (oldVid) oldVid.remove();
   const oldAud = document.getElementById('audPreviewPlayer'); if (oldAud) oldAud.remove();
-  const aud = document.createElement('audio'); aud.id = 'audPreviewPlayer'; aud.controls = true;
-  aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
-  aud.src = 'data:audio/mpeg;base64,' + b64;
-  img.parentNode.insertBefore(aud, img);
+  if (isVideo) {
+    const vid = document.createElement('video'); vid.id = 'vidPreviewPlayer'; vid.controls = true;
+    vid.style.cssText = 'width:100%;max-height:500px;border-radius:6px;display:block';
+    vid.src = 'data:video/mp4;base64,' + b64;
+    img.parentNode.insertBefore(vid, img);
+    document.getElementById('imgFileInfo').innerHTML = '从音频库加载 · 🎵 音乐视频';
+  } else {
+    const aud = document.createElement('audio'); aud.id = 'audPreviewPlayer'; aud.controls = true;
+    aud.style.cssText = 'width:100%;display:block;margin:0.5rem 0';
+    aud.src = 'data:audio/mpeg;base64,' + b64;
+    img.parentNode.insertBefore(aud, img);
+    document.getElementById('imgFileInfo').innerHTML = '从音频库加载 · 🎵 音频';
+  }
   preview.style.display = ''; document.getElementById('imgUploadEmpty').style.display = 'none';
-  document.getElementById('imgFileInfo').innerHTML = '从任务结果加载 · 🎵 音频';
   updateButtonsForMediaType();
   document.getElementById('imgUploadArea').scrollIntoView({behavior:'smooth',block:'center'});
-  toast('音频已加载到素材区', 'ok');
+  toast('已加载到素材区', 'ok');
 }
 function switchStudioMenu() {
   const hasMaterial = !!uploadedImageB64;
@@ -3571,14 +3580,14 @@ async function loadAudioToEdit(audioId) {
   if (!item) { toast('未找到音频', 'err'); return; }
   // Prefer MP4 (has visuals), fallback to primary
   const fn = item.filename_alt?.endsWith('.mp4') ? item.filename_alt : item.filename;
+  const isMp4 = fn.endsWith('.mp4');
   try {
     const resp = await fetch(`/data/audio/${fn}`);
     const blob = await resp.blob();
     const reader = new FileReader();
     reader.onload = (e) => {
       const b64 = e.target.result.split(',')[1];
-      useMusicAsMaterial_b64(b64);
-      toast('已加载到素材区', 'ok');
+      useMusicAsMaterial_b64(b64, isMp4);
     };
     reader.readAsDataURL(blob);
   } catch(e) { toast('加载失败: ' + e.message, 'err'); }
