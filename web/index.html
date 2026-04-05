@@ -2444,7 +2444,6 @@ const TaskManager = {
     if (m.audio_b64) html += `<a class="img-action-btn dl" href="data:audio/mpeg;base64,${m.audio_b64}" download="music_${Date.now()}.mp3" style="flex:1;text-align:center;text-decoration:none">⬇ MP3</a>`;
     if (m.video_b64) html += `<a class="img-action-btn dl" href="data:video/mp4;base64,${m.video_b64}" download="music_${Date.now()}.mp4" style="flex:1;text-align:center;text-decoration:none">⬇ MP4</a>`;
     if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._saveAudio('${taskId}')" style="flex:1">💾 音频库</button>`;
-    if (m.video_b64) html += `<button class="img-action-btn" onclick="TaskManager._saveVideo('${taskId}',-1)" style="flex:1">💾 视频库</button>`;
     if (m.audio_b64) html += `<button class="img-action-btn" onclick="TaskManager._useMusicAsMaterial('${taskId}')" style="flex:1">✏️ 编辑</button>`;
     html += '</div></div>';
     if (data.text) html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem">${esc(data.text.substring(0, 200))}</div>`;
@@ -2500,16 +2499,25 @@ const TaskManager = {
 
   async _saveAudio(taskId) {
     const m = window[`_taskMusic_${taskId}`];
-    const b64 = m?.audio_b64;
-    if (!b64) { toast('无音频数据', 'err'); return; }
+    if (!m?.audio_b64 && !m?.video_b64) { toast('无音频数据', 'err'); return; }
     try {
-      const resp = await fetch('/gateway/audio/save', {
-        method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
-        body: JSON.stringify({ b64, prompt: '', filename: 'music.mp3', mime_type: 'audio/mpeg' })
-      });
-      const data = await resp.json();
-      if (data.ok) { toast('已保存到音频库', 'ok'); loadAudioGallery(); }
-      else { toast(data.detail || '保存失败', 'err'); }
+      let saved = 0;
+      if (m.audio_b64) {
+        const resp = await fetch('/gateway/audio/save', {
+          method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+          body: JSON.stringify({ b64: m.audio_b64, prompt: '', filename: 'music.mp3', mime_type: 'audio/mpeg' })
+        });
+        if ((await resp.json()).ok) saved++;
+      }
+      if (m.video_b64) {
+        const resp = await fetch('/gateway/audio/save', {
+          method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+          body: JSON.stringify({ b64: m.video_b64, prompt: '', filename: 'music.mp4', mime_type: 'video/mp4' })
+        });
+        if ((await resp.json()).ok) saved++;
+      }
+      if (saved) { toast(`已保存 ${saved} 个文件到音频库`, 'ok'); loadAudioGallery(); }
+      else { toast('保存失败', 'err'); }
     } catch(e) { toast('保存失败: ' + e.message, 'err'); }
   },
 
