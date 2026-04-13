@@ -2671,16 +2671,13 @@ let savedStyles = [];
 let activeDims = {}; // key: "templateId:dimKey" → value string
 
 async function analyzeStyle() {
-  if (!uploadedImageB64) { toast('请先上传素材（图片/视频/音频）', 'err'); return; }
+  if (!uploadedImageB64) { toast('请先上传图片或视频', 'err'); return; }
+  if (uploadedMediaType === 'audio') { toast('音频不支持风格解析', 'err'); return; }
   const model = document.getElementById('imgOptModel')?.value || document.getElementById('imgModel').value;
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true; btn.textContent = '🔍 解析中...';
 
-  // 不同媒体类型用不同的 5 维度定义
-  const isAudio = uploadedMediaType === 'audio';
-  const isVideo = uploadedMediaType === 'video';
-
-  const imageSysPrompt = `You are an expert at analyzing images and writing structured prompts for Google Gemini image generation. Analyze this image using a 5-layer reverse engineering approach.
+  const sysPrompt = `You are an expert at analyzing images and writing structured prompts for Google Gemini image generation. Analyze this image using a 5-layer reverse engineering approach.
 
 For each layer, ask yourself:
 1. Line quality (Physical): Are the lines ultra-fine or varied? Are edges clean and sharp?
@@ -2705,45 +2702,14 @@ RULES:
 - Use terminology from high-quality digital art tags.
 - Return ONLY the JSON.`;
 
-  const audioSysPrompt = `You are an expert at analyzing music and writing structured prompts for Google Gemini music generation (Lyria). Analyze this audio using a 5-layer reverse engineering approach.
-
-For each layer, listen carefully and ask yourself:
-1. Rhythm/tempo (Physical): What is the BPM? Time signature? Groove pattern (straight/swing/laid-back)? Subdivision density?
-2. Quality/fidelity (Quality): Studio-grade recording? Lo-fi? Broadcast quality? Bit-crushed? Vinyl warmth? Reference the production tier.
-3. Instrumentation & structure (Content): What instruments play the lead, harmony, bass, drums? Are there vocals? Section structure (verse/chorus/bridge)? Key and mode?
-4. Mood & genre (Style): What atmosphere and emotion? Which genre/subgenre? What era or cultural reference?
-5. What is NOT in this music (Negative): Which elements would break the vibe? Wrong tempo range? Forbidden instruments? Unwanted textures?
-
-Return a JSON object with these 5 keys:
-
-{
-  "physical": "(Rhythm constraints — BPM, time signature, groove, subdivision. Example: 85 BPM, 4/4 time, swung hi-hats with laid-back backbeat, straight kick on 1 and 3, subtle snare ghost notes on off-beats, overall relaxed but grounded feel.)",
-  "negative": "(What to exclude. Start with 排除：. Example: 排除：BPM above 100, aggressive distortion, EDM drops, orchestral brass, modern trap 808s, fast double-time hi-hats, rock drum kits.)",
-  "quality": "(Production/fidelity anchors. Example: studio-grade analog warmth, 24-bit clean recording, tape saturation on master bus, gentle tape hiss for vintage texture, broadcast-ready loudness normalization.)",
-  "style": "(Atmosphere, genre, era, mood. Example: Late-night urban lo-fi jazz-hop with velvety sophistication, 2010s Tokyo city-pop revival influence, introspective yet cool, reminiscent of Nujabes and FKJ, evokes rainy neon streets.)",
-  "content": "(Instruments, vocals, harmony, structure. Be specific — 50-80 words. Example: Fender Rhodes electric piano leads the harmony with lush ninth chords, warm fretless bass plays a walking pattern, soft brushed drum kit provides backbone, male spoken-word vocals in baritone range, female sighing backing vocals on hook, chord progression in F minor with jazz substitutions, 16-bar verse / 8-bar chorus structure.)"
-}
-
-RULES:
-- "physical" (rhythm) and "content" (instrumentation) are the most important — they let reproductions match the source.
-- Listen for actual BPM, key, and instruments — don't invent. If uncertain, say so honestly.
-- Use terminology a producer would use (genre names, specific instruments, production techniques).
-- Return ONLY the JSON.`;
-
-  const sysPrompt = isAudio ? audioSysPrompt : imageSysPrompt;
-  const dataUri = `data:${isVideo ? 'video/mp4' : isAudio ? 'audio/mpeg' : 'image/png'};base64,${uploadedImageB64}`;
-  const userText = isAudio ? 'Listen to this music and analyze its style.'
-                 : isVideo ? 'Analyze this video\'s visual style.'
-                 : 'Analyze this image.';
-
   try {
     const resp = await fetch('/v1/chat/completions', {
       method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: [
         { role: 'system', content: sysPrompt },
         { role: 'user', content: [
-          { type: 'image_url', image_url: { url: dataUri } },
-          { type: 'text', text: userText }
+          { type: 'image_url', image_url: { url: `data:${uploadedMediaType === 'video' ? 'video/mp4' : 'image/png'};base64,${uploadedImageB64}` } },
+          { type: 'text', text: uploadedMediaType === 'video' ? 'Analyze this video\'s visual style.' : 'Analyze this image.' }
         ]}
       ], max_tokens: 1000, temperature: 0.3 })
     });
@@ -2756,13 +2722,12 @@ RULES:
     const dims = JSON.parse(jsonMatch[0]);
 
     // Show save dialog
-    const defaultName = isAudio ? '自定义音乐风格' : isVideo ? '自定义视频风格' : '自定义风格';
-    const name = prompt('给这个风格模板起个名字：', defaultName);
+    const name = prompt('给这个风格模板起个名字：', '自定义风格');
     if (!name) { btn.disabled = false; btn.textContent = '🔍 解析风格'; return; }
 
     const saveResp = await fetch('/gateway/styles/save', {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ name, dimensions: dims, media_type: uploadedMediaType || 'image' })
+      body: JSON.stringify({ name, dimensions: dims })
     });
     const saveData = await saveResp.json();
     if (saveData.ok) {
