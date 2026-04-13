@@ -2442,10 +2442,12 @@ async def save_style(request: Request):
         raise HTTPException(status_code=400, detail="dimensions required")
 
     style_id = _uuid.uuid4().hex[:8]
+    media_type = (body.get("media_type") or "image").strip() or "image"
     entry = {
         "id": style_id,
         "name": name,
         "dimensions": dimensions,
+        "media_type": media_type,  # image / video / audio — 决定应用回哪种生成
         "created": int(time.time()),
     }
 
