@@ -457,15 +457,7 @@ def prepare_conversation(messages: list) -> tuple[str, list[str]]:
                         if image_url.startswith("data:"):
                             try:
                                 mime = image_url.split(";")[0].split(":")[1] if ":" in image_url else ""
-                                if "video" in mime:
-                                    suffix = ".mp4"
-                                elif "audio" in mime:
-                                    subtype = mime.split("/", 1)[1] if "/" in mime else "mp3"
-                                    # 常见 OpenAI-style audio/mpeg 实际是 mp3；wav/ogg/flac/m4a 原样；
-                                    # 其他少见格式按 subtype 当扩展名（Gemini 网页端按文件嗅探识别内容）
-                                    suffix = ".mp3" if subtype in ("mpeg", "mp3") else f".{subtype or 'mp3'}"
-                                else:
-                                    suffix = ".png"
+                                suffix = ".mp4" if "video" in mime else ".png"
                                 base64_data = image_url.split(",")[1]
                                 image_data = base64.b64decode(base64_data)
                                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
