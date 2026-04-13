@@ -164,6 +164,8 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 
 Gateway、分组路由、管理面板、创作工作室、部署工具链等为本项目独立开发。
 
+Thanks to everyone on LinuxDo for their support! 欢迎大家加入 https://linux.do/ 进行自由的技术交流。
+
 ## 许可证
 
 [AGPL-3.0](LICENSE)
