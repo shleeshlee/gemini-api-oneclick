@@ -1,7 +1,6 @@
 import asyncio
 import codecs
 import io
-import mimetypes
 import os
 import random
 import re
@@ -243,20 +242,6 @@ def _detect_image_model(text: str) -> str | None:
     if re.search(_IMAGE_MODEL_STANDARD_PATTERN, text, re.IGNORECASE):
         return "standard"
     return None
-
-
-def _guess_upload_mime(file) -> str:
-    """Detect MIME by file extension. Fallback image/jpeg preserves old
-    behavior for unknown types so existing image edits aren't disturbed.
-
-    Critical for audio/video/pdf uploads: Gemini webapp routes by MIME;
-    a .mp3 announced as image/jpeg gets stuck in "queueing" forever.
-    """
-    if isinstance(file, (str, Path)):
-        mime, _ = mimetypes.guess_type(str(file))
-        if mime:
-            return mime
-    return "image/jpeg"
 
 
 def _is_video_generation_pending(text: str) -> bool:
@@ -848,7 +833,7 @@ class GeminiClient(GemMixin, ResearchMixin):
             await self._send_bard_activity()
 
             uploaded_urls = await asyncio.gather(*(upload_file(file, self.proxy, session=self.client, account_index=self.account_index) for file in files))
-            file_data = [[[url, 1, None, _guess_upload_mime(file)], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
+            file_data = [[[url, 1, None, "image/jpeg"], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
 
         try:
             await self._send_bard_activity()
@@ -968,7 +953,7 @@ class GeminiClient(GemMixin, ResearchMixin):
             await self._send_bard_activity()
 
             uploaded_urls = await asyncio.gather(*(upload_file(file, self.proxy, session=self.client, account_index=self.account_index) for file in files))
-            file_data = [[[url, 1, None, _guess_upload_mime(file)], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
+            file_data = [[[url, 1, None, "image/jpeg"], parse_file_name(file)] for url, file in zip(uploaded_urls, files, strict=True)]
 
         try:
             await self._send_bard_activity()
