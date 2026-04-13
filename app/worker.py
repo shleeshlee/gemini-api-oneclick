@@ -430,8 +430,6 @@ class VideoGenerationRequest(BaseModel):
 class MusicGenerationRequest(BaseModel):
     prompt: str
     model: Optional[str] = "gemini-3-flash"
-    image: Optional[str] = None        # base64 of source media (audio/image/video)
-    media_type: Optional[str] = "image"  # "audio" | "image" | "video"
 
 
 # ── Conversation prep ────────────────────────────────────────────────
@@ -1080,11 +1078,9 @@ async def slot_music_generation(
     slot = _get_slot(num)
     trace_headers: dict[str, str] = {}
     tracer: RawCaptureTracer | None = None
-    temp_files: list[str] = []
     try:
         client = await _get_client(slot)
-        logger.info("Slot %d music: '%s' (has_media=%s type=%s)",
-                    num, request.prompt[:200], request.image is not None, request.media_type)
+        logger.info("Slot %d music: '%s'", num, request.prompt[:200])
         slot_log(num, f"Music: {request.prompt[:60]}")
 
         model = None
@@ -1092,33 +1088,12 @@ async def slot_music_generation(
             model, model_trace = resolve_model_for_media(request.model)
             trace_headers = build_model_trace_headers(model_trace, "music")
 
-        # Decode source media (audio/image/video) into a temp file to upload
-        files_arg = None
-        if request.image:
-            try:
-                mt = (request.media_type or "image").lower()
-                if mt == "audio":
-                    suffix = ".mp3"
-                elif mt == "video":
-                    suffix = ".mp4"
-                else:
-                    suffix = ".png"
-                media_bytes = base64.b64decode(request.image)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp.write(media_bytes)
-                    temp_files.append(tmp.name)
-                files_arg = temp_files
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid base64 media: {str(e)}")
-
         tracer = RawCaptureTracer()
         # Music generation can take long — extend watchdog to avoid zombie detection
         orig_watchdog = client.watchdog_timeout
         client.watchdog_timeout = 300
         try:
-            gemini_response = await client.generate_content(
-                request.prompt, files=files_arg, tracer=tracer, model=model,
-            )
+            gemini_response = await client.generate_content(request.prompt, tracer=tracer, model=model)
         finally:
             client.watchdog_timeout = orig_watchdog
 
@@ -1203,12 +1178,6 @@ async def slot_music_generation(
         if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota']):
             raise HTTPException(status_code=429, detail=f"Music rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Music generation failed: {str(e)}")
-    finally:
-        for tf in temp_files:
-            try:
-                os.unlink(tf)
-            except Exception:
-                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
