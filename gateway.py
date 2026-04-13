@@ -55,6 +55,7 @@ def _read_dotenv() -> dict:
 
 _dotenv = _read_dotenv()
 GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT") or _dotenv.get("GATEWAY_PORT") or "9880")
+GATEWAY_HOST = os.environ.get("GATEWAY_HOST") or _dotenv.get("GATEWAY_HOST") or "127.0.0.1"
 BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 API_KEY = _dotenv.get("API_KEY", "")
 COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
@@ -2523,4 +2524,4 @@ async def ecosystem_info(request: Request):
 if __name__ == "__main__":
     print(f"[gateway] Starting on port {GATEWAY_PORT}")
     print(f"[gateway] Managing containers from {ENVS_DIR}")
-    uvicorn.run("gateway:app", host="0.0.0.0", port=GATEWAY_PORT, log_level="info")
+    uvicorn.run("gateway:app", host=GATEWAY_HOST, port=GATEWAY_PORT, log_level="info")
