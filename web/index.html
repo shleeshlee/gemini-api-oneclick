@@ -1026,6 +1026,22 @@ body::before {
       <div class="guard-hint">显示最近请求的模型映射记录：请求模型 → 实际 header 家族和 token。</div>
     </div>
 
+    <div class="guard-section">
+      <div class="guard-section-title" style="justify-content:space-between">
+        Gateway 监听地址
+        <button class="btn btn-primary" id="netSaveBtn" onclick="saveNetworkSettings()" style="padding:0.25rem 0.8rem;font-size:0.78rem">保存</button>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">绑定网卡 IP</div>
+          <div class="toggle-desc">0.0.0.0 = 所有网卡（docker 消费者/同机服务能访问，需防火墙保护端口）· 127.0.0.1 = 仅本机回环（需反代）· 或填内网 IP</div>
+        </div>
+        <input type="text" class="threshold-input" id="netGatewayHost" placeholder="0.0.0.0" style="width:9rem">
+      </div>
+      <div class="guard-hint" id="netRuntimeHint" style="margin-top:0.5rem"></div>
+      <div class="modal-msg" id="netMsg" style="margin-top:0.4rem"></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeGuardSettings()">取消</button>
       <button class="btn btn-primary" id="guardSaveBtn" onclick="saveGuardSettings()">保存</button>
@@ -3011,6 +3027,68 @@ function toast(text, type) {
 
 loadNames();
 
+// ── Network Settings (Gateway bind host) ─────────────────────
+function loadNetworkSettings() {
+  const msgEl = document.getElementById('netMsg');
+  const hintEl = document.getElementById('netRuntimeHint');
+  msgEl.textContent = '';
+  hintEl.textContent = '加载中...';
+  fetch(API + '/network-settings', {headers: authHeaders()})
+    .then(r => r.json())
+    .then(data => {
+      const saved = (data.settings && data.settings.GATEWAY_HOST) || '0.0.0.0';
+      const runtime = (data.runtime && data.runtime.GATEWAY_HOST) || '';
+      document.getElementById('netGatewayHost').value = saved;
+      if (data.needs_restart) {
+        hintEl.innerHTML = `<span style="color:#d97706">.env 已保存 <b>${saved}</b>，当前运行中是 <b>${runtime}</b> — 需重启 gateway 才生效</span>`;
+      } else {
+        hintEl.textContent = `当前运行中：${runtime}`;
+      }
+    })
+    .catch(() => { hintEl.textContent = '加载失败'; });
+}
+
+function saveNetworkSettings() {
+  const msgEl = document.getElementById('netMsg');
+  const btn = document.getElementById('netSaveBtn');
+  const host = document.getElementById('netGatewayHost').value.trim();
+  msgEl.className = 'modal-msg';
+  msgEl.textContent = '';
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    msgEl.className = 'modal-msg err';
+    msgEl.textContent = '必须是合法 IPv4（如 0.0.0.0 / 127.0.0.1）';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+  fetch(API + '/network-settings', {
+    method: 'POST',
+    headers: Object.assign({'Content-Type': 'application/json'}, authHeaders()),
+    body: JSON.stringify({settings: {GATEWAY_HOST: host}})
+  })
+    .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+    .then(({ok, data}) => {
+      if (!ok) {
+        msgEl.className = 'modal-msg err';
+        msgEl.textContent = data.detail || '保存失败';
+      } else {
+        msgEl.className = 'modal-msg ok';
+        let txt = data.message || '已保存';
+        if (data.needs_restart) txt += '  ·  需重启 gateway 才生效：sudo systemctl restart gemini-gateway';
+        msgEl.textContent = txt;
+        loadNetworkSettings();
+      }
+      btn.disabled = false;
+      btn.textContent = '保存';
+    })
+    .catch(() => {
+      msgEl.className = 'modal-msg err';
+      msgEl.textContent = '保存失败';
+      btn.disabled = false;
+      btn.textContent = '保存';
+    });
+}
+
 // ── Guard Settings ──────────────────────────────────────────
 let guardCodes = [];
 let guardKeywords = [];
@@ -3102,6 +3180,7 @@ function openGuardSettings() {
         renderModelChips(ids);
       }).catch(()=>{});
       loadModelInspector();
+      loadNetworkSettings();
     })
     .catch(e => {
       document.getElementById('guardMsg').className = 'modal-msg err';

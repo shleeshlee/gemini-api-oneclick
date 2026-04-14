@@ -2150,6 +2150,56 @@ async def api_set_guard_settings(request: Request):
     return {"ok": True, "message": "Guard settings saved"}
 
 
+_NETWORK_KEYS = {"GATEWAY_HOST"}
+
+
+@app.get("/api/network-settings", dependencies=[Depends(verify_panel_auth)])
+async def api_get_network_settings():
+    """Read network/bind settings from .env. Also reports the currently active
+    runtime value so the UI can surface 'saved but not yet applied' state."""
+    current = _read_dotenv()
+    saved_host = current.get("GATEWAY_HOST", "") or "0.0.0.0"
+    return {
+        "settings": {"GATEWAY_HOST": saved_host},
+        "runtime": {"GATEWAY_HOST": GATEWAY_HOST},
+        "needs_restart": saved_host != GATEWAY_HOST,
+    }
+
+
+@app.post("/api/network-settings", dependencies=[Depends(verify_panel_auth)])
+async def api_set_network_settings(request: Request):
+    """Update GATEWAY_HOST in .env. Gateway must be restarted to apply."""
+    body = await request.json()
+    new_settings = body.get("settings", {})
+    host = (new_settings.get("GATEWAY_HOST") or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="GATEWAY_HOST cannot be empty")
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        raise HTTPException(status_code=400, detail="GATEWAY_HOST must be a valid IPv4 (e.g. 0.0.0.0, 127.0.0.1)")
+
+    lines = []
+    seen = False
+    if DOTENV_PATH.exists():
+        for line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key == "GATEWAY_HOST":
+                    lines.append(f"GATEWAY_HOST={host}")
+                    seen = True
+                    continue
+            lines.append(line)
+    if not seen:
+        lines.append(f"GATEWAY_HOST={host}")
+    DOTENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "message": f"已写入 GATEWAY_HOST={host} 到 .env",
+        "needs_restart": host != GATEWAY_HOST,
+        "runtime": GATEWAY_HOST,
+    }
+
+
 @app.get("/api/health")
 async def api_health():
     return {"status": "ok"}
