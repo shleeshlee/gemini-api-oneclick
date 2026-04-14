@@ -503,8 +503,8 @@ else
 fi
 echo ""
 
-# [5/5] Gateway port
-step "5/5" "Gateway 统一入口端口"
+# [5/6] Gateway port
+step "5/6" "Gateway 统一入口端口"
 DEFAULT_GW="${OLD_GATEWAY_PORT:-9880}"
 read -rp "  端口 [${DEFAULT_GW}]: " USER_GW_PORT
 GATEWAY_PORT="${USER_GW_PORT:-$DEFAULT_GW}"
@@ -517,6 +517,43 @@ if port_in_use "$GATEWAY_PORT"; then
   fi
 fi
 info "Gateway 端口: ${GATEWAY_PORT}"
+echo ""
+
+# [6/6] Gateway bind host
+step "6/6" "Gateway 监听地址"
+OLD_GATEWAY_HOST=$(grep '^GATEWAY_HOST=' .env 2>/dev/null | cut -d= -f2 || echo "")
+echo ""
+echo "  Gateway 要绑定到哪个网卡？决定谁能访问它。"
+echo ""
+echo "  [1] ${GREEN}0.0.0.0（推荐，所有网卡）${NC}"
+echo "      同机 docker 容器、本机、同子网都能访问。"
+echo "      ${BOLD}要自己用防火墙/安全组保护端口 ${GATEWAY_PORT} 不被公网直连。${NC}"
+echo ""
+echo "  [2] 127.0.0.1（仅本机回环）"
+echo "      只有本机 uvicorn / 前端反代（Caddy/nginx）能访问。"
+echo "      最严格，但 docker 容器消费者会打不通。"
+echo ""
+echo "  [3] 自定义 IP（如某个内网网卡）"
+echo ""
+DEFAULT_HOST="${OLD_GATEWAY_HOST:-0.0.0.0}"
+[[ -n "$OLD_GATEWAY_HOST" ]] && echo -e "  ${GREEN}当前 .env 里是 ${OLD_GATEWAY_HOST}${NC}"
+read -rp "  选择 [1/2/3, 默认 $([ "$DEFAULT_HOST" = "127.0.0.1" ] && echo "2" || echo "1")]: " host_choice
+host_choice="${host_choice:-$([ "$DEFAULT_HOST" = "127.0.0.1" ] && echo "2" || echo "1")}"
+case "$host_choice" in
+  1) GATEWAY_HOST="0.0.0.0" ;;
+  2) GATEWAY_HOST="127.0.0.1" ;;
+  3)
+    read -rp "  自定义 IP: " GATEWAY_HOST
+    if ! [[ "$GATEWAY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      error "IP 格式无效"
+    fi
+    ;;
+  *) error "无效选择" ;;
+esac
+info "Gateway 监听: ${GATEWAY_HOST}:${GATEWAY_PORT}"
+if [[ "$GATEWAY_HOST" == "0.0.0.0" ]]; then
+  warn "0.0.0.0 意味着所有网卡可达。请确认防火墙阻止公网直连 ${GATEWAY_PORT}。"
+fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════
@@ -592,6 +629,7 @@ NO_PROXY=localhost,127.0.0.1
 
 # Gateway (智能轮询总入口)
 GATEWAY_PORT=${GATEWAY_PORT}
+GATEWAY_HOST=${GATEWAY_HOST}
 
 # Cookie Manager
 COOKIE_MANAGER_PORT=${COOKIE_MANAGER_PORT}
