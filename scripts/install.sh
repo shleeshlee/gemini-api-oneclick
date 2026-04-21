@@ -577,8 +577,8 @@ fi
 info "Gateway 端口: ${GATEWAY_PORT}"
 echo ""
 
-# [6/6] Gateway bind host
-step "6/6" "Gateway 监听地址"
+# [6/7] Gateway bind host
+step "6/${TOTAL_STEPS}" "Gateway 监听地址"
 OLD_GATEWAY_HOST=$(grep '^GATEWAY_HOST=' .env 2>/dev/null | cut -d= -f2 || echo "")
 echo ""
 echo "  Gateway 要绑定到哪个网卡？决定谁能访问它。"

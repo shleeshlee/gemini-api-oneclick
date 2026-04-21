@@ -14,7 +14,7 @@ if [[ -f .env ]]; then
   source .env
 fi
 
-WORKER_MODE="${WORKER_MODE:-}"
+WORKER_MODE="${WORKER_MODE:-true}"
 IMAGE_NAME="${IMAGE_NAME:-gemini-api-oneclick:local}"
 CONTAINER_PREFIX="${CONTAINER_PREFIX:-gemini_api_account_}"
 

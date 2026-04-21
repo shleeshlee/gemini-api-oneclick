@@ -340,9 +340,9 @@ fi
 # ══════════════════════════════════════════════════════════════
 echo ""
 if is_worker_mode; then
-  MODE_LABEL="单容器模式"
+  MODE_LABEL="worker 架构"
 else
-  MODE_LABEL="多容器模式"
+  MODE_LABEL="accounts 架构"
 fi
 echo -e "${PINK}Gemini API OneClick — 管理菜单${NC} (${MODE_LABEL})"
 echo "══════════════════════════════════════════"
