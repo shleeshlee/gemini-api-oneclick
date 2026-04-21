@@ -59,8 +59,10 @@ GATEWAY_HOST = os.environ.get("GATEWAY_HOST") or _dotenv.get("GATEWAY_HOST") or 
 BASE_PORT = int(os.environ.get("BASE_PORT") or os.environ.get("START_PORT") or _dotenv.get("START_PORT") or "8001")
 API_KEY = _dotenv.get("API_KEY", "")
 COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
-WORKER_MODE = _dotenv.get("WORKER_MODE", "").lower() in ("1", "true", "yes")
-WORKER_URL = _dotenv.get("WORKER_URL", "http://127.0.0.1:7860")
+_worker_mode_raw = os.environ.get("WORKER_MODE") or _dotenv.get("WORKER_MODE", "")
+WORKER_MODE = _worker_mode_raw.lower() in ("1", "true", "yes")
+WORKER_URL = os.environ.get("WORKER_URL") or _dotenv.get("WORKER_URL", "http://127.0.0.1:7860")
+ARCH_MODE = "worker" if WORKER_MODE else "accounts"
 
 def _safe_compare(a: str, b: str) -> bool:
     """Timing-safe string comparison."""
@@ -1434,6 +1436,7 @@ async def gateway_status():
         "available": sum(1 for c in containers.values() if c.available),
         "total": len(containers),
         "group_defs": sorted(group_defs),
+        "mode": ARCH_MODE,
     }
 
 
@@ -2570,6 +2573,6 @@ async def ecosystem_info(request: Request):
 # ── Main ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"[gateway] Starting on port {GATEWAY_PORT}")
+    print(f"[gateway] Gateway running in {ARCH_MODE} mode on port {GATEWAY_PORT}")
     print(f"[gateway] Managing containers from {ENVS_DIR}")
     uvicorn.run("gateway:app", host=GATEWAY_HOST, port=GATEWAY_PORT, log_level="info")

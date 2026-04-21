@@ -126,6 +126,7 @@ body::before {
 .stat-pill.ok { background: var(--success-light); color: #2D7A52; }
 .stat-pill.warn { background: var(--danger-light); color: #B94A4A; }
 .stat-pill.disabled { background: var(--warn-light); color: #92610E; }
+.stat-pill.mode { background: #E8F0FE; color: #2F5FA8; }
 
 .btn-topbar {
   padding: 0.4rem 0.9rem; border-radius: 10px; border: 2px solid var(--border);
@@ -716,6 +717,7 @@ body::before {
       </div>
     </div>
     <div class="topbar-right">
+      <span class="stat-pill mode" id="modePill" style="display:none">模式未知</span>
       <span class="stat-pill ok" id="statOk">0 正常</span>
       <span class="stat-pill warn" id="statBad">0 异常</span>
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
@@ -1101,6 +1103,7 @@ let names = {};
 let autoRefreshTimer = null;
 let modelProfiles = null;
 let modelTruthEntries = [];
+let currentMode = 'unknown';
 
 // ── Helpers ────────────────────────────────────────────────
 function esc(s) {
@@ -1212,6 +1215,7 @@ async function loadAll() {
     }
     if (statusRes.ok) {
       gatewayStatus = await statusRes.json();
+      currentMode = gatewayStatus.mode || 'unknown';
     }
     if (logsRes.ok) {
       const logData = await logsRes.json();
@@ -1299,7 +1303,10 @@ function renderGrid() {
     let actionBtn = '';
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
-      const restartBtn = `<button class="card-btn restart" onclick="event.stopPropagation();restartContainer(${num})">重启</button>`;
+      const restartLabel = currentMode === 'worker'
+        ? 'Reload Slot'
+        : (currentMode === 'accounts' ? '重启容器' : '重启实例');
+      const restartBtn = `<button class="card-btn restart" onclick="event.stopPropagation();restartContainer(${num})">${restartLabel}</button>`;
       if (gw.enabled) {
         actionBtn = testBtn + restartBtn + `<span style="flex:1"></span><button class="card-btn disable" onclick="event.stopPropagation();toggleContainer(${num}, false)">禁用</button>`;
       } else {
@@ -1354,6 +1361,17 @@ function renderGrid() {
   const total = accounts.length;
   const avail = gatewayStatus ? gatewayStatus.available : okCount;
   document.getElementById('topbarSub').textContent = `${avail}/${total} 可用`;
+  const modePill = document.getElementById('modePill');
+  if (currentMode === 'worker') {
+    modePill.textContent = 'worker 模式';
+    modePill.style.display = '';
+  } else if (currentMode === 'accounts') {
+    modePill.textContent = 'accounts 模式';
+    modePill.style.display = '';
+  } else {
+    modePill.textContent = '模式未知';
+    modePill.style.display = 'none';
+  }
 }
 
 // ── Gateway Actions ────────────────────────────────────────
@@ -1380,11 +1398,17 @@ async function deleteContainer(num) {
 }
 
 async function restartContainer(num) {
-  if (!confirm(`确认重启容器 #${num}？`)) return;
+  const targetLabel = currentMode === 'worker'
+    ? 'reload slot'
+    : (currentMode === 'accounts' ? '重启容器' : '重启实例');
+  if (!confirm(`确认${targetLabel} #${num}？`)) return;
   try {
     const resp = await fetch(`/gateway/restart/${num}`, { method: 'POST', headers: authHeaders() });
     if (resp.ok) {
-      toast(`#${num} 正在重启`, 'ok');
+      const actionLabel = currentMode === 'worker'
+        ? 'reload slot'
+        : (currentMode === 'accounts' ? '重启容器' : '重启实例');
+      toast(`#${num} 正在${actionLabel}`, 'ok');
     } else {
       const d = await resp.json().catch(() => ({}));
       toast(d.detail || '重启失败', 'err');
