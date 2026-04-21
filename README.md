@@ -12,6 +12,13 @@
 
 ## 快速开始
 
+## 选择架构
+
+| 架构 | 推荐对象 | 说明 |
+|------|----------|------|
+| `worker` | 新用户、RN 这类易炸网机器 | 单容器 + slot，资源占用低，默认推荐 |
+| `accounts` | 旧用户、需要每账号独立容器 | legacy 兼容模式，仍可用，但已不再推荐新装 |
+
 **一行命令安装：**
 
 ```bash
@@ -26,15 +33,29 @@ cd gemini-api-oneclick
 bash scripts/install.sh
 ```
 
-安装向导会引导你选择部署模式和配置：
+安装向导会引导你选择架构和配置：
 
-1. **部署模式** — 单容器（推荐，省内存）或多容器（每账号独立端口）
+1. **架构** — `worker`（推荐）或 `accounts`（legacy）
 2. **账号数量** — 几个 Gemini 账号就填几个
 3. **API 密钥** — 客户端调用密钥（可自动生成）
 4. **代理设置** — 出站代理（可选）
 5. **Gateway 端口** — 统一入口，默认 9880
 
 已有环境重新跑 `install.sh` 可选择更新（保留账号配置）或全新安装。
+
+> 迁移指引只推荐 `accounts -> worker`。如果机器已经处于 “systemd enabled，但实际被 `nohup` 手工进程取代” 的混合状态，先清掉野进程并恢复单一托管链路，再执行安装器。
+
+### 迁移与混合态清理
+
+仅推荐 `accounts -> worker` 单向迁移，不建议把 `worker -> accounts` 当成常规回退路径。
+
+如果机器已经处于 “systemd 仍 enabled，但实际是 `nohup python3 gateway.py` 在顶着” 的混合状态，先清场再迁移：
+
+1. 停掉手工 `nohup` 的 gateway 进程
+2. 确认 `systemctl status gemini-gateway` 与实际监听端口一致
+3. 确认只保留当前架构对应的 compose / systemd 链路
+4. 检查 `/gateway/status` 的 `mode` 与 `.env` 的 `WORKER_MODE` 一致
+5. 再执行 `bash scripts/install.sh` 做升级或迁移
 
 ## 功能一览
 
@@ -72,7 +93,7 @@ bash scripts/install.sh
 
 支持两种部署模式，Gateway 层完全一致：
 
-**单容器模式（推荐）**
+**worker 架构（推荐）**
 
 ```
     用户请求 ──> Gateway :9880 ──> Worker :7860
@@ -85,7 +106,7 @@ bash scripts/install.sh
 
 一个 Worker 进程管理所有账号，内存占用低（32 账号约 140MB），适合大多数场景。
 
-**多容器模式**
+**accounts 架构（legacy）**
 
 ```
     用户请求 ──> Gateway :9880 ──┬─ Container 1 :8001
@@ -95,7 +116,7 @@ bash scripts/install.sh
                                  Gemini Web API
 ```
 
-每个账号独立 Docker 容器和端口，进程级隔离。
+每个账号独立 Docker 容器和端口，进程级隔离，但维护成本更高。
 
 - **Gateway** — 统一接收请求，按分组路由 + 轮询分发，管理账号状态
 - **Worker / Container** — 持有 Gemini Cookie，报告真实状态
@@ -144,9 +165,10 @@ curl -X POST http://你的IP:9880/v1/videos/generations \
 | 命令 | 说明 |
 |------|------|
 | `bash scripts/install.sh` | 交互式安装/更新 |
-| `bash scripts/manage.sh` | 账号管理（添加/删除/状态/卸载） |
+| `bash scripts/manage.sh` | 当前架构管理（添加/删除/状态/重建/卸载） |
+| `bash scripts/uninstall.sh` | 按当前架构精确卸载，保留 `envs/` 和 `state/` |
 
-> 多容器模式下，用 `scripts/safe-deploy.sh` 分批重启，禁止 `docker compose restart` 全量操作。
+> `accounts` 架构下，用 `scripts/safe-deploy.sh` 分批重启，禁止 `docker compose restart` 全量操作。
 
 ## Discord Bot
 
