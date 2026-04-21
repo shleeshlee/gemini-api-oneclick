@@ -133,6 +133,61 @@ find_free_port_range() {
   return 1
 }
 
+systemd_unit_exists() {
+  local unit="$1"
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl cat "$unit" >/dev/null 2>&1
+}
+
+disable_systemd_unit_if_exists() {
+  local unit="$1"
+  systemd_unit_exists "$unit" || return 0
+  $SUDO systemctl stop "$unit" 2>/dev/null || true
+  $SUDO systemctl disable "$unit" 2>/dev/null || true
+}
+
+disable_legacy_multi_container_units() {
+  # Worker mode and legacy multi-container boot services must never coexist.
+  disable_systemd_unit_if_exists gemini-containers.service
+  disable_systemd_unit_if_exists gemini-delayed-start.service
+}
+
+disable_legacy_bootstrap_units() {
+  # Legacy delayed-start is obsolete and should not survive upgrades.
+  disable_systemd_unit_if_exists gemini-delayed-start.service
+}
+
+archive_extra_accounts() {
+  local keep_count="$1"
+  local archive_root="$ROOT_DIR/envs.disabled"
+  local stamp
+  local moved=0
+  stamp="$(date +%Y%m%d-%H%M%S)"
+
+  mkdir -p "$archive_root"
+
+  for env_file in envs/account*.env; do
+    [[ -f "$env_file" ]] || continue
+    local n="${env_file##*account}"
+    n="${n%.env}"
+    [[ "$n" =~ ^[0-9]+$ ]] || continue
+    if (( n <= keep_count )); then
+      continue
+    fi
+    local dest_dir="$archive_root/$stamp"
+    mkdir -p "$dest_dir/cookie-cache"
+    mv "$env_file" "$dest_dir/"
+    if [[ -d "cookie-cache/account${n}" ]]; then
+      mv "cookie-cache/account${n}" "$dest_dir/cookie-cache/"
+    fi
+    moved=$((moved + 1))
+  done
+
+  if (( moved > 0 )); then
+    info "已归档 ${moved} 个超出数量的旧账号配置到 envs.disabled/${stamp}"
+  fi
+}
+
 # ══════════════════════════════════════════════════════════════
 # Dependency check
 # ══════════════════════════════════════════════════════════════
@@ -240,28 +295,18 @@ if [[ -f .env ]]; then
 
       EXISTING_WORKER_MODE=$(grep '^WORKER_MODE=' .env 2>/dev/null | cut -d= -f2 || echo "")
 
-      docker build -t gemini-api-oneclick:local .
+      if [[ "$EXISTING_WORKER_MODE" == "true" ]]; then
+        docker build --build-arg MODE="worker" -t gemini-api-oneclick:local .
+      else
+        docker build --build-arg MODE="accounts" -t gemini-api-oneclick:local .
+      fi
 
       if [[ "$EXISTING_WORKER_MODE" == "true" ]]; then
         info "重启 Worker 容器 ..."
-        docker rm -f gemini_worker 2>/dev/null || true
-        docker run -d \
-          --name gemini_worker \
-          --network host \
-          --restart unless-stopped \
-          -v "${ROOT_DIR}/envs:/app/envs" \
-          -v "${ROOT_DIR}/app/slot.py:/app/slot.py" \
-          -v "${ROOT_DIR}/app/worker.py:/app/worker.py" \
-          -v "${ROOT_DIR}/app/parsers:/app/parsers" \
-          -v "${ROOT_DIR}/app/raw_capture_tracer.py:/app/raw_capture_tracer.py" \
-          -v "${ROOT_DIR}/app/worker_events.py:/app/worker_events.py" \
-          -v "${ROOT_DIR}/lib/gemini_webapi:/app/gemini_webapi" \
-          -e ENVS_DIR=/app/envs \
-          -e HTTP_PROXY="${HTTP_PROXY}" \
-          -e HTTPS_PROXY="${HTTPS_PROXY}" \
-          gemini-api-oneclick:local \
-          uv run uvicorn worker:app --host 0.0.0.0 --port 7860
+        disable_legacy_multi_container_units
+        docker compose -f docker-compose.worker.yml up -d --build --force-recreate
       else
+        disable_legacy_bootstrap_units
         info "重新生成 compose ..."
         python3 scripts/generate_compose.py
         info "重建并重启容器 ..."
@@ -377,30 +422,43 @@ echo -e "${BOLD}交互式安装向导${NC}"
 echo "════════════════════════════════════════"
 echo ""
 
-# [0] Deploy mode
-echo -e "  ${BOLD}选择部署模式${NC}"
+# [0] Architecture
+TOTAL_STEPS=7  # architecture + env + .env + compose + build + gateway + health
+
+step "0/${TOTAL_STEPS}" "选择架构"
 echo ""
-echo "  [1] ${GREEN}单容器模式（推荐）${NC}"
-echo "      所有账号在一个进程里运行，省内存，管理简单"
+echo "  [1] ${GREEN}worker 架构（推荐）${NC}"
+echo "      单容器 + 内部 slot，省内存，管理简单"
 echo ""
-echo "  [2] 多容器模式"
-echo "      每个账号一个 Docker 容器，独立端口"
+echo "  [2] accounts 架构"
+echo "      多容器，每个账号一个 Docker 容器，legacy 兼容"
 echo ""
-read -rp "  选择 [1/2, 默认 1]: " DEPLOY_MODE
-DEPLOY_MODE="${DEPLOY_MODE:-1}"
-if [[ "$DEPLOY_MODE" != "1" && "$DEPLOY_MODE" != "2" ]]; then
+read -rp "  选择 [1/2, 默认 1]: " ARCH_CHOICE
+ARCH_CHOICE="${ARCH_CHOICE:-1}"
+if [[ "$ARCH_CHOICE" != "1" && "$ARCH_CHOICE" != "2" ]]; then
   error "无效选择"
+fi
+if [[ "$ARCH_CHOICE" == "1" ]]; then
+  DEPLOY_MODE="1"
+  ARCH_MODE="worker"
+else
+  DEPLOY_MODE="2"
+  ARCH_MODE="accounts"
 fi
 echo ""
 
 # [1/5] Account count
-step "1/5" "需要多少个账号？"
+step "1/${TOTAL_STEPS}" "需要多少个账号？"
 read -rp "  数量 [1-50, 默认 5]: " ACCOUNT_COUNT
 ACCOUNT_COUNT="${ACCOUNT_COUNT:-5}"
 if ! [[ "$ACCOUNT_COUNT" =~ ^[0-9]+$ ]] || (( ACCOUNT_COUNT < 1 || ACCOUNT_COUNT > 50 )); then
   error "数量无效（需要 1-50）"
 fi
 echo ""
+
+if [[ -d envs ]]; then
+  archive_extra_accounts "$ACCOUNT_COUNT"
+fi
 
 START_PORT="8001"  # default, only used in multi-container mode
 
@@ -464,7 +522,7 @@ if [[ "$DEPLOY_MODE" == "2" ]]; then
 fi
 
 # [2/5] API key
-step "2/5" "API 密钥（回车自动生成）"
+step "2/${TOTAL_STEPS}" "API 密钥（回车自动生成）"
 if [[ -n "${OLD_API_KEY:-}" ]]; then
   read -rp "  API_KEY [保留当前: ${OLD_API_KEY:0:8}...]: " USER_API_KEY
   USER_API_KEY="${USER_API_KEY:-$OLD_API_KEY}"
@@ -478,7 +536,7 @@ fi
 echo ""
 
 # [3/5] Proxy
-step "3/5" "出站代理（用于访问 Gemini）"
+step "3/${TOTAL_STEPS}" "出站代理（用于访问 Gemini）"
 read -rp "  使用代理？[y/N]: " USE_PROXY
 HTTP_PROXY=""
 HTTPS_PROXY=""
@@ -489,7 +547,7 @@ fi
 echo ""
 
 # [4/5] Gateway 面板密码（已集成 Cookie 管理功能）
-step "4/5" "Gateway 面板密码（Cookie 管理已集成到 Gateway）"
+step "4/${TOTAL_STEPS}" "Gateway 面板密码（Cookie 管理已集成到 Gateway）"
 COOKIE_MANAGER_PORT="9880"
 if [[ -n "${OLD_PASSWORD:-}" ]]; then
   read -rp "  面板密码 [保留当前: ${OLD_PASSWORD:0:6}...]: " COOKIE_MANAGER_PASSWORD
@@ -503,8 +561,8 @@ else
 fi
 echo ""
 
-# [5/6] Gateway port
-step "5/6" "Gateway 统一入口端口"
+# [5/5] Gateway port
+step "5/${TOTAL_STEPS}" "Gateway 统一入口端口"
 DEFAULT_GW="${OLD_GATEWAY_PORT:-9880}"
 read -rp "  端口 [${DEFAULT_GW}]: " USER_GW_PORT
 GATEWAY_PORT="${USER_GW_PORT:-$DEFAULT_GW}"
@@ -559,8 +617,6 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 # Execute installation
 # ══════════════════════════════════════════════════════════════
-TOTAL_STEPS=6  # env + .env + compose + build + gateway + health
-
 CURRENT_STEP=0
 
 # Step: Create env files
@@ -618,7 +674,7 @@ START_PORT=${START_PORT}
 CONTAINER_PREFIX=gemini_api_account_
 API_KEY=${USER_API_KEY}
 
-# Deploy mode: WORKER_MODE=true → single container, false/empty → multi container
+# Architecture: WORKER_MODE=true → worker/slot, false/empty → accounts/containers
 WORKER_MODE=${WORKER_MODE_VALUE}
 WORKER_URL=${WORKER_URL_VALUE}
 
@@ -643,11 +699,12 @@ CONTAINER_PREFIX="gemini_api_account_"
 # Step: Build and start
 CURRENT_STEP=$((CURRENT_STEP + 1))
 
-docker build -t gemini-api-oneclick:local .
+docker build --build-arg MODE="${ARCH_MODE}" -t gemini-api-oneclick:local .
 
 if [[ "$DEPLOY_MODE" == "1" ]]; then
   # ── Single container (worker) mode ──
   step "${CURRENT_STEP}/${TOTAL_STEPS}" "启动 Worker 容器 ..."
+  disable_legacy_multi_container_units
 
   # 清理旧的多容器残留
   for env_file in envs/account*.env; do
@@ -664,28 +721,14 @@ if [[ "$DEPLOY_MODE" == "1" ]]; then
   # 停止旧 worker 如果存在
   docker rm -f gemini_worker 2>/dev/null || true
 
-  docker run -d \
-    --name gemini_worker \
-    --network host \
-    --restart unless-stopped \
-    -v "${ROOT_DIR}/envs:/app/envs" \
-    -v "${ROOT_DIR}/app/slot.py:/app/slot.py" \
-    -v "${ROOT_DIR}/app/worker.py:/app/worker.py" \
-    -v "${ROOT_DIR}/app/parsers:/app/parsers" \
-    -v "${ROOT_DIR}/app/raw_capture_tracer.py:/app/raw_capture_tracer.py" \
-    -v "${ROOT_DIR}/app/worker_events.py:/app/worker_events.py" \
-    -v "${ROOT_DIR}/lib/gemini_webapi:/app/gemini_webapi" \
-    -e ENVS_DIR=/app/envs \
-    -e HTTP_PROXY="${HTTP_PROXY}" \
-    -e HTTPS_PROXY="${HTTPS_PROXY}" \
-    gemini-api-oneclick:local \
-    uv run uvicorn worker:app --host 0.0.0.0 --port 7860
+  docker compose -f docker-compose.worker.yml up -d --build --force-recreate
 
   info "Worker 容器已启动（端口 7860）"
 else
   # ── Multi container mode ──
   CURRENT_STEP=$((CURRENT_STEP))
   step "${CURRENT_STEP}/${TOTAL_STEPS}" "生成 docker-compose 并启动容器 ..."
+  disable_legacy_bootstrap_units
   python3 scripts/generate_compose.py
 
   # 清理所有残留的同名容器

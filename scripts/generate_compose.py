@@ -51,6 +51,8 @@ def main() -> int:
                 "    build:",
                 "      context: .",
                 "      dockerfile: Dockerfile",
+                "      args:",
+                "        MODE: accounts",
                 f"    image: {image}",
                 f"    container_name: {prefix}{account_id}",
                 "    env_file:",

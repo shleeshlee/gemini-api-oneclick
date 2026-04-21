@@ -14,6 +14,7 @@ CONTAINER_PREFIX="${CONTAINER_PREFIX:-gemini_api_account_}"
 START_PORT="${START_PORT:-8001}"
 WORKER_MODE="${WORKER_MODE:-}"
 WORKER_URL="${WORKER_URL:-http://127.0.0.1:7860}"
+IMAGE_NAME="${IMAGE_NAME:-gemini-api-oneclick:local}"
 
 is_worker_mode() {
   [[ "$WORKER_MODE" == "true" || "$WORKER_MODE" == "1" || "$WORKER_MODE" == "yes" ]]
@@ -74,6 +75,19 @@ restart_gateway() {
   fi
 }
 
+systemd_unit_exists() {
+  local unit="$1"
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl cat "$unit" >/dev/null 2>&1
+}
+
+disable_unit_if_exists() {
+  local unit="$1"
+  systemd_unit_exists "$unit" || return 0
+  sudo systemctl stop "$unit" 2>/dev/null || true
+  sudo systemctl disable "$unit" 2>/dev/null || true
+}
+
 # ══════════════════════════════════════════════════════════════
 # [1] 添加容器
 # ══════════════════════════════════════════════════════════════
@@ -129,9 +143,12 @@ EOF
   done
 
   if is_worker_mode; then
-    info "重启 Worker 以加载新账号 ..."
-    docker restart gemini_worker 2>/dev/null || warn "Worker 重启失败"
+    info "重建 Worker 以加载新账号 ..."
+    disable_unit_if_exists gemini-containers.service
+    disable_unit_if_exists gemini-delayed-start.service
+    docker compose -f docker-compose.worker.yml up -d --build --force-recreate || warn "Worker 重建失败"
   else
+    disable_unit_if_exists gemini-delayed-start.service
     info "重新生成 compose ..."
     python3 scripts/generate_compose.py
     info "启动新容器 ..."
@@ -206,8 +223,8 @@ do_remove() {
   done
 
   if is_worker_mode; then
-    info "重启 Worker 以移除已删账号 ..."
-    docker restart gemini_worker 2>/dev/null || warn "Worker 重启失败"
+    info "重建 Worker 以移除已删账号 ..."
+    docker compose -f docker-compose.worker.yml up -d --build --force-recreate || warn "Worker 重建失败"
   else
     info "重新生成 compose ..."
     python3 scripts/generate_compose.py
@@ -277,66 +294,46 @@ do_status() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# [4] 完整卸载
+# [4] 重建当前架构
+# ══════════════════════════════════════════════════════════════
+do_recreate() {
+  echo ""
+  if is_worker_mode; then
+    info "重建 worker 架构 ..."
+    disable_unit_if_exists gemini-containers.service
+    disable_unit_if_exists gemini-delayed-start.service
+    docker compose -f docker-compose.worker.yml up -d --build --force-recreate
+  else
+    info "重建 accounts 架构 ..."
+    disable_unit_if_exists gemini-delayed-start.service
+    python3 scripts/generate_compose.py
+    ./scripts/safe-deploy.sh --build
+  fi
+  restart_gateway
+  info "重建完成"
+}
+
+# ══════════════════════════════════════════════════════════════
+# [5] 完整卸载
 # ══════════════════════════════════════════════════════════════
 do_uninstall() {
-  echo ""
-  warn "即将执行:"
-  echo "  - 停止所有 Gemini API 服务"
-  echo "  - 停止 Gateway 服务"
-  echo "  - 删除配置文件"
-  echo ""
-  echo -e "  ${YELLOW}注意: envs/ 目录会保留（包含你的 Cookie）${NC}"
-  echo ""
-  read -rp "确认卸载？输入 yes: " confirm
-  [[ "$confirm" == "yes" ]] || { info "已取消"; return; }
-
-  # 停止容器/worker
-  if is_worker_mode; then
-    info "停止 Worker ..."
-    docker rm -f gemini_worker 2>/dev/null || true
-  elif [[ -f docker-compose.accounts.yml ]]; then
-    info "停止容器 ..."
-    docker compose -f docker-compose.accounts.yml down || true
-  fi
-
-  # 停止 Gateway
-  if systemctl is-active --quiet gemini-gateway 2>/dev/null; then
-    info "停止 Gateway ..."
-    sudo systemctl stop gemini-gateway || true
-    sudo systemctl disable gemini-gateway || true
-    sudo rm -f /etc/systemd/system/gemini-gateway.service
-  fi
-
-  # 停止 Cookie Manager
-  if systemctl is-active --quiet cookie-manager 2>/dev/null; then
-    info "停止 Cookie Manager ..."
-    sudo systemctl stop cookie-manager || true
-    sudo systemctl disable cookie-manager || true
-    sudo rm -f /etc/systemd/system/cookie-manager.service
-  fi
-
-  sudo systemctl daemon-reload 2>/dev/null || true
-
-  # 删除生成的文件
-  info "清理文件 ..."
-  rm -f docker-compose.accounts.yml .env
-
-  # Docker 镜像
-  echo ""
-  read -rp "删除 Docker 镜像 ${IMAGE_NAME:-gemini-api-oneclick:local}？[y/N]: " rm_image
-  if [[ "$rm_image" =~ ^[Yy]$ ]]; then
-    docker rmi "${IMAGE_NAME:-gemini-api-oneclick:local}" 2>/dev/null || true
-    info "镜像已删除"
-  fi
-
-  rm -rf cookie-cache state
-
-  echo ""
-  info "卸载完成"
-  info "envs/ 目录已保留"
-  info "完全删除请执行: rm -rf $(pwd)"
+  ./scripts/uninstall.sh
 }
+
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    add) do_add ;;
+    remove|rm|delete) do_remove ;;
+    status) do_status ;;
+    recreate|restart) do_recreate ;;
+    uninstall) do_uninstall ;;
+    *)
+      error "未知命令: $1"
+      exit 1
+      ;;
+  esac
+  exit $?
+fi
 
 # ══════════════════════════════════════════════════════════════
 # 菜单
@@ -353,16 +350,18 @@ echo ""
 echo "  [1] 添加账号"
 echo "  [2] 删除账号"
 echo "  [3] 查看状态"
-echo "  [4] 完整卸载"
+echo "  [4] 重建当前架构"
+echo "  [5] 完整卸载"
 echo "  [q] 退出"
 echo ""
-read -rp "选择 [1-4/q]: " choice
+read -rp "选择 [1-5/q]: " choice
 
 case "$choice" in
   1) do_add ;;
   2) do_remove ;;
   3) do_status ;;
-  4) do_uninstall ;;
+  4) do_recreate ;;
+  5) do_uninstall ;;
   q|Q) exit 0 ;;
   *) error "无效选项"; exit 1 ;;
 esac

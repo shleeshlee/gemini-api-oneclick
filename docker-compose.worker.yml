@@ -1,0 +1,27 @@
+services:
+  gemini-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODE: worker
+    image: ${IMAGE_NAME:-gemini-api-oneclick:local}
+    container_name: gemini_worker
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      ENVS_DIR: /app/envs
+      ONECLICK_STATE_DIR: /app/state
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    volumes:
+      - ./envs:/app/envs
+      - ./state:/app/state
+      - ./app/slot.py:/app/slot.py:ro
+      - ./app/worker.py:/app/worker.py:ro
+      - ./app/parsers:/app/parsers:ro
+      - ./app/raw_capture_tracer.py:/app/raw_capture_tracer.py:ro
+      - ./app/worker_events.py:/app/worker_events.py:ro
+      - ./lib/gemini_webapi:/app/gemini_webapi:ro
