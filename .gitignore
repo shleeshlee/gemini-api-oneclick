@@ -29,3 +29,4 @@ vendor/
 *.killed
 web/demo-redesign.html
 PATCH-prompt-upgrade.md
+HANDOVER-*.md
