@@ -1178,7 +1178,15 @@ class GeminiClient(GemMixin, ResearchMixin):
                     parsed_parts, buffer = parse_response_by_frame(buffer)
 
                     got_update = False
+                    got_heartbeat = False
                     for part in parsed_parts:
+                        # Media generation heartbeat: inner_json like [{"37":[N]}] — Google signals
+                        # "still generating image/video" but produces no candidates. Treat as progress
+                        # so last_progress_time refreshes and stall watchdog doesn't fire.
+                        _inner = part[2] if isinstance(part, list) and len(part) > 2 else None
+                        if isinstance(_inner, str) and _inner.startswith('[{"37"'):
+                            got_heartbeat = True
+
                         result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro, tracer=tracer)
                         if result:
                             yield result
@@ -1191,7 +1199,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                                 logger.info("Video generation pending detected, breaking stream to start polling.")
                                 return
 
-                    if got_update or flags.is_thinking:
+                    if got_update or flags.is_thinking or got_heartbeat:
                         last_progress_time = time.time()
                         streaming_state.last_progress_time = last_progress_time
                         continue

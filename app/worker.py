@@ -613,6 +613,7 @@ async def slot_chat_completion(
                         conversation,
                         files=temp_files if temp_files else None,
                         model=model,
+                        tracer=tracer,
                     )
                     async for output in stream_gen:
                         last_output = output
@@ -669,6 +670,17 @@ async def slot_chat_completion(
                     logger.error("Slot %d stream error: %s", num, e, exc_info=True)
                     slot.report_error(e)
                     slot_log(num, f"Error: {str(e)[:80]}")
+                    try:
+                        log_worker_event(
+                            build_worker_event("chat", trace_headers, None, error_summary=str(e)[:200]),
+                            payload={
+                                "request": {"model": request.model, "prompt": conversation[:1000], "stream": True},
+                                "error": str(e)[:500],
+                                "raw_capture": tracer.get_snapshot() if tracer else None,
+                            },
+                        )
+                    except Exception:
+                        pass
                     if first:
                         role_chunk = {
                             "id": completion_id, "object": "chat.completion.chunk",
@@ -704,6 +716,7 @@ async def slot_chat_completion(
             last_output = None
             stream_gen = client.generate_content_stream(
                 conversation, files=temp_files if temp_files else None, model=model,
+                tracer=tracer,
             )
             async for output in stream_gen:
                 full_text += output.text_delta or ""
@@ -741,6 +754,16 @@ async def slot_chat_completion(
                 reply_text=reply_text,
                 conversation=conversation,
             )
+            try:
+                log_worker_event(
+                    build_worker_event("chat", trace_headers, last_output),
+                    payload={
+                        "request": {"model": request.model, "prompt": conversation[:1000], "stream": False},
+                        "raw_capture": tracer.get_snapshot() if tracer else None,
+                    },
+                )
+            except Exception:
+                pass
             response.headers.update(trace_headers)
             return result
 
@@ -751,6 +774,19 @@ async def slot_chat_completion(
         logger.error("Slot %d chat error: %s", num, e, exc_info=True)
         slot.report_error(e)
         slot_log(num, f"Error: {str(e)[:80]}")
+        try:
+            log_worker_event(
+                build_worker_event("chat", locals().get("trace_headers") or {}, None, error_summary=str(e)[:200]),
+                payload={
+                    "request": {"model": request.model,
+                                "prompt": locals().get("conversation", "")[:1000],
+                                "stream": request.stream},
+                    "error": str(e)[:500],
+                    "raw_capture": locals()["tracer"].get_snapshot() if "tracer" in locals() and locals()["tracer"] else None,
+                },
+            )
+        except Exception:
+            pass
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
             raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
