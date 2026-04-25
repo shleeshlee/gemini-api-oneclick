@@ -1063,8 +1063,8 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
 
     await task.events.put({"type": "start", "retries_available": retries, "task_type": task.task_type})
 
-    # Timeouts per type (video covers 600s polling + 30s buffer)
-    timeout_map = {"image": 180.0, "video": 630.0, "music": 120.0}
+    # Timeouts per type
+    timeout_map = {"image": 180.0, "video": 330.0, "music": 120.0}
     read_timeout = timeout_map.get(task.task_type, 300.0)
 
     last_error = ""
@@ -1295,11 +1295,11 @@ async def proxy(request: Request, path: str):
 
         try:
             # 研究 POST 快速返回 task_id；研究 GET 也快速返回。
-            # 视频 630s（轮询最多600s + 30s buffer），图片 180s，聊天 300s。
+            # 视频 330s（轮询最多300s），图片 180s，聊天 300s。
             if is_research_req:
                 read_timeout = 60.0
             elif "videos" in path:
-                read_timeout = 630.0
+                read_timeout = 330.0
             elif "images" in path:
                 read_timeout = 180.0
             elif is_music_req:
