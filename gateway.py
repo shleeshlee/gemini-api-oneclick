@@ -384,13 +384,10 @@ def get_next_available(group: str | None = None, is_image: bool = False) -> Cont
                        if g == group and n in containers and containers[n].available
                        and (not is_image or not containers[n].img_blocked))
     else:
+        # 严格按分组隔离，无 group 前缀只在无组池找；不允许跨组 fallback
         nums = sorted(n for n in containers if containers[n].available
                        and n not in container_groups
                        and (not is_image or not containers[n].img_blocked))
-        # Fallback: if no ungrouped containers, use all available
-        if not nums:
-            nums = sorted(n for n in containers if containers[n].available
-                           and (not is_image or not containers[n].img_blocked))
 
     if not nums:
         return None
@@ -827,7 +824,6 @@ async def list_models():
                 "created": m.get("created", 0),
                 "owned_by": m.get("owned_by", "google"),
             })
-    result.extend(base_models)
     return {"object": "list", "data": result}
 
 
@@ -1048,7 +1044,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
             body = json.dumps(body_json).encode("utf-8")
             headers["content-length"] = str(len(body))
 
-    # Count available containers
+    # 严格按分组隔离，无 group 前缀只在无组池找；不允许跨组 fallback
     if target_group:
         pool_available = sum(1 for n, g in container_groups.items()
                              if g == target_group and n in containers and containers[n].available
@@ -1057,21 +1053,18 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
         pool_available = sum(1 for n, c in containers.items() if c.available
                              and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
-        if pool_available == 0:
-            pool_available = sum(1 for c in containers.values() if c.available
-                                 and (not is_image_req or not c.img_blocked))
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
         task.status = "failed"
-        task.error = "没有可用容器"
+        task.error = f"没有可用容器（分组 [{target_group}]）" if target_group else "请求未指定分组前缀，无默认无分组池"
         await task.events.put({"type": "failed", "error": task.error, "final": True})
         return
 
     await task.events.put({"type": "start", "retries_available": retries, "task_type": task.task_type})
 
-    # Timeouts per type
-    timeout_map = {"image": 180.0, "video": 330.0, "music": 120.0}
+    # Timeouts per type (video covers 600s polling + 30s buffer)
+    timeout_map = {"image": 180.0, "video": 630.0, "music": 120.0}
     read_timeout = timeout_map.get(task.task_type, 300.0)
 
     last_error = ""
@@ -1263,19 +1256,15 @@ async def proxy(request: Request, path: str):
     elif body_json and is_music_req:
         body_json, body, headers = _build_music_prompt(body_json, headers)
 
-    # Count available containers in target pool
+    # 严格按分组隔离，无 group 前缀只在无组池找；不允许跨组 fallback
     if target_group:
         pool_available = sum(1 for n, g in container_groups.items()
                              if g == target_group and n in containers and containers[n].available
                              and (not is_image_req or not containers[n].img_blocked))
     else:
-        # First try ungrouped containers, fallback to all available
         pool_available = sum(1 for n, c in containers.items() if c.available
                              and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
-        if pool_available == 0:
-            pool_available = sum(1 for c in containers.values() if c.available
-                                 and (not is_image_req or not c.img_blocked))
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
@@ -1284,10 +1273,11 @@ async def proxy(request: Request, path: str):
         needs_cookie_count = sum(1 for c in containers.values() if c.needs_cookie)
         if initializing_count > 0 and not any(c.available for c in containers.values()):
             raise HTTPException(status_code=503, detail=f"容器正在准备中（{initializing_count}个初始化中，{needs_cookie_count}个需更新Cookie）")
-        if is_image_req:
-            detail = f"没有可用的生图容器" + (f"（分组 [{target_group}]）" if target_group else "")
+        kind = "生图容器" if is_image_req else "容器"
+        if target_group:
+            detail = f"没有可用的{kind}（分组 [{target_group}]）"
         else:
-            detail = f"没有可用容器" + (f"（分组 [{target_group}]）" if target_group else "")
+            detail = f"没有可用的{kind}（请求未指定分组前缀，无默认无分组池）"
         raise HTTPException(status_code=503, detail=detail)
 
     last_error = ""
@@ -1305,11 +1295,11 @@ async def proxy(request: Request, path: str):
 
         try:
             # 研究 POST 快速返回 task_id；研究 GET 也快速返回。
-            # 视频 330s（轮询最多300s），图片 180s，聊天 300s。
+            # 视频 630s（轮询最多600s + 30s buffer），图片 180s，聊天 300s。
             if is_research_req:
                 read_timeout = 60.0
             elif "videos" in path:
-                read_timeout = 330.0
+                read_timeout = 630.0
             elif "images" in path:
                 read_timeout = 180.0
             elif is_music_req:

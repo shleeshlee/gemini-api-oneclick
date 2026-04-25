@@ -220,7 +220,7 @@ _VIDEO_GEN_BLOCKED_PATTERNS = [
 
 # Video polling configuration
 _VIDEO_POLL_INTERVAL = 5.0  # seconds between polls
-_VIDEO_POLL_MAX_ATTEMPTS = 60  # max attempts (5 minutes total)
+_VIDEO_POLL_MAX_ATTEMPTS = 120  # max attempts (10 minutes total) — Veo long-form videos can exceed 5 min
 
 # Image model detection patterns
 # "Loading Nano Banana Pro..." or "Loading Nano Banana 2..." = Pro model
