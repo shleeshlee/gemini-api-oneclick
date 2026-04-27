@@ -212,6 +212,11 @@ def get_enum_models() -> list[dict[str, Any]]:
 
 
 def _build_model_name(m) -> str:
+    # mapping 表已经把各 tier 的 hash normalize 到 BASIC 名（如 PLUS_FLASH/BASIC_FLASH 都 → gemini-3-flash）
+    # 优先取 model_name；只有当 mapping 漏匹配（enum 未收录的新模型）才退到 description/display 解析
+    name = getattr(m, "model_name", "") or ""
+    if name and name != "unspecified":
+        return name
     desc = getattr(m, "description", "") or ""
     display = getattr(m, "display_name", "") or ""
     ver_match = re.search(r"(\d+(?:\.\d+)?)\s+(Pro|Flash|Thinking)", desc, re.IGNORECASE)
@@ -303,7 +308,7 @@ def resolve_model_for_chat(openai_model_name: str, client: GeminiClient | None =
         registry = getattr(client, "_model_registry", None)
         if registry:
             for m in registry.values():
-                if name_lower in (m.display_name.lower(), m.model_name.lower()):
+                if name_lower in (m.display_name.lower(), m.model_name.lower(), m.model_id.lower()):
                     trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
                     trace.update(describe_model(m))
                     return m, trace
