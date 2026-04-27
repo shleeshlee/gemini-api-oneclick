@@ -575,8 +575,22 @@ async def slot_health(num: int):
 
 
 @app.get("/slot/{num}/v1/models")
-async def slot_models(num: int):
+async def slot_models(num: int, verbose: int = 0):
     slot = _get_slot(num)
+    if verbose:
+        client = await _get_client(slot)
+        registry = getattr(client, "_model_registry", None) or {}
+        return {"object": "list", "data": [
+            {
+                "model_id": m.model_id,
+                "model_name": m.model_name,
+                "display_name": m.display_name,
+                "description": m.description,
+                "capacity": m.capacity,
+                "is_available": m.is_available,
+            }
+            for m in registry.values()
+        ]}
     return {"object": "list", "data": await get_runtime_models(slot.client)}
 
 
