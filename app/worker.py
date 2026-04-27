@@ -251,9 +251,8 @@ async def get_runtime_models(client: GeminiClient | None) -> list[dict[str, Any]
                     return _models_cache
         except Exception as e:
             logger.warning("Falling back to vendored models: %s", e)
-    _models_cache = get_enum_models()
-    _models_cache_time = now
-    return _models_cache
+    # 不写入 _models_cache：vendored fallback 只是临时兜底，下次有 client 进来就能取到真实 registry
+    return get_enum_models()
 
 
 def build_custom_model(name: str, base_model: Model) -> dict[str, Any]:
@@ -582,8 +581,8 @@ async def slot_health(num: int):
 @app.get("/slot/{num}/v1/models")
 async def slot_models(num: int, verbose: int = 0):
     slot = _get_slot(num)
+    client = await _get_client(slot)
     if verbose:
-        client = await _get_client(slot)
         registry = getattr(client, "_model_registry", None) or {}
         return {"object": "list", "data": [
             {
@@ -596,7 +595,7 @@ async def slot_models(num: int, verbose: int = 0):
             }
             for m in registry.values()
         ]}
-    return {"object": "list", "data": await get_runtime_models(slot.client)}
+    return {"object": "list", "data": await get_runtime_models(client)}
 
 
 @app.post("/slot/{num}/v1/chat/completions")
