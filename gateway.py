@@ -144,6 +144,7 @@ class Container:
         self.enabled = True
         self.error_count = 0
         self.last_error = ""
+        self.error_history: list = []  # ringbuffer of recent errors, kept across successes
         self.last_check = 0
         self.total_requests = 0
         self.total_errors = 0
@@ -160,6 +161,25 @@ class Container:
     def available(self):
         return self.healthy and self.enabled and not self.needs_cookie and time.time() > self.cooldown_until and not self.busy
 
+    def record_error(self, kind: str, msg: str, code=None, path: str = ""):
+        """Append to ringbuffer + append-only file log. Kept across successes."""
+        entry = {
+            "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "ts": time.time(),
+            "kind": kind,
+            "code": code,
+            "path": path,
+            "msg": (msg or "")[:400],
+        }
+        self.error_history.append(entry)
+        if len(self.error_history) > 30:
+            self.error_history.pop(0)
+        try:
+            with open("/tmp/gateway-errors.log", "a", encoding="utf-8") as f:
+                f.write(f"[{entry['at']}] slot{self.num} {kind} code={code} path={path} :: {entry['msg']}\n")
+        except Exception:
+            pass
+
     def to_dict(self):
         return {
             "num": self.num,
@@ -171,6 +191,7 @@ class Container:
             "available": self.available,
             "error_count": self.error_count,
             "last_error": self.last_error,
+            "error_history": list(self.error_history),
             "last_check": self.last_check,
             "total_requests": self.total_requests,
             "total_errors": self.total_errors,
@@ -1102,6 +1123,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                     c.error_count += 1
                     c.last_error = error_body
                     last_error = error_body
+                    c.record_error(f"http{resp.status_code}", error_body, code=resp.status_code, path=path)
                     await task.events.put({
                         "type": "retry", "attempt": attempt + 1,
                         "container": container_label, "error": error_body[:100],
@@ -1113,10 +1135,9 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                             c.img_blocked = True
                     continue
 
-                # Success
+                # Success — clear connection-state fields, keep last_error/history for diagnostics
                 c.busy = False
                 c.error_count = 0
-                c.last_error = ""
                 c.cooldown_until = 0
                 if task.task_type in ("image", "video"):
                     c.image_requests += 1
@@ -1150,6 +1171,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
             c.error_count += 1
             c.last_error = error_msg
             last_error = error_msg
+            c.record_error(f"exc:{type(e).__name__}", error_msg, path=path)
 
             await task.events.put({
                 "type": "retry", "attempt": attempt + 1,
@@ -1326,7 +1348,6 @@ async def proxy(request: Request, path: str):
                         request=resp.request, response=resp
                     )
                 c.error_count = 0
-                c.last_error = ""
                 c.cooldown_until = 0
                 if "images" in path or "videos" in path:
                     c.image_requests += 1
@@ -1389,6 +1410,7 @@ async def proxy(request: Request, path: str):
             c.error_count += 1
             c.last_error = error_msg
             last_error = error_msg
+            c.record_error(f"exc:{type(e).__name__}", error_msg, path=path)
             add_log("error", c.num, f"Request failed (attempt {attempt+1}): {error_msg[:100]}")
 
             # Cooldown based on error type — temporary, auto-recovers
