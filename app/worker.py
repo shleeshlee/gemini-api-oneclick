@@ -53,7 +53,7 @@ from worker_events import (
 )
 from raw_capture_tracer import RawCaptureTracer
 from gemini_webapi import GeminiClient, set_log_level
-from gemini_webapi.constants import AccountStatus, Model
+from gemini_webapi.constants import AccountStatus, Model, build_model_header
 from gemini_webapi.exceptions import ImageGenerationBlocked
 from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
@@ -402,6 +402,73 @@ def log_worker_event(event, payload: dict[str, Any] | None = None):
     return persisted
 
 
+class _DebugRawCaptureTracer(RawCaptureTracer):
+    """Keep all probe frames, including model hints after the usual frame limit."""
+
+    def on_stream_frame(self, *, part, part_json, flags):
+        if self._capture is not None:
+            self._capture["frames"].append({
+                "part": part, "part_json": part_json, "flags": dict(flags),
+            })
+
+
+def _debug_model_hints(snapshot):
+    """Paths are relative to each part_json; deduplicate (value, path) pairs."""
+    hints = []
+    seen = set()
+    for frame in (snapshot or {}).get("frames", []):
+        pending = [(frame.get("part_json"), [])]
+        while pending:
+            value, path = pending.pop()
+            if isinstance(value, str):
+                if len(value) <= 80 and re.search(r"flash|pro|lite|gemini|auto|argon", value, re.I):
+                    key = (value, tuple(path))
+                    if key not in seen:
+                        seen.add(key)
+                        hints.append({"value": value, "path": path})
+                        if len(hints) == 50:
+                            return hints
+            elif isinstance(value, (list, dict)):
+                items = list(enumerate(value)) if isinstance(value, list) else list(value.items())
+                pending.extend((child, path + [key]) for key, child in reversed(items))
+    return hints
+
+
+def _debug_raw_snapshot(snapshot):
+    """Bound serialized frame fields and the complete JSON object without mutation."""
+    if snapshot is None:
+        return None
+    limit = 1_000_000
+    capture = dict(snapshot)
+    capture["frames"] = []
+    capture["truncated"] = False
+    for frame in snapshot.get("frames", []):
+        bounded = dict(frame)
+        for field in ("part", "part_json"):
+            serialized = json.dumps(frame.get(field), ensure_ascii=False)
+            bounded[field] = serialized[:20000]
+            if len(serialized) > 20000:
+                bounded["truncated"] = capture["truncated"] = True
+        capture["frames"].append(bounded)
+
+    def size():
+        # ASCII escaping is an upper bound on the UTF-8 JSON response size.
+        return len(json.dumps(capture, ensure_ascii=True).encode("utf-8"))
+
+    if size() > limit:
+        capture["truncated"] = True
+        while capture["frames"] and size() > limit:
+            capture["frames"].pop()
+        # Metadata (headers, chat metadata, etc.) also counts towards the cap.
+        while size() > limit:
+            key = max((k for k in capture if k not in ("frames", "truncated")),
+                      key=lambda k: len(json.dumps(capture[k], ensure_ascii=True)))
+            value = capture[key]
+            serialized = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            capture[key] = serialized[:len(serialized) // 2]
+    return capture
+
+
 # ── Pydantic models ──────────────────────────────────────────────────
 
 class Message(BaseModel):
@@ -421,6 +488,9 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0
     frequency_penalty: Optional[float] = 0
     user: Optional[str] = None
+    oneclick_force_model_token: Any = None  # Validated after auth to return HTTP 400.
+    oneclick_force_model_capacity: Optional[int] = None
+    oneclick_debug_raw: bool = False
 
 
 class ImageGenerationRequest(BaseModel):
@@ -638,17 +708,37 @@ async def slot_chat_completion(
     api_key: str = Depends(_verify_api_key),
 ):
     slot = _get_slot(num)
+    forced_token = request.oneclick_force_model_token
+    debug_raw = request.oneclick_debug_raw and not request.stream
+    debug_probe = forced_token is not None or debug_raw
+    if forced_token is not None and (
+        not isinstance(forced_token, str) or re.fullmatch(r"[0-9a-fA-F]{16}", forced_token) is None
+    ):
+        raise HTTPException(status_code=400, detail="oneclick_force_model_token must be 16 hexadecimal characters")
     trace_headers: dict[str, str] = {}
     try:
         client = await _get_client(slot)
         conversation, temp_files = prepare_conversation(request.messages)
-        logger.info("Slot %d chat: %s...", num, conversation[:200])
-        slot_log(num, f"Chat: {conversation[:80]}")
+        if not debug_probe:
+            logger.info("Slot %d chat: %s...", num, conversation[:200])
+            slot_log(num, f"Chat: {conversation[:80]}")
 
-        model, model_trace = resolve_model_for_chat(request.model, client)
+        if forced_token is not None:
+            capacity = request.oneclick_force_model_capacity
+            if capacity is None:
+                registry = getattr(client, "_model_registry", None) or {}
+                capacity = next(iter(registry.values())).capacity if registry else 1
+            model = {"model_name": request.model, "model_header": build_model_header(forced_token, capacity)}
+            model_trace = {"requested_model": request.model, "resolution": "debug-forced"}
+            model_trace.update(describe_model(model))
+            model_trace["header_token"] = forced_token
+            logger.info("debug-forced token=%s", forced_token)
+            slot_log(num, f"debug-forced token={forced_token}")
+        else:
+            model, model_trace = resolve_model_for_chat(request.model, client)
         trace_headers = build_model_trace_headers(model_trace, "chat")
 
-        tracer = RawCaptureTracer()
+        tracer = _DebugRawCaptureTracer() if debug_raw else RawCaptureTracer()
         completion_id = f"chatcmpl-{uuid.uuid4()}"
         created_time = int(time.time())
 
@@ -717,20 +807,22 @@ async def slot_chat_completion(
                                 yield f"data: {json.dumps(img_chunk)}\n\n"
 
                 except Exception as e:
-                    logger.error("Slot %d stream error: %s", num, e, exc_info=True)
+                    if not debug_probe:
+                        logger.error("Slot %d stream error: %s", num, e, exc_info=True)
                     slot.report_error(e)
-                    slot_log(num, f"Error: {str(e)[:80]}")
-                    try:
-                        log_worker_event(
-                            build_worker_event("chat", trace_headers, None, error_summary=str(e)[:200]),
-                            payload={
-                                "request": {"model": request.model, "prompt": conversation[:1000], "stream": True},
-                                "error": str(e)[:500],
-                                "raw_capture": tracer.get_snapshot() if tracer else None,
-                            },
-                        )
-                    except Exception:
-                        pass
+                    if not debug_probe:
+                        slot_log(num, f"Error: {str(e)[:80]}")
+                        try:
+                            log_worker_event(
+                                build_worker_event("chat", trace_headers, None, error_summary=str(e)[:200]),
+                                payload={
+                                    "request": {"model": request.model, "prompt": conversation[:1000], "stream": True},
+                                    "error": str(e)[:500],
+                                    "raw_capture": tracer.get_snapshot() if tracer else None,
+                                },
+                            )
+                        except Exception:
+                            pass
                     if first:
                         role_chunk = {
                             "id": completion_id, "object": "chat.completion.chunk",
@@ -804,16 +896,21 @@ async def slot_chat_completion(
                 reply_text=reply_text,
                 conversation=conversation,
             )
-            try:
-                log_worker_event(
-                    build_worker_event("chat", trace_headers, last_output),
-                    payload={
-                        "request": {"model": request.model, "prompt": conversation[:1000], "stream": False},
-                        "raw_capture": tracer.get_snapshot() if tracer else None,
-                    },
-                )
-            except Exception:
-                pass
+            if not debug_probe:
+                try:
+                    log_worker_event(
+                        build_worker_event("chat", trace_headers, last_output),
+                        payload={
+                            "request": {"model": request.model, "prompt": conversation[:1000], "stream": False},
+                            "raw_capture": tracer.get_snapshot() if tracer else None,
+                        },
+                    )
+                except Exception:
+                    pass
+            if debug_raw:
+                snapshot = tracer.get_snapshot()
+                result["oneclick_raw_capture"] = _debug_raw_snapshot(snapshot)
+                result["oneclick_model_hints"] = _debug_model_hints(snapshot)
             response.headers.update(trace_headers)
             return result
 
@@ -821,22 +918,24 @@ async def slot_chat_completion(
         raise
     except Exception as e:
         error_msg = str(e).lower()
-        logger.error("Slot %d chat error: %s", num, e, exc_info=True)
+        if not debug_probe:
+            logger.error("Slot %d chat error: %s", num, e, exc_info=True)
         slot.report_error(e)
-        slot_log(num, f"Error: {str(e)[:80]}")
-        try:
-            log_worker_event(
-                build_worker_event("chat", locals().get("trace_headers") or {}, None, error_summary=str(e)[:200]),
-                payload={
-                    "request": {"model": request.model,
-                                "prompt": locals().get("conversation", "")[:1000],
-                                "stream": request.stream},
-                    "error": str(e)[:500],
-                    "raw_capture": locals()["tracer"].get_snapshot() if "tracer" in locals() and locals()["tracer"] else None,
-                },
-            )
-        except Exception:
-            pass
+        if not debug_probe:
+            slot_log(num, f"Error: {str(e)[:80]}")
+            try:
+                log_worker_event(
+                    build_worker_event("chat", locals().get("trace_headers") or {}, None, error_summary=str(e)[:200]),
+                    payload={
+                        "request": {"model": request.model,
+                                    "prompt": locals().get("conversation", "")[:1000],
+                                    "stream": request.stream},
+                        "error": str(e)[:500],
+                        "raw_capture": locals()["tracer"].get_snapshot() if "tracer" in locals() and locals()["tracer"] else None,
+                    },
+                )
+            except Exception:
+                pass
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
             raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
