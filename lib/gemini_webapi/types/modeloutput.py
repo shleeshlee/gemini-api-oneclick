@@ -24,6 +24,7 @@ class ModelOutput(BaseModel):
     metadata: list[str | None]
     candidates: list[Candidate]
     chosen: int = 0
+    actual_model: str = "unknown"
 
     def __str__(self):
         return self.text

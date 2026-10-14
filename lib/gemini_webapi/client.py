@@ -72,6 +72,7 @@ class _StreamingState:
 
     last_texts: dict[str, str] = field(default_factory=dict)
     last_thoughts: dict[str, str] = field(default_factory=dict)
+    actual_model: str = "unknown"
     last_progress_time: float = field(default_factory=time.time)
 
 
@@ -86,6 +87,8 @@ class _StreamFlags:
     is_final_chunk: bool = False
     detected_image_model: str | None = None  # "pro" or "standard" when detected
     deep_research: bool = False
+    actual_model: str = "unknown"
+    last_output: ModelOutput | None = None
 
 
 def _raise_for_error_code(error_code: int, model_name: str) -> None:
@@ -594,19 +597,29 @@ class GeminiClient(GemMixin, ResearchMixin):
             except Exception as exc:
                 logger.warning(f"Failed to initialize {label}: {exc}")
 
-    async def _fetch_user_status(self) -> None:
-        """
-        Fetch account status and derive dynamic models from Gemini RPC metadata.
-        """
+    async def refresh_models(self) -> None:
+        """Refresh discovery without rotation, @running retries or reinitialisation."""
+        if not self._running or self.client is None:
+            raise APIError("Model refresh requires an already running client")
+        previous_registry = self._model_registry
+        try:
+            response = await GeminiClient._batch_execute.__wrapped__(
+                self, [RPCData(rpcid=GRPC.GET_USER_STATUS, payload="[]")],
+                close_on_error=False, update_cookies=False,
+            )
+            await self._fetch_user_status(response=response)
+            if self._model_registry is previous_registry:
+                raise APIError("Model discovery returned no usable registry")
+        except BaseException:
+            self._model_registry = previous_registry
+            raise
 
-        response = await self._batch_execute(
-            [
-                RPCData(
-                    rpcid=GRPC.GET_USER_STATUS,
-                    payload="[]",
-                )
-            ]
-        )
+    async def _fetch_user_status(self, response: Response | None = None) -> None:
+        """Fetch account status and derive models from live RPC metadata."""
+        if response is None:
+            response = await self._batch_execute(
+                [RPCData(rpcid=GRPC.GET_USER_STATUS, payload="[]")]
+            )
 
         response_json = extract_json_from_response(response.text)
 
@@ -1161,7 +1174,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                 last_thoughts = streaming_state.last_thoughts
                 last_progress_time = time.time()  # reset per polling iteration to avoid false stall detection
                 streaming_state.last_progress_time = last_progress_time
-                flags = _StreamFlags(deep_research=deep_research)
+                flags = _StreamFlags(deep_research=deep_research, actual_model=streaming_state.actual_model)
                 _FIRST_CHUNK_TIMEOUT = 30  # seconds to wait for first chunk
 
                 # Wrap aiter_content with first-chunk timeout detection
@@ -1197,6 +1210,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                             got_heartbeat = True
 
                         result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro, tracer=tracer)
+                        streaming_state.actual_model = flags.actual_model
                         if result:
                             yield result
                             got_update = True
@@ -1227,6 +1241,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                     parsed_parts, _ = parse_response_by_frame(buffer)
                     for part in parsed_parts:
                         result = await self._process_stream_part(part, model, chat, last_texts, last_thoughts, flags, use_pro, tracer=tracer)
+                        streaming_state.actual_model = flags.actual_model
                         if result:
                             yield result
 
@@ -1333,6 +1348,12 @@ class GeminiClient(GemMixin, ResearchMixin):
         if tracer:
             tracer.on_stream_frame(part=part, part_json=part_json, flags={"is_thinking": flags.is_thinking, "is_queueing": flags.is_queueing, "has_candidates": flags.has_candidates, "is_completed": flags.is_completed, "is_final_chunk": flags.is_final_chunk, "detected_image_model": flags.detected_image_model})
 
+        actual_label = get_nested_value(part_json, [42])
+        if isinstance(actual_label, str) and actual_label:
+            flags.actual_model = actual_label
+            if flags.last_output is not None:
+                flags.last_output.actual_model = actual_label
+
         # Update chat metadata
         m_data = get_nested_value(part_json, [1])
         if m_data and isinstance(chat, ChatSession):
@@ -1366,10 +1387,13 @@ class GeminiClient(GemMixin, ResearchMixin):
 
         flags.is_thinking = False
         flags.is_queueing = False
-        return ModelOutput(
+        output = ModelOutput(
             metadata=get_nested_value(part_json, [1], []),
             candidates=output_candidates,
+            actual_model=flags.actual_model,
         )
+        flags.last_output = output
+        return output
 
     def _parse_candidates(
         self,
@@ -1553,7 +1577,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         )
 
     @running(retry=2)
-    async def _batch_execute(self, payloads: list[RPCData], close_on_error: bool = True, **kwargs) -> Response:
+    async def _batch_execute(self, payloads: list[RPCData], close_on_error: bool = True, update_cookies: bool = True, **kwargs) -> Response:
         """
         Execute a batch of requests to Gemini API.
 
@@ -1608,7 +1632,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                 await self.close()
             raise APIError(f"Batch execution failed with status code {response.status_code}")
 
-        if self.client:
+        if self.client and update_cookies:
             self.cookies.update(self.client.cookies)
 
         return response

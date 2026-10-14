@@ -58,7 +58,8 @@ from gemini_webapi.exceptions import ImageGenerationBlocked
 from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
 
-from slot import Slot, parse_env_file
+from slot import (Slot, parse_env_file, model_label, model_version, label_level,
+                  request_level, label_model_id, actual_model, logged_in, client_capacity, truth_stream_response)
 
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 async def _noop_auto_refresh(self, *a, **kw): pass
@@ -76,15 +77,16 @@ PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
 API_KEY = os.environ.get("API_KEY", "")
 IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "0").strip() or "0"
 RUNTIME_MODELS_CACHE_TTL = 300
+MODEL_REFRESH_INTERVAL_SECONDS = max(1.0, float(os.environ.get("MODEL_REFRESH_INTERVAL_SECONDS", "21600")))
 RUNTIME_MODELS_EXCLUDE = {"gemini-advanced", "gemini-apps-while-signed-out"}
 
 # ── Slot registry ────────────────────────────────────────────────────
 
 slots: dict[int, Slot] = {}
 
-# Shared model cache (safe — model list is the same across accounts)
-_models_cache: list[dict[str, Any]] = []
-_models_cache_time: float = 0.0
+# Cache only each slot's own advertised capabilities.
+_models_cache: dict[int, list[dict[str, Any]]] = {}
+_pool_best_labels: dict[str, str] = {}
 
 # Per-slot log buffer
 from collections import deque
@@ -118,6 +120,7 @@ async def lifespan(app):
         for attempt in range(1, 4):
             try:
                 await slot.init_client(proxy=PROXY)
+                await get_runtime_models(slot.client, slot.num)
                 break
             except Exception as e:
                 logger.error("Slot %d: init attempt %d/3 failed: %s", slot.num, attempt, e)
@@ -126,8 +129,13 @@ async def lifespan(app):
 
     # Init slots in background so the server starts accepting requests immediately
     asyncio.create_task(_init_all_slots())
+    refresh_task = asyncio.create_task(_refresh_models_loop())
     logger.info("Slot init started in background")
-    yield
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+        await asyncio.gather(refresh_task, return_exceptions=True)
 
 
 async def _init_all_slots():
@@ -138,6 +146,7 @@ async def _init_all_slots():
         for attempt in range(1, 4):
             try:
                 await slot.init_client(proxy=PROXY)
+                await get_runtime_models(slot.client, slot.num)
                 break
             except Exception as e:
                 logger.error("Slot %d: init attempt %d/3 failed: %s", slot.num, attempt, e)
@@ -156,6 +165,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class CookieWritebackMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        status = 500
+        success = True
+
+        async def capture(message):
+            nonlocal status, success
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                success = dict(message.get("headers", [])).get(b"x-oneclick-success") != b"false"
+            await send(message)
+
+        await self.app(scope, receive, capture)
+        match = re.match(r"/slot/(\d+)/v1/", scope.get("path", ""))
+        if match and scope.get("method") == "POST" and status < 400 and success:
+            slot = slots.get(int(match.group(1)))
+            if isinstance(slot, Slot):
+                await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
+
+
+app.add_middleware(CookieWritebackMiddleware)
+
+
+@app.get("/v1/models")
+async def pool_models():
+    best = {}
+    for slot in slots.values():
+        for item in _publish_models(slot):
+            previous = best.get(item["level"])
+            if previous is None or model_version(item["label"]) > model_version(previous["label"]):
+                best[item["level"]] = item
+    return {"object": "list", "data": list(best.values())}
 
 
 # ── Shared helpers ───────────────────────────────────────────────────
@@ -212,59 +258,78 @@ def get_enum_models() -> list[dict[str, Any]]:
 
 
 def _build_model_name(m) -> str:
-    # mapping 表已经把各 tier 的 hash normalize 到 BASIC 名（如 PLUS_FLASH/BASIC_FLASH 都 → gemini-3-flash），
-    # 所以 family（flash / flash-thinking / pro）以 model_name 为准——它能可靠区分 thinking，描述里不一定带。
-    # 但版本号要跟着 Google 实时描述走：Google 把同一个 hash 原地升版（3 Flash → 3.5 Flash）时，
-    # 从 description 解析真实版本号，替换掉 enum 里写死的旧版本，新版本才能自动浮现。解析不到就保持原样（零回归）。
-    name = getattr(m, "model_name", "") or ""
-    desc = getattr(m, "description", "") or ""
-    display = getattr(m, "display_name", "") or ""
-    # description 现在带规范版本名："3.5 Flash" / "3.1 Flash-Lite" / "3.5 Thinking" / "3.1 Pro"。
-    # Flash-Lite 要排在 Flash 前面，否则 "3.1 Flash-Lite" 会被切成 "3.1 Flash" 丢掉 Lite。
-    ver_match = re.search(r"(\d+(?:\.\d+)?)\s+(Pro|Flash-Lite|Flash|Thinking)", desc, re.IGNORECASE)
-    live_ver = ver_match.group(1) if ver_match else None
-    if name and name != "unspecified":
-        # family 以静态名为准（可靠区分 flash / flash-thinking / pro），只把版本号换成实时值：
-        # gemini-3-flash + "3.5" → gemini-3.5-flash
-        if live_ver:
-            return re.sub(r"^gemini-\d+(?:\.\d+)?", f"gemini-{live_ver}", name)
-        return name
-    # 静态名缺失（enum 未收录的新模型，如 Flash-Lite）→ 从 description 拼出 family
-    if ver_match:
-        fam = ver_match.group(2).lower()
-        family = {"flash-lite": "flash-lite", "flash": "flash", "pro": "pro",
-                  "thinking": "flash-thinking"}.get(fam, fam)
-        return f"gemini-{live_ver}-{family}"
-    display_lower = display.lower()
-    family_map = {
-        "fast": "flash", "thinking": "flash-thinking", "pro": "pro", "flash-lite": "flash-lite",
-        "快速": "flash", "快捷": "flash", "思考": "flash-thinking", "思考型": "flash-thinking",
-    }
-    family = family_map.get(display_lower)
-    if not family:
-        return getattr(m, "model_id", "") or ""
-    return f"gemini-3-{family}"
+    return label_model_id(model_label(m)) if model_label(m) else getattr(m, "model_name", "")
 
 
-async def get_runtime_models(client: GeminiClient | None) -> list[dict[str, Any]]:
-    global _models_cache, _models_cache_time
-    now = time.time()
-    if _models_cache and (now - _models_cache_time) < RUNTIME_MODELS_CACHE_TTL:
-        return _models_cache
-    if client:
+def _client_slot(client) -> Slot:
+    return next((s for s in slots.values() if s.client is client), Slot(num=0, client=client))
+
+
+def _slot_level_models(slot):
+    return slot.level_models([s.client for s in slots.values()])
+
+
+def _known_levels():
+    return set(_pool_best_labels) | {level for s in slots.values() if isinstance(s, Slot) for level in _slot_level_models(s)}
+
+
+def _slot_models(slot) -> list[dict[str, Any]]:
+    result = []
+    for level, model in _slot_level_models(slot).items():
+        label = model_label(model)
+        observed = slot.actual_labels.get(level, "")
+        if observed and label_level(observed) == level and (
+            client_capacity(slot.client) == 1 or model_version(observed) > model_version(label)
+        ):
+            label = observed
+        model_id = label_model_id(label or level)
+        result.append({"id": model_id, "object": "model", "created": 0,
+                       "owned_by": "google-gemini-web", "level": level,
+                       "label": label})
+    return result
+
+
+def _publish_models(slot):
+    data = _slot_models(slot)
+    _models_cache[slot.num] = data
+    for item in data:
+        level, label = item["level"], item["label"]
+        if not label:
+            continue  # A vendored token does not establish an actual version label.
+        previous = _pool_best_labels.get(level)
+        if previous is None or model_version(label) > model_version(previous):
+            _pool_best_labels[level] = label
+            slot.record_model_event(f"出现新模型 {label}")
+            slot_log(slot.num, f"slot {slot.num} 出现新模型 {label}")
+    return data
+
+
+async def get_runtime_models(client: GeminiClient | None, slot_num: int | None = None) -> list[dict[str, Any]]:
+    slot = slots.get(slot_num) if slot_num is not None else _client_slot(client)
+    return _publish_models(slot)
+
+
+async def _refresh_slot_models(slot: Slot):
+    # Metadata refresh has its own lock; chat only locks client initialization.
+    async with slot.refresh_lock:
+        client = slot.client
+        if client is None or slot.state.get("initializing"):
+            return
         try:
-            registry = getattr(client, "_model_registry", None)
-            if registry:
-                model_ids = [_build_model_name(m) for m in registry.values()]
-                model_ids = [mid for mid in model_ids if mid and mid not in RUNTIME_MODELS_EXCLUDE]
-                if model_ids:
-                    _models_cache = build_model_payload(model_ids)
-                    _models_cache_time = now
-                    return _models_cache
-        except Exception as e:
-            logger.warning("Falling back to vendored models: %s", e)
-    # 不写入 _models_cache：vendored fallback 只是临时兜底，下次有 client 进来就能取到真实 registry
-    return get_enum_models()
+            await client.refresh_models()
+        except Exception:
+            logger.warning("Slot %d: model refresh failed; keeping previous registry", slot.num)
+        finally:
+            status = getattr(client, "account_status", None)
+            slot.state["auth_status"] = status.name if status else "unknown"
+            _publish_models(slot)
+            await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
+
+
+async def _refresh_models_loop():
+    while True:
+        await asyncio.sleep(MODEL_REFRESH_INTERVAL_SECONDS)
+        await asyncio.gather(*(_refresh_slot_models(s) for s in list(slots.values())))
 
 
 def build_custom_model(name: str, base_model: Model) -> dict[str, Any]:
@@ -313,28 +378,30 @@ def describe_model(model: Model | dict[str, Any]) -> dict[str, str]:
     }
 
 
+class ModelNotFoundError(HTTPException):
+    def __init__(self, requested: str, available):
+        super().__init__(status_code=404, detail={
+            "message": f"Model level for '{requested}' is unavailable. Available levels: {', '.join(sorted(available)) or '(none)'}",
+            "type": "invalid_request_error", "param": "model", "code": "model_not_found",
+        })
+
+
+@app.exception_handler(ModelNotFoundError)
+async def model_not_found_handler(request: Request, exc: ModelNotFoundError):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+
 def resolve_model_for_chat(openai_model_name: str, client: GeminiClient | None = None):
-    name_lower = openai_model_name.lower()
-    if client:
-        registry = getattr(client, "_model_registry", None)
-        if registry:
-            for m in registry.values():
-                if name_lower in (m.display_name.lower(), m.model_name.lower(), m.model_id.lower()):
-                    trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
-                    trace.update(describe_model(m))
-                    return m, trace
-            # "lite" 参与区分，否则 gemini-3.5-flash 与 gemini-3.1-flash-lite 的 keyword 集合都只有 {flash} 会撞车
-            _kw = ("flash", "pro", "thinking", "lite")
-            req_keywords = {kw for kw in _kw if kw in name_lower}
-            if req_keywords:
-                for m in registry.values():
-                    model_names = f"{m.display_name} {m.model_name}".lower()
-                    model_keywords = {kw for kw in _kw if kw in model_names}
-                    if req_keywords == model_keywords:
-                        trace = {"requested_model": openai_model_name, "resolution": "registry-keyword"}
-                        trace.update(describe_model(m))
-                        return m, trace
-    return _resolve_from_vendored(openai_model_name)
+    slot = _client_slot(client)
+    levels = _slot_level_models(slot)
+    level = request_level(openai_model_name, _known_levels() | set(levels))
+    if level not in levels:
+        raise ModelNotFoundError(openai_model_name, levels)
+    model = levels[level]
+    trace = {"requested_model": openai_model_name, "resolution": "pool-level", "model_level": level}
+    trace.update(describe_model(model))
+    trace["resolved_model"] = _build_model_name(model)
+    return model, trace
 
 
 def resolve_model_for_media(openai_model_name: str):
@@ -677,7 +744,10 @@ async def download_video_as_base64(video: GeneratedVideo) -> str | None:
 @app.get("/slot/{num}/health")
 async def slot_health(num: int):
     slot = _get_slot(num)
-    return slot.health_response()
+    data = slot.health_response()
+    data["models"] = _publish_models(slot)
+    data["model_levels"] = [m["level"] for m in data["models"]]
+    return data
 
 
 @app.get("/slot/{num}/v1/models")
@@ -697,11 +767,18 @@ async def slot_models(num: int, verbose: int = 0):
             }
             for m in registry.values()
         ]}
-    return {"object": "list", "data": await get_runtime_models(client)}
+    return {"object": "list", "data": await get_runtime_models(client, num)}
 
 
 @app.post("/slot/{num}/v1/chat/completions")
 async def slot_chat_completion(
+    num: int, request: ChatCompletionRequest, response: Response,
+    api_key: str = Depends(_verify_api_key),
+):
+    return await _chat_completion_impl(num, request, response, api_key)
+
+
+async def _chat_completion_impl(
     num: int,
     request: ChatCompletionRequest,
     response: Response,
@@ -738,6 +815,18 @@ async def slot_chat_completion(
             model, model_trace = resolve_model_for_chat(request.model, client)
         trace_headers = build_model_trace_headers(model_trace, "chat")
 
+        level = model_trace.get("model_level") or request_level(request.model, _known_levels())
+        trace_headers["X-OneClick-Model-Level"] = level
+        trace_headers["X-OneClick-Actual-Model"] = "unknown"
+        trace_headers["X-OneClick-Success"] = "true"
+
+        def observe(output):
+            label = actual_model(output)
+            trace_headers["X-OneClick-Actual-Model"] = label
+            if isinstance(slot, Slot) and not debug_probe:
+                slot.observe_actual(level, label)
+            return label
+
         tracer = _DebugRawCaptureTracer() if debug_raw else RawCaptureTracer()
         completion_id = f"chatcmpl-{uuid.uuid4()}"
         created_time = int(time.time())
@@ -748,6 +837,7 @@ async def slot_chat_completion(
                 full_thoughts = ""
                 last_output = None
                 first = True
+                stream_model = trace_headers["X-OneClick-Model-Level"]
                 try:
                     stream_gen = client.generate_content_stream(
                         conversation,
@@ -757,6 +847,10 @@ async def slot_chat_completion(
                     )
                     async for output in stream_gen:
                         last_output = output
+                        label = actual_model(output)
+                        if label != "unknown":
+                            stream_model = label
+                            trace_headers["X-OneClick-Actual-Model"] = label
                         text_delta = output.text_delta or ""
                         thoughts_delta = output.thoughts_delta or ""
                         content = ""
@@ -775,22 +869,26 @@ async def slot_chat_completion(
                         if first:
                             role_chunk = {
                                 "id": completion_id, "object": "chat.completion.chunk",
-                                "created": created_time, "model": request.model,
+                                "created": created_time, "model": stream_model,
                                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
                             }
                             yield f"data: {json.dumps(role_chunk)}\n\n"
                             first = False
                         chunk = {
                             "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created_time, "model": request.model,
+                            "created": created_time, "model": stream_model,
                             "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(chunk)}\n\n"
 
+                    # A metadata-only tail frame can update the last output in place.
+                    if actual_model(last_output) != "unknown":
+                        stream_model = actual_model(last_output)
+
                     if full_thoughts and not full_text:
                         close_chunk = {
                             "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created_time, "model": request.model,
+                            "created": created_time, "model": stream_model,
                             "choices": [{"index": 0, "delta": {"content": "</think>"}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(close_chunk)}\n\n"
@@ -801,12 +899,15 @@ async def slot_chat_completion(
                             if b64:
                                 img_chunk = {
                                     "id": completion_id, "object": "chat.completion.chunk",
-                                    "created": created_time, "model": request.model,
+                                    "created": created_time, "model": stream_model,
                                     "choices": [{"index": 0, "delta": {"content": f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"}, "finish_reason": None}],
                                 }
                                 yield f"data: {json.dumps(img_chunk)}\n\n"
 
+                    observe(last_output)
+
                 except Exception as e:
+                    trace_headers["X-OneClick-Success"] = "false"
                     if not debug_probe:
                         logger.error("Slot %d stream error: %s", num, e, exc_info=True)
                     slot.report_error(e)
@@ -826,13 +927,13 @@ async def slot_chat_completion(
                     if first:
                         role_chunk = {
                             "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created_time, "model": request.model,
+                            "created": created_time, "model": stream_model,
                             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(role_chunk)}\n\n"
                     err_chunk = {
                         "id": completion_id, "object": "chat.completion.chunk",
-                        "created": created_time, "model": request.model,
+                        "created": created_time, "model": stream_model,
                         "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)[:200]}]"}, "finish_reason": None}],
                     }
                     yield f"data: {json.dumps(err_chunk)}\n\n"
@@ -844,13 +945,13 @@ async def slot_chat_completion(
                             pass
                     done_chunk = {
                         "id": completion_id, "object": "chat.completion.chunk",
-                        "created": created_time, "model": request.model,
+                        "created": created_time, "model": stream_model,
                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     }
                     yield f"data: {json.dumps(done_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
 
-            return StreamingResponse(stream_relay(), media_type="text/event-stream", headers=trace_headers)
+            return await truth_stream_response(stream_relay(), trace_headers)
 
         else:
             full_text = ""
@@ -889,10 +990,11 @@ async def slot_chat_completion(
             if not reply_text.strip():
                 reply_text = "Empty response from Gemini."
 
+            observe(last_output)
             result = build_chat_completion_payload(
                 completion_id=completion_id,
                 created_time=created_time,
-                model=request.model,
+                model=trace_headers["X-OneClick-Actual-Model"],
                 reply_text=reply_text,
                 conversation=conversation,
             )
@@ -1530,6 +1632,7 @@ async def worker_reload_slot(num: int):
     slot = _get_slot(num)
     try:
         await slot.reload_from_env(ENVS_DIR)
+        _publish_models(slot)
         return {"ok": True, "message": f"Slot {num} reloaded", "health": slot.health_response()}
     except Exception as e:
         logger.error("Slot %d reload failed: %s", num, e)
@@ -1580,11 +1683,14 @@ async def worker_deploy_slot(num: int, request: Request):
 
     # Reload or create slot
     if num in slots:
-        await slots[num].reload(psid=psid, psidts=psidts)
+        async with slots[num].lock:
+            slots[num].env_path = env_file
+            await slots[num].reload(psid=psid, psidts=psidts)
     else:
-        slots[num] = Slot(num=num, psid=psid, psidts=psidts)
+        slots[num] = Slot(num=num, psid=psid, psidts=psidts, env_path=env_file)
         await slots[num].init_client(proxy=PROXY)
 
+    _publish_models(slots[num])
     slot_log(num, "Cookie deployed, slot reloaded")
     return {"ok": True, "message": f"Slot {num} deployed", "health": slots[num].health_response()}
 

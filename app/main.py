@@ -49,6 +49,13 @@ from gemini_webapi.exceptions import ImageGenerationBlocked
 from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
 
+from slot import (Slot, model_label, model_version, label_model_id, request_level,
+                  actual_model, truth_stream_response)
+
+_model_slot = Slot(num=0)
+MODEL_REFRESH_INTERVAL_SECONDS = max(1.0, float(os.environ.get("MODEL_REFRESH_INTERVAL_SECONDS", "21600")))
+_main_best_labels = {}
+
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 # gemini_webapi's RotateCookies sends 401 and invalidates all cookies.
 # This monkey-patch disables it regardless of init() parameters or library defaults.
@@ -157,6 +164,13 @@ async def get_or_create_client():
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
                 gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
                 await gemini_client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
+                _model_slot.client = gemini_client
+                _model_slot.pro_verified = False
+                _model_slot.pro_denied = False
+                _model_slot._pro_probe_done = False
+                _model_slot.actual_labels.clear()
+                _model_slot.last_actual_model = "unknown"
+                await _model_slot.probe_free_pro()
 
                 # Read real auth status from Google
                 status = getattr(gemini_client, "account_status", None)
@@ -212,7 +226,12 @@ async def lifespan(app):
                     await asyncio.sleep(wait)
     else:
         logger.error("Credentials (SECURE_1PSID, SECURE_1PSIDTS) are not set.")
-    yield
+    refresh_task = asyncio.create_task(_refresh_models_loop())
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+        await asyncio.gather(refresh_task, return_exceptions=True)
 
 
 app = FastAPI(title="Gemini API OneClick", lifespan=lifespan)
@@ -251,68 +270,56 @@ def get_enum_models() -> list[dict[str, Any]]:
     return build_model_payload([m.model_name for m in Model if m.model_name != "unspecified"])
 
 
-def _build_model_name(m) -> str:
-    """Build a model name from registry data.
+def _build_model_name(model) -> str:
+    return label_model_id(model_label(model)) if model_label(model) else model.model_name
 
-    family（flash / flash-thinking / pro）以 model_name 为准（可靠区分 thinking），
-    版本号跟着 Google 实时 description 走：原地升版（3 Flash → 3.5 Flash）时替换写死的旧版本。
-    解析不到版本就保持原样（零回归）。与 worker.py:_build_model_name 保持一致。
-    """
-    name = getattr(m, "model_name", "") or ""
-    desc = getattr(m, "description", "") or ""
-    display = getattr(m, "display_name", "") or ""
-    # Flash-Lite 排在 Flash 前，否则 "3.1 Flash-Lite" 被切成 "3.1 Flash" 丢掉 Lite。
-    ver_match = re.search(r"(\d+(?:\.\d+)?)\s+(Pro|Flash-Lite|Flash|Thinking)", desc, re.IGNORECASE)
-    live_ver = ver_match.group(1) if ver_match else None
-    if name and name != "unspecified":
-        if live_ver:
-            return re.sub(r"^gemini-\d+(?:\.\d+)?", f"gemini-{live_ver}", name)
-        return name
-    # mapping 漏匹配（enum 未收录的新 hash）才退到 description/display 解析
-    if ver_match:
-        fam = ver_match.group(2).lower()
-        family = {"flash-lite": "flash-lite", "flash": "flash", "pro": "pro",
-                  "thinking": "flash-thinking"}.get(fam, fam)
-        return f"gemini-{live_ver}-{family}"
-    display_lower = display.lower()
-    family_map = {
-        "fast": "flash", "thinking": "flash-thinking", "pro": "pro", "flash-lite": "flash-lite",
-        "快速": "flash", "快捷": "flash", "思考": "flash-thinking", "思考型": "flash-thinking",
-    }
-    family = family_map.get(display_lower)
-    if not family:
-        return getattr(m, "model_id", "") or ""
-    return f"gemini-3-{family}"
+
+def _current_model_slot():
+    if _model_slot.client is not gemini_client:
+        _model_slot.client = gemini_client
+        _model_slot.pro_verified = False
+        _model_slot._pro_probe_done = False
+        _model_slot.pro_denied = False
+        _model_slot.actual_labels.clear()
+        _model_slot.last_actual_model = "unknown"
+    return _model_slot
 
 
 async def get_runtime_models() -> list[dict[str, Any]]:
-    """Return models from the live model registry, falling back to vendored enum."""
-    global runtime_models_cache, runtime_models_cache_time
+    slot = _current_model_slot()
+    data = []
+    for level, model in slot.level_models([gemini_client]).items():
+        label = model_label(model)
+        observed = slot.actual_labels.get(level)
+        if observed and (level == "flash" and slot.detect_tier()["capacity"] == 1
+                         or model_version(observed) > model_version(label)):
+            label = observed
+        model_id = label_model_id(label or level)
+        data.append({"id": model_id, "object": "model", "created": 0,
+                     "owned_by": "google-gemini-web", "level": level, "label": label})
+        if not label:
+            continue
+        previous = _main_best_labels.get(level)
+        if previous is None or model_version(label) > model_version(previous):
+            _main_best_labels[level] = label
+            slot.record_model_event(f"出现新模型 {label or model_id}")
+    return data
 
-    now = time.time()
-    if runtime_models_cache and (now - runtime_models_cache_time) < RUNTIME_MODELS_CACHE_TTL:
-        return runtime_models_cache
 
-    try:
-        client = await get_or_create_client()
-        registry = getattr(client, "_model_registry", None)
-        if registry:
-            model_ids = []
-            for m in registry.values():
-                name = _build_model_name(m)
-                if name:
-                    model_ids.append(name)
-            if model_ids:
-                runtime_models_cache = build_model_payload(model_ids)
-                runtime_models_cache_time = now
-                logger.info("Models from registry: %s", model_ids)
-                return runtime_models_cache
-    except Exception as e:
-        logger.warning("Falling back to vendored model enum for /v1/models: %s", e)
-
-    runtime_models_cache = get_enum_models()
-    runtime_models_cache_time = now
-    return runtime_models_cache
+async def _refresh_models_loop():
+    while True:
+        await asyncio.sleep(MODEL_REFRESH_INTERVAL_SECONDS)
+        async with _current_model_slot().refresh_lock:
+            if gemini_client is None:
+                continue
+            try:
+                await gemini_client.refresh_models()
+                await get_runtime_models()
+            except Exception:
+                logger.warning("Model refresh failed; keeping previous registry")
+            finally:
+                status = getattr(gemini_client, "account_status", None)
+                _container_state["auth_status"] = status.name if status else "unknown"
 
 
 def build_custom_model(name: str, base_model: Model) -> dict[str, Any]:
@@ -370,32 +377,29 @@ def describe_model(model: Model | dict[str, Any]) -> dict[str, str]:
     }
 
 
-def resolve_model_for_chat(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
-    """Resolve model for chat — uses live registry (account's real tier) first."""
-    name_lower = openai_model_name.lower()
+class ModelNotFoundError(HTTPException):
+    def __init__(self, requested, available):
+        super().__init__(status_code=404, detail={
+            "message": f"Model level for '{requested}' is unavailable. Available levels: {', '.join(sorted(available)) or '(none)'}",
+            "type": "invalid_request_error", "param": "model", "code": "model_not_found",
+        })
 
-    # Step 1: Try live model registry (has real tokens for this account's tier)
-    if gemini_client:
-        registry = getattr(gemini_client, "_model_registry", None)
-        if registry:
-            for m in registry.values():
-                if name_lower in (m.display_name.lower(), m.model_name.lower()):
-                    trace = {"requested_model": openai_model_name, "resolution": "registry-exact"}
-                    trace.update(describe_model(m))
-                    return m, trace
-            # Keyword match: all family keywords in the request must appear in the model
-            req_keywords = {kw for kw in ("flash", "pro", "thinking") if kw in name_lower}
-            if req_keywords:
-                for m in registry.values():
-                    model_names = f"{m.display_name} {m.model_name}".lower()
-                    model_keywords = {kw for kw in ("flash", "pro", "thinking") if kw in model_names}
-                    if req_keywords == model_keywords:
-                        trace = {"requested_model": openai_model_name, "resolution": "registry-keyword"}
-                        trace.update(describe_model(m))
-                        return m, trace
 
-    # Step 2: Fall back to vendored enum
-    return _resolve_from_vendored(openai_model_name)
+@app.exception_handler(ModelNotFoundError)
+async def model_not_found_handler(request: Request, exc: ModelNotFoundError):
+    return JSONResponse(status_code=404, content={"error": exc.detail})
+
+
+def resolve_model_for_chat(openai_model_name: str):
+    levels = _current_model_slot().level_models([gemini_client])
+    level = request_level(openai_model_name, set(levels) | set(_main_best_labels))
+    if level not in levels:
+        raise ModelNotFoundError(openai_model_name, levels)
+    model = levels[level]
+    trace = {"requested_model": openai_model_name, "resolution": "pool-level", "model_level": level}
+    trace.update(describe_model(model))
+    trace["resolved_model"] = _build_model_name(model)
+    return model, trace
 
 
 def resolve_model_for_media(openai_model_name: str) -> tuple[Model | dict[str, Any], dict[str, str]]:
@@ -570,6 +574,10 @@ async def health_check():
         "client_ready": client_ready,
         "auth_status": auth,
         "tier": _detect_tier(),
+        "models": await get_runtime_models(),
+        "model_levels": list(_current_model_slot().level_models([gemini_client])),
+        "last_actual_model": _model_slot.last_actual_model,
+        "model_events": _model_slot.model_events[-100:],
         "needs_restart": _container_state["needs_restart"],
         "last_error": _container_state["last_error"],
         "last_error_type": _container_state["last_error_type"],
@@ -702,6 +710,15 @@ async def create_chat_completion(
         trace_headers = build_model_trace_headers(model_trace, "chat")
         logger.info("Using model trace: %s", model_trace)
 
+        trace_headers["X-OneClick-Model-Level"] = model_trace["model_level"]
+        trace_headers["X-OneClick-Actual-Model"] = "unknown"
+        trace_headers["X-OneClick-Success"] = "true"
+
+        def observe(output):
+            label = actual_model(output)
+            trace_headers["X-OneClick-Actual-Model"] = label
+            _current_model_slot().observe_actual(model_trace["model_level"], label)
+
         tracer = RawCaptureTracer()
         logger.info("Sending request to Gemini...")
 
@@ -715,6 +732,7 @@ async def create_chat_completion(
                 full_thoughts = ""
                 last_output = None
                 first = True
+                stream_model = trace_headers["X-OneClick-Model-Level"]
                 try:
                     stream_gen = client.generate_content_stream(
                         conversation,
@@ -723,6 +741,10 @@ async def create_chat_completion(
                     )
                     async for output in stream_gen:
                         last_output = output
+                        label = actual_model(output)
+                        if label != "unknown":
+                            stream_model = label
+                            trace_headers["X-OneClick-Actual-Model"] = label
                         text_delta = output.text_delta or ""
                         thoughts_delta = output.thoughts_delta or ""
 
@@ -747,7 +769,7 @@ async def create_chat_completion(
                                 "id": completion_id,
                                 "object": "chat.completion.chunk",
                                 "created": created_time,
-                                "model": request.model,
+                                "model": stream_model,
                                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
                             }
                             yield f"data: {json.dumps(role_chunk)}\n\n"
@@ -757,10 +779,14 @@ async def create_chat_completion(
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_time,
-                            "model": request.model,
+                            "model": stream_model,
                             "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(chunk)}\n\n"
+
+                    # A metadata-only tail frame can update the last output in place.
+                    if actual_model(last_output) != "unknown":
+                        stream_model = actual_model(last_output)
 
                     # Close thinking tag if still open
                     if full_thoughts and not full_text:
@@ -768,7 +794,7 @@ async def create_chat_completion(
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_time,
-                            "model": request.model,
+                            "model": stream_model,
                             "choices": [{"index": 0, "delta": {"content": "</think>"}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(close_chunk)}\n\n"
@@ -782,12 +808,15 @@ async def create_chat_completion(
                                     "id": completion_id,
                                     "object": "chat.completion.chunk",
                                     "created": created_time,
-                                    "model": request.model,
+                                    "model": stream_model,
                                     "choices": [{"index": 0, "delta": {"content": f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"}, "finish_reason": None}],
                                 }
                                 yield f"data: {json.dumps(img_chunk)}\n\n"
 
+                    observe(last_output)
+
                 except Exception as e:
+                    trace_headers["X-OneClick-Success"] = "false"
                     logger.error(f"Stream error: {e}", exc_info=True)
                     _report_error(e)
                     # Send error as final content chunk so caller sees it
@@ -796,7 +825,7 @@ async def create_chat_completion(
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_time,
-                            "model": request.model,
+                            "model": stream_model,
                             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
                         }
                         yield f"data: {json.dumps(role_chunk)}\n\n"
@@ -804,7 +833,7 @@ async def create_chat_completion(
                         "id": completion_id,
                         "object": "chat.completion.chunk",
                         "created": created_time,
-                        "model": request.model,
+                        "model": stream_model,
                         "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)[:200]}]"}, "finish_reason": None}],
                     }
                     yield f"data: {json.dumps(err_chunk)}\n\n"
@@ -821,13 +850,13 @@ async def create_chat_completion(
                         "id": completion_id,
                         "object": "chat.completion.chunk",
                         "created": created_time,
-                        "model": request.model,
+                        "model": stream_model,
                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     }
                     yield f"data: {json.dumps(done_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
 
-            return StreamingResponse(stream_relay(), media_type="text/event-stream", headers=trace_headers)
+            return await truth_stream_response(stream_relay(), trace_headers)
 
         else:
             # ── Non-streaming: consume stream, return complete JSON ──
@@ -873,10 +902,11 @@ async def create_chat_completion(
 
             logger.info(f"Response: {reply_text[:200]}...")
 
+            observe(last_output)
             result = build_chat_completion_payload(
                 completion_id=completion_id,
                 created_time=created_time,
-                model=request.model,
+                model=trace_headers["X-OneClick-Actual-Model"],
                 reply_text=reply_text,
                 conversation=conversation,
             )

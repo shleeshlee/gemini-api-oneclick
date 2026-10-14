@@ -31,6 +31,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
+from app.slot import request_level, label_level, model_version
+
 # ── Config ──────────────────────────────────────────────────────────────
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -155,6 +157,10 @@ class Container:
         self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
         self.img_blocked = False    # True = can chat but not generate images, needs fresh cookie
         self.busy = False           # True = currently processing a request
+        self.models: list[dict] = []
+        self.model_levels: list[str] = []
+        self.last_actual_model = "unknown"
+        self.model_event_ids: set[str] = set()
         self.tier = ""              # "free" | "pro" | "plus" | "ultra" — from container health
 
     @property
@@ -201,6 +207,8 @@ class Container:
             "img_blocked": self.img_blocked,
             "busy": self.busy,
             "tier": self.tier,
+            "model_levels": self.model_levels,
+            "last_actual_model": self.last_actual_model,
         }
 
 
@@ -249,6 +257,7 @@ def _cleanup_old_tasks():
                if t.status in ("success", "failed", "cancelled") and now - t.created_at > _TASK_TTL]
     for tid in expired:
         del _generation_tasks[tid]
+_known_model_levels: set[str] = set()
 _models_cache: list[dict] = []
 _models_cache_time: float = 0
 MODELS_CACHE_TTL = 300  # seconds
@@ -262,6 +271,9 @@ MODEL_PROFILE_SLOTS = {
     "video_default": "生视频默认",
 }
 TRACE_HEADER_NAMES = (
+    "X-OneClick-Actual-Model",
+    "X-OneClick-Model-Level",
+    "X-OneClick-Success",
     "X-OneClick-Requested-Model",
     "X-OneClick-Resolved-Model",
     "X-OneClick-Header-Family",
@@ -398,7 +410,7 @@ def discover_containers():
     add_log("info", None, f"Discovered {len(containers)} containers")
 
 
-def get_next_available(group: str | None = None, is_image: bool = False) -> Container | None:
+def get_next_available(group: str | None = None, is_image: bool = False, level: str | None = None) -> Container | None:
     """Round-robin to next available container, optionally filtered by group."""
     if group:
         nums = sorted(n for n, g in container_groups.items()
@@ -410,6 +422,8 @@ def get_next_available(group: str | None = None, is_image: bool = False) -> Cont
                        and n not in container_groups
                        and (not is_image or not containers[n].img_blocked))
 
+    if level is not None:
+        nums = [n for n in nums if level in containers[n].model_levels]
     if not nums:
         return None
 
@@ -434,6 +448,19 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
         status = data.get("status", "unknown")
         auth_status = data.get("auth_status", "unknown")
+        if "models" in data:
+            update_container_models(c, data["models"])
+        c.last_actual_model = data.get("last_actual_model", c.last_actual_model)
+        for event in data.get("model_events", []):
+            event_id = f"{event.get('at')}:{event.get('seq')}:{event.get('message')}"
+            if event_id not in c.model_event_ids:
+                c.model_event_ids.add(event_id)
+                add_log("info", c.num, f"slot {c.num} {event.get('message', '')}")
+        if auth_status == "UNAUTHENTICATED":
+            update_container_models(c, [])
+            c.needs_cookie = True
+            c.healthy = False
+            return
         needs_restart = data.get("needs_restart", False)
         last_error_type = data.get("last_error_type", "")
         last_error = data.get("last_error", "")
@@ -783,70 +810,70 @@ def is_legacy_static_model_list(models: list[dict]) -> bool:
     return ids == LEGACY_STATIC_MODEL_IDS
 
 
+def update_container_models(c: Container, models: list[dict]):
+    c.models = [dict(m, level=m.get("level") or label_level(m.get("label") or m.get("id", "")))
+                for m in models if isinstance(m, dict) and m.get("id")]
+    c.models = [m for m in c.models if m["level"]]
+    c.model_levels = sorted({m["level"] for m in c.models})
+    _known_model_levels.update(c.model_levels)
+
+
+def group_containers(group: str | None):
+    return [c for n, c in containers.items()
+            if (container_groups.get(n) == group if group else n not in container_groups)]
+
+
+def pool_model_union(pool):
+    best = {}
+    for c in pool:
+        if not c.enabled or c.needs_cookie:
+            continue
+        for item in c.models:
+            level = item["level"]
+            if level not in best or model_version(item.get("label") or item["id"]) > model_version(best[level].get("label") or best[level]["id"]):
+                best[level] = item
+    return [best[level] for level in sorted(best)]
+
+
 async def fetch_live_models(*, persist: bool = False) -> tuple[list[dict], int | None]:
-    """Fetch model list from a healthy container."""
+    """Fetch every account, including busy/cooling accounts, without traffic."""
     global _models_cache, _models_cache_time
-    now = time.time()
-    for c in containers.values():
-        if not c.available:
-            continue
+    async def fetch_one(c, client):
+        if not c.enabled or c.needs_cookie or not c.healthy:
+            return
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{c.url}/v1/models")
-                if resp.status_code == 200:
-                    data = resp.json().get("data", [])
-                    if not data:
-                        continue
-                    _models_cache = data
-                    _models_cache_time = now
-                    if persist:
-                        save_models(data)
-                    return data, c.num
+            resp = await client.get(f"{c.url}/v1/models")
+            if resp.status_code == 200:
+                update_container_models(c, resp.json().get("data", []))
         except Exception:
-            continue
-    return [], None
+            pass  # A transient metadata failure does not erase known capabilities.
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        await asyncio.gather(*(fetch_one(c, client) for c in containers.values()))
+    _models_cache = pool_model_union(containers.values())
+    _models_cache_time = time.time()
+    if persist:
+        save_models(_models_cache)
+    return _models_cache, None
 
 
 async def fetch_base_models() -> list[dict]:
-    """Return model list, preferring live container data over saved state."""
-    global _models_cache, _models_cache_time
-    now = time.time()
-    if _models_cache and (now - _models_cache_time) < MODELS_CACHE_TTL:
-        return _models_cache
-
-    live_models, _ = await fetch_live_models()
-    if live_models:
-        return live_models
-
-    saved = load_saved_models()
-    if saved:
-        _models_cache = saved
-        _models_cache_time = now
-        return _models_cache
-
-    return _models_cache
+    if time.time() - _models_cache_time >= MODELS_CACHE_TTL:
+        await fetch_live_models()
+    # Rebuild from per-account metadata; saved lists cannot confer membership.
+    return pool_model_union(containers.values())
 
 
 @app.get("/v1/models", dependencies=[Depends(verify_auth)])
 async def list_models():
-    """Return model list with group prefixes, filtering out 'unspecified'."""
-    base_models = [m for m in await fetch_base_models() if m.get("id") != "unspecified"]
+    await fetch_base_models()
     groups = get_all_group_names()
-
     if not groups:
-        return {"object": "list", "data": base_models}
-
+        return {"object": "list", "data": pool_model_union(group_containers(None))}
     result = []
-    for g in sorted(groups):
-        for m in base_models:
-            result.append({
-                "id": f"{g}-{m['id']}",
-                "object": "model",
-                "created": m.get("created", 0),
-                "owned_by": m.get("owned_by", "google"),
-            })
+    for group in sorted(groups):
+        for model in pool_model_union(group_containers(group)):
+            result.append({**model, "id": f"{group}-{model['id']}"})
     return {"object": "list", "data": result}
-
 
 
 # ── Image Prompt Building ──────────────────────────────────────────────
@@ -1221,6 +1248,40 @@ async def proxy_research_query(request: Request, task_id: str = ""):
         raise HTTPException(status_code=502, detail=f"Research query failed: {str(e)}")
 
 
+class _StreamModelTruth:
+    """Observe SSE events without retaining or rewriting forwarded body chunks."""
+    def __init__(self, levels):
+        self.levels = set(levels) | {"flash", "flash-lite", "lite", "pro", "unknown", ""}
+        self.actual = "unknown"
+        self.pending = b""
+        self.data = []
+
+    def feed(self, chunk):
+        lines = (self.pending + chunk).split(b"\n")
+        self.pending = lines.pop()
+        for line in lines:
+            line = line.rstrip(b"\r")
+            if not line:
+                self._event()
+            elif line.startswith(b"data:"):
+                self.data.append(line[5:].lstrip(b" "))
+
+    def _event(self):
+        data, self.data = self.data, []
+        if not data:
+            return
+        try:
+            event = json.loads(b"\n".join(data))
+        except (ValueError, UnicodeDecodeError):
+            return
+        model = event.get("model") if isinstance(event, dict) else None
+        if isinstance(model, str) and model.strip().lower() not in self.levels:
+            self.actual = model
+
+    def finish(self):
+        self.feed(b"\n\n")
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"], dependencies=[Depends(verify_auth)])
 async def proxy(request: Request, path: str):
     """Proxy requests to healthy containers with auto-failover and group routing."""
@@ -1255,6 +1316,21 @@ async def proxy(request: Request, path: str):
     is_media_req = "images" in path or "videos" in path or is_music_req
     is_image_req = "images" in path or "videos" in path  # img_blocked filtering, music excluded
 
+    truth_affects_membership = not any((body_json or {}).get(k) for k in ("oneclick_force_model_token", "oneclick_debug_raw"))
+    chat_level = None
+    if path == "chat/completions":
+        await fetch_base_models()
+        known = _known_model_levels | {level for c in containers.values() for level in c.model_levels}
+        chat_level = request_level((body_json or {}).get("model", ""), known)
+        pool = group_containers(target_group)
+        present = [c for c in pool if c.enabled and not c.needs_cookie and chat_level in c.model_levels]
+        if not present:
+            available = sorted({level for c in pool if c.enabled and not c.needs_cookie for level in c.model_levels})
+            return JSONResponse(status_code=404, content={"error": {
+                "message": f"Model level '{chat_level}' is unavailable. Available levels: {', '.join(available) or '(none)'}",
+                "type": "invalid_request_error", "param": "model", "code": "model_not_found",
+            }})
+
     # Session affinity: route session_id requests to the container that created them
     # Lazy cleanup: purge expired session routes every request (cheap dict scan)
     now = time.time()
@@ -1288,6 +1364,9 @@ async def proxy(request: Request, path: str):
                              and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
 
+    if chat_level is not None:
+        pool_available = sum(c.available for c in present)
+
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
         # Check why — initializing, needs_cookie, or genuinely none
@@ -1307,10 +1386,11 @@ async def proxy(request: Request, path: str):
         if attempt == 0 and session_affinity_container:
             c = session_affinity_container
         else:
-            c = get_next_available(target_group, is_image=is_image_req)
+            c = get_next_available(target_group, is_image=is_image_req, level=chat_level)
         if not c:
             break
 
+        attempt_headers = {}
         target_url = f"{c.url}/v1/{path}"
         c.total_requests += 1
         c.busy = True
@@ -1332,6 +1412,7 @@ async def proxy(request: Request, path: str):
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
                 resp = await client.send(req, stream=True)
+                attempt_headers = resp.headers
 
                 if resp.status_code >= 500 or resp.status_code == 422:
                     error_body = (await resp.aread()).decode(errors="replace")[:200]
@@ -1358,8 +1439,14 @@ async def proxy(request: Request, path: str):
                     for name in TRACE_HEADER_NAMES
                     if resp.headers.get(name)
                 }
+                stream_truth = (_StreamModelTruth(known | {chat_level})
+                                if chat_level is not None and (body_json or {}).get("stream") else None)
+                if stream_truth is not None:
+                    trace_headers = {key: value for key, value in trace_headers.items()
+                                     if key.lower() != "x-oneclick-actual-model"}
                 if trace_headers:
-                    record_model_truth(c.num, f"/v1/{path}", target_group, resp.headers)
+                    if chat_level is None:
+                        record_model_truth(c.num, f"/v1/{path}", target_group, resp.headers)
                     trace_headers["Access-Control-Expose-Headers"] = ", ".join(TRACE_HEADER_NAMES)
 
                 # Image requests: buffer response to capture session_id for affinity routing
@@ -1384,10 +1471,23 @@ async def proxy(request: Request, path: str):
                     )
 
                 async def stream_generator():
+                    succeeded = False
                     try:
                         async for chunk in resp.aiter_bytes():
                             yield chunk
+                            if stream_truth is not None:
+                                stream_truth.feed(chunk)
+                        succeeded = resp.status_code < 400 and resp.headers.get("x-oneclick-success") != "false"
                     finally:
+                        if chat_level is not None:
+                            truth_headers = dict(resp.headers)
+                            if stream_truth is not None:
+                                stream_truth.finish()
+                                truth_headers["x-oneclick-actual-model"] = stream_truth.actual
+                            record_model_truth(c.num, f"/v1/{path}", target_group, truth_headers,
+                                               success=succeeded, level=chat_level,
+                                               requested_model=(body_json or {}).get("model", ""),
+                                               update_membership=truth_affects_membership)
                         c.busy = False
                         await resp.aclose()
                         await client.aclose()
@@ -1403,6 +1503,10 @@ async def proxy(request: Request, path: str):
                 raise
 
         except Exception as e:
+            if chat_level is not None:
+                record_model_truth(c.num, f"/v1/{path}", target_group, attempt_headers, success=False,
+                                   level=chat_level, requested_model=(body_json or {}).get("model", ""),
+                                   update_membership=truth_affects_membership)
             c.busy = False
             error_msg = str(e)[:200] or f"{type(e).__name__}"
             error_lower = error_msg.lower()
@@ -1963,32 +2067,58 @@ def list_model_truth_entries() -> list[dict]:
     return sorted(entries.values(), key=lambda item: item.get("last_seen", ""), reverse=True)
 
 
-def record_model_truth(container_num: int, request_path: str, group: str | None, response_headers) -> None:
-    """Persist the latest observed requested-model -> header-family mapping."""
-    requested_model = response_headers.get("x-oneclick-requested-model", "")
+def record_model_truth(container_num: int, request_path: str, group: str | None,
+                       response_headers, *, success=True, level=None, requested_model=None, update_membership=True) -> None:
+    headers = {key.lower(): value for key, value in response_headers.items()}
+    requested_model = requested_model or headers.get("x-oneclick-requested-model", "")
     if not requested_model:
         return
-
-    endpoint = response_headers.get("x-oneclick-endpoint", "")
+    endpoint = headers.get("x-oneclick-endpoint", "chat" if level else "unknown")
+    level = level or headers.get("x-oneclick-model-level", "")
+    actual = headers.get("x-oneclick-actual-model", "unknown")
     state = load_model_truth_state()
     entries = state.setdefault("entries", {})
-    key = f"{endpoint}:{requested_model}"
+    key = json.dumps([endpoint, group or "", level or requested_model, actual, container_num, success])
     current = entries.get(key, {})
     entries[key] = {
         "requested_model": requested_model,
-        "resolved_model": response_headers.get("x-oneclick-resolved-model", ""),
-        "header_family": response_headers.get("x-oneclick-header-family", ""),
-        "header_token": response_headers.get("x-oneclick-header-token", ""),
-        "resolution": response_headers.get("x-oneclick-model-resolution", ""),
-        "endpoint": endpoint,
-        "path": request_path,
-        "container": container_num,
-        "group": group or "",
-        "last_seen": _now_iso(),
+        "resolved_model": headers.get("x-oneclick-resolved-model", ""),
+        "header_family": headers.get("x-oneclick-header-family", ""),
+        "header_token": headers.get("x-oneclick-header-token", ""),
+        "resolution": headers.get("x-oneclick-model-resolution", ""),
+        "level": level, "actual_model": actual, "success": bool(success),
+        "endpoint": endpoint, "path": request_path, "container": container_num,
+        "group": group or "", "last_seen": _now_iso(),
         "count": int(current.get("count", 0)) + 1,
     }
+    if container_num in containers and level:
+        c = containers[container_num]
+        c.last_actual_model = actual
+        if (update_membership and headers.get("x-oneclick-model-resolution") != "debug-forced"
+                and (success or actual != "unknown")
+                and level == "pro" and "pro" not in actual.lower()):
+            update_container_models(c, [m for m in c.models if m["level"] != "pro"])
     state["updated_at"] = _now_iso()
     save_model_truth_state(state)
+
+
+def model_truth_summary(entries):
+    levels = {}
+    for entry in entries:
+        level = entry.get("level")
+        if not level:
+            continue
+        key = (entry.get("group", ""), level)
+        row = levels.setdefault(key, {"group": key[0], "level": level, "count": 0,
+                                      "successes": 0, "actual_models": {}})
+        count = entry.get("count", 0)
+        row["count"] += count
+        row["successes"] += count if entry.get("success") else 0
+        label = entry.get("actual_model", "unknown")
+        row["actual_models"][label] = row["actual_models"].get(label, 0) + count
+    for row in levels.values():
+        row["success_rate"] = row["successes"] / row["count"] if row["count"] else 0
+    return list(levels.values())
 
 
 @app.post("/gateway/refresh-models", dependencies=[Depends(verify_panel_auth)])
@@ -2062,6 +2192,9 @@ async def get_model_truth(limit: int = 30):
     return {
         "updated_at": state.get("updated_at", ""),
         "entries": entries[:limit],
+        "levels": model_truth_summary(entries),
+        "accounts": [{"num": c.num, "levels": c.model_levels,
+                      "actual_model": c.last_actual_model} for c in containers.values()],
     }
 
 

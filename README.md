@@ -69,6 +69,41 @@ bash scripts/install.sh
 - ➕ **弹性扩容** — 随时通过 `manage.sh` 新增/删除账号
 - 🧊 **双部署模式** — 单容器（1 进程管所有账号，省内存）或多容器（每账号独立端口）
 
+### 模型与号池
+
+聊天按档位路由：请求名中的版本号不影响派发，`gemini-6-flash` 与
+`gemini-3.6-flash` 都属于 `flash`；不含已知档名时默认 `flash`。
+`flash-lite` / `lite` 优先于 `flash`，Google 新增的档名（例如 `argon`）优先匹配。
+分组前缀和无组池严格隔离。档内无账号返回 `404 model_not_found` 并列出现有档位；
+有账号但都忙或冷却时返回 `503`。媒体端点保持原有路由。
+
+付费账号仅进入自己的 registry 所列档位，使用该账号对应标识。
+已登录免费账号进入 `flash`，使用本 worker 内付费账号最高版本 Flash 的标识；
+没有付费 Flash 时，从 lib 常量表选择 capacity 最高的 Flash。
+免费账号列有 Pro 时，每次登录只做一次短提示探测，实际标签含 Pro 才进入 `pro`；
+正常 Pro 请求返回非 Pro 标签会移出该档并记录原因。未认证账号不进任何档。
+
+`GET /v1/models` 每个有账号的档位只列最高版本标签对应的一项；网关按分组分别生成。
+免费池若只有 Auto、尚无实际 Flash 标签，暂列 `gemini-flash`，取得实际标签后再带版本号，
+不把常量表的旧版本或付费后缀当成已验证版本。
+每号登录时读取 registry，之后默认每 6 小时刷新一次，可用
+`MODEL_REFRESH_INTERVAL_SECONDS`（秒，默认 `21600`）调整。
+刷新失败保留原 registry，不重新登录、不调用 rotate、不开 auto_refresh。
+出现新档位或更高版本标签时，日志与网关面板记录一次 `slot N 出现新模型 <标签>`。
+
+非流式聊天响应 `model` 和 `X-OneClick-Actual-Model` 来自 Google 回复 `[42]`，缺失为 `unknown`。
+SSE 边生成边发送：取得 `[42]` 前，chunk 的 `model` 使用请求档位；从取得标签的那一帧起，
+后续 chunk 使用实际标签。流式响应不带 `X-OneClick-Actual-Model`，以 `X-OneClick-Model-Level`
+表示请求档位。网关在转发时被动解析 SSE，记录最后一个非档位名的 `model`，取不到记为 `unknown`。
+面板模型真相显示按档位的实际标签分布、成功率、每号当前档位和最近实际标签。
+同号聊天允许并发；模型刷新与 cookie 文件写回各用独立的锁，写回在线程中执行，不阻塞聊天。
+
+worker 在成功请求后和定时刷新后检查内存 cookie。变化时原子替换
+`envs/accountN.env` 中的 `SECURE_1PSID` / `SECURE_1PSIDTS` 两行，其余内容保留；
+每号最多每 10 分钟写一次，日志只记录账号号码与写回结果。部署需重启 worker 与 gateway；
+使用独立账号容器架构时需更新并重启账号进程。首次升级前需先保存旧进程仍有效的内存 cookie；
+新写回逻辑无法挽回重启时已丢失的会话。此改动不执行部署。
+
 ### 创作工作室
 
 - 🎨 **图片生成** — OpenAI 兼容端点，30+ 内置风格模板

@@ -1,0 +1,16 @@
+{
+  "app/worker.py": {
+    "resolve_model_for_media": "0b07de1303be52fafd15d0f69d3cdfc39a76a24f3707acc9ce47cf1b3d357f55",
+    "_DebugRawCaptureTracer": "6cc69e33960360e13f212e21bc43932402e69cf0fd7fe3cdfe337aedeb31ab91",
+    "_debug_model_hints": "513ea5fb735ee488cba53c7d5144bf5bbaaeba3ac9c0499a6811791a6f6b7f25",
+    "_debug_raw_snapshot": "7afb69369fc55319173dfd4ec01d441ef003db90dcd4a2f2047f416b2095e547",
+    "slot_image_generation": "33d65116f8b7636a6f831cab7f30c1f73c25ba86d47e9b62e29de005b3a675c1",
+    "slot_video_generation": "abae54b24fbf9b38a8496431583d47922f6349bc7e87e5403e580fa6c1f9911f",
+    "slot_music_generation": "6ff9b799216d4405f43c3617ac366d7d91506ccc2d6149ae1713e06483852923"
+  },
+  "app/main.py": {
+    "resolve_model_for_media": "aa549576cb02d1261e9915f7cdc2e08beef0facb2e82cc600a693fca5fde818c",
+    "create_image": "06212145c19029ad643ace43c1beaade27c3b2769132bf3ce1ea76b16d8a6753",
+    "create_video": "0265eecf3a4a85185f7d36138861c2cc2c3f00c3693630b8e1027c5dddf5adb8"
+  }
+}

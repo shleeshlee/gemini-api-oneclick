@@ -87,7 +87,7 @@ class DebugProbeCounterexamples(unittest.IsolatedAsyncioTestCase):
         self.assertIs(type(self.tracer), worker.RawCaptureTracer)
         expected = {
             "id": f"chatcmpl-{uuid.UUID(int=1)}", "object": "chat.completion",
-            "created": 1234567890, "model": "probe-model",
+            "created": 1234567890, "model": "unknown",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
         }

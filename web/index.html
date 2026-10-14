@@ -1022,10 +1022,12 @@ body::before {
 
     <div class="guard-section">
       <div class="guard-section-title">模型真相</div>
+      <div id="modelLevelTruth" class="truth-list"></div>
+      <div id="modelAccountTruth" class="truth-list"></div>
       <div id="modelTruthList" class="truth-list">
         <div class="model-chip-empty">暂无请求记录</div>
       </div>
-      <div class="guard-hint">显示最近请求的模型映射记录：请求模型 → 实际 header 家族和 token。</div>
+      <div class="guard-hint">按档位统计 Google 实际回复标签与成功率；unknown 表示回复中未提供标签。</div>
     </div>
 
     <div class="guard-section">
@@ -1556,6 +1558,15 @@ async function loadModelInspector() {
       const data = await truthResp.json();
       modelTruthEntries = data.entries || [];
       renderModelTruth(modelTruthEntries);
+      document.getElementById('modelLevelTruth').innerHTML = (data.levels || []).map(row => `
+        <div class="truth-row"><strong>${esc(row.group ? '[' + row.group + '] ' : '')}${esc(row.level)}</strong>
+        · 成功率 ${(row.success_rate * 100).toFixed(1)}% (${row.successes}/${row.count})
+        <div class="truth-meta">${Object.entries(row.actual_models || {}).map(([label, count]) => `${esc(label)} × ${count}`).join(' · ')}</div></div>
+      `).join('');
+      document.getElementById('modelAccountTruth').innerHTML = (data.accounts || []).map(row => `
+        <div class="truth-row">#${esc(String(row.num))} · ${esc(row.levels.join(' / ') || '未进档')}
+        <div class="truth-meta">最近实际标签：${esc(row.actual_model || 'unknown')}</div></div>
+      `).join('');
     }
   } catch(e) {
     console.error('Failed to load model inspector:', e);
@@ -1612,7 +1623,7 @@ function renderModelTruth(entries) {
         <span>${esc(entry.header_family || 'unknown')}</span>
         <span class="truth-token">${esc(entry.header_token || '-')}</span>
       </div>
-      <div class="truth-main">${esc(entry.requested_model || '')} → ${esc(entry.resolved_model || '')}</div>
+      <div class="truth-main">${esc(entry.level || entry.requested_model || '')} → ${esc(entry.actual_model || 'unknown')} · ${entry.success === false ? '失败' : '成功'}</div>
       <div class="truth-meta">#${esc(String(entry.container || ''))}${entry.group ? ' · [' + esc(entry.group) + ']' : ''} · ${esc(entry.resolution || '')} · ${esc(entry.last_seen || '')}</div>
     </div>
   `).join('');
