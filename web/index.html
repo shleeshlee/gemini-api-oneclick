@@ -170,6 +170,9 @@ body::before {
 .card-status.yellow { background: var(--warn); }
 .card-status.grey { background: var(--text-light); }
 .card-status.orange { background: var(--warn); box-shadow: 0 0 8px rgba(255,179,71,0.4); }
+.card-status.restarting { background: transparent; border: 2px solid #5B9BD5; border-top-color: transparent; box-sizing: border-box; animation: spin 0.9s linear infinite; }
+.card.restarting::after { background: linear-gradient(90deg, #5B9BD5, #93CCE8); }
+.card-restarting { font-size: 0.7rem; color: #5B9BD5; background: #E8F0FE; padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem; }
 .card-status.blue { background: #5B9BD5; box-shadow: 0 0 8px rgba(91,155,213,0.4); animation: pulse 1.5s ease-in-out infinite; }
 .card.img-blocked::after { background: linear-gradient(90deg, var(--warn), var(--accent)); }
 .card.tier-plus.healthy::after { background: linear-gradient(90deg, #5B9BD5, #93CCE8); }
@@ -1267,6 +1270,8 @@ function stopAutoRefresh() {
 }
 
 // ── Render Grid ────────────────────────────────────────────
+const localRestarting = new Set();
+
 function renderGrid() {
   const grid = document.getElementById('grid');
   let okCount = 0, badCount = 0, offCount = 0;
@@ -1286,9 +1291,12 @@ function renderGrid() {
     const port = (gw && gw.port) || '';
 
     let cardClass, dotClass, stateLabel;
+    const restarting = !!((gw && gw.initializing) || localRestarting.has(num));
     if (gw && !gw.enabled) {
       cardClass = 'disabled-card'; dotClass = 'yellow'; stateLabel = '已禁用';
       offCount++;
+    } else if (restarting) {
+      cardClass = 'restarting'; dotClass = 'restarting'; stateLabel = '重启中';
     } else if (gw && gw.healthy && gw.img_blocked) {
       cardClass = 'img-blocked'; dotClass = 'orange'; stateLabel = '仅生文';
       okCount++;
@@ -1337,7 +1345,7 @@ function renderGrid() {
     }
 
     // Error line only when no warning bar already explains the situation
-    const hasWarning = gw && (gw.needs_cookie || gw.img_blocked);
+    const hasWarning = restarting || (gw && (gw.needs_cookie || gw.img_blocked));
     const showErrorLine = gw && gw.last_error && !gw.healthy && !hasWarning;
     let errorLine = '';
     if (showErrorLine) {
@@ -1357,8 +1365,9 @@ function renderGrid() {
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
-        ${gw && gw.needs_cookie ? '<div class="card-warn">Cookie 无效，需更新</div>' : ''}
-        ${gw && gw.img_blocked && !gw.needs_cookie ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
+        ${restarting ? '<div class="card-restarting">正在重启，登录中…</div>' : ''}
+        ${gw && gw.needs_cookie && !restarting ? '<div class="card-warn">Cookie 无效，需更新</div>' : ''}
+        ${gw && gw.img_blocked && !gw.needs_cookie && !restarting ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
         ${gw && gw.busy ? '<div class="card-busy">处理中</div>' : ''}
         ${statsLine}
         ${errorLine}
@@ -1416,6 +1425,8 @@ async function restartContainer(num) {
     ? 'reload slot'
     : (currentMode === 'accounts' ? '重启容器' : '重启实例');
   if (!confirm(`确认${targetLabel} #${num}？`)) return;
+  localRestarting.add(num);
+  renderGrid();
   try {
     const resp = await fetch(`/gateway/restart/${num}`, { method: 'POST', headers: authHeaders() });
     if (resp.ok) {
@@ -1427,8 +1438,11 @@ async function restartContainer(num) {
       const d = await resp.json().catch(() => ({}));
       toast(d.detail || '重启失败', 'err');
     }
+    localRestarting.delete(num);
     await loadAll();
   } catch(e) {
+    localRestarting.delete(num);
+    renderGrid();
     toast('重启失败: ' + e.message, 'err');
   }
 }
@@ -3060,6 +3074,9 @@ function doDeploy() {
   btn.textContent = '部署中...';
   msg.className = 'modal-msg';
   msg.textContent = '';
+  const deployNum = currentNum;
+  localRestarting.add(deployNum);
+  renderGrid();
 
   fetch(`/gateway/deploy/${currentNum}`, {
     method: 'POST',
@@ -3068,6 +3085,7 @@ function doDeploy() {
   })
   .then(r => r.json().then(data => ({ ok: r.ok, data })))
   .then(({ ok, data }) => {
+    localRestarting.delete(deployNum);
     if (ok) {
       msg.className = 'modal-msg ok';
       msg.textContent = '部署成功！';
@@ -3078,6 +3096,8 @@ function doDeploy() {
     }
   })
   .catch(e => {
+    localRestarting.delete(deployNum);
+    loadAll();
     msg.className = 'modal-msg err';
     msg.textContent = e.message;
     btn.disabled = false;

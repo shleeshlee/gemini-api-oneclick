@@ -157,6 +157,7 @@ class Container:
         self.cooldown_until = 0  # timestamp: timeout cooldown, skip until then
         self.img_blocked = False    # True = can chat but not generate images, needs fresh cookie
         self.busy = False           # True = currently processing a request
+        self.initializing = False   # True = slot is (re)logging in; not the same as an invalid cookie
         self.models: list[dict] = []
         self.model_levels: list[str] = []
         self.last_actual_model = "unknown"
@@ -206,6 +207,7 @@ class Container:
             "needs_cookie": self.needs_cookie,
             "img_blocked": self.img_blocked,
             "busy": self.busy,
+            "initializing": self.initializing,
             "tier": self.tier,
             "model_levels": self.model_levels,
             "last_actual_model": self.last_actual_model,
@@ -448,6 +450,7 @@ async def check_health(c: Container, client: httpx.AsyncClient):
 
         status = data.get("status", "unknown")
         auth_status = data.get("auth_status", "unknown")
+        c.initializing = status == "initializing"
         if "models" in data:
             update_container_models(c, data["models"])
         c.last_actual_model = data.get("last_actual_model", c.last_actual_model)
@@ -569,6 +572,7 @@ async def _do_restart(c: Container):
     """Execute docker restart (container mode) or slot reload (worker mode)."""
     if WORKER_MODE:
         add_log("warn", c.num, "重新加载 Slot")
+        c.initializing = True
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(f"{WORKER_URL}/worker/reload-slot/{c.num}", timeout=30)
@@ -580,6 +584,8 @@ async def _do_restart(c: Container):
                     add_log("error", c.num, f"Slot 重载失败: HTTP {resp.status_code}")
         except Exception as e:
             add_log("error", c.num, f"Slot 重载失败: {str(e)[:80]}")
+        finally:
+            c.initializing = False
         return
 
     cname = f"gemini_api_account_{c.num}"
@@ -1794,8 +1800,11 @@ async def deploy_cookie(num: int, request: Request):
         f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
         encoding="utf-8",
     )
+    deploy_auth = ""
     if WORKER_MODE:
         add_log("info", num, "Cookie 已更新，正在重载 Slot ...")
+        if num in containers:
+            containers[num].initializing = True
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -1807,9 +1816,16 @@ async def deploy_cookie(num: int, request: Request):
                     detail = resp.text[:200]
                     add_log("error", num, f"Slot 部署失败: {detail}")
                     raise HTTPException(status_code=500, detail=f"Slot 部署失败: {detail}")
+                try:
+                    deploy_auth = (resp.json().get("health") or {}).get("auth_status") or ""
+                except ValueError:
+                    deploy_auth = ""
         except httpx.HTTPError as e:
             add_log("error", num, f"Slot 部署失败: {str(e)[:80]}")
             raise HTTPException(status_code=500, detail=str(e)[:200])
+        finally:
+            if num in containers:
+                containers[num].initializing = False
     else:
         add_log("info", num, "Cookie 已更新，正在重建容器 ...")
         compose_file = ROOT_DIR / "docker-compose.accounts.yml"
@@ -1845,6 +1861,10 @@ async def deploy_cookie(num: int, request: Request):
     c.total_errors = 0
     c.healthy = False  # wait for health check to confirm
 
+    if deploy_auth == "UNAUTHENTICATED":
+        c.needs_cookie = True
+        add_log("error", num, "已部署，但 Google 不认这份 Cookie（未登录）")
+        raise HTTPException(status_code=422, detail="Cookie 已写入，但 Google 不认（未登录），请重新获取")
     add_log("info", num, "已部署")
     return {"ok": True, "message": f"#{num} Cookie 已部署"}
 
