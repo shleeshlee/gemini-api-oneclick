@@ -580,6 +580,7 @@ async def _do_restart(c: Container):
                     c.health_fail_count = 0
                     c.healthy = False
                     add_log("info", c.num, "Slot 已重载，等待恢复")
+                    await check_health(c, client)
                 else:
                     add_log("error", c.num, f"Slot 重载失败: HTTP {resp.status_code}")
         except Exception as e:
@@ -1823,9 +1824,10 @@ async def deploy_cookie(num: int, request: Request):
         except httpx.HTTPError as e:
             add_log("error", num, f"Slot 部署失败: {str(e)[:80]}")
             raise HTTPException(status_code=500, detail=str(e)[:200])
-        finally:
+        except BaseException:
             if num in containers:
                 containers[num].initializing = False
+            raise
     else:
         add_log("info", num, "Cookie 已更新，正在重建容器 ...")
         compose_file = ROOT_DIR / "docker-compose.accounts.yml"
@@ -1860,6 +1862,15 @@ async def deploy_cookie(num: int, request: Request):
     c.error_count = 0
     c.total_errors = 0
     c.healthy = False  # wait for health check to confirm
+    if WORKER_MODE:
+        try:
+            async with httpx.AsyncClient() as client:
+                await check_health(c, client)
+        except Exception:
+            pass
+        finally:
+            if c.initializing and c.healthy:
+                c.initializing = False
 
     if deploy_auth == "UNAUTHENTICATED":
         c.needs_cookie = True
