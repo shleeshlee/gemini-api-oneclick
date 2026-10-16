@@ -27,7 +27,7 @@ from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import AsyncClient
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from parsers import (
     build_chat_completion_payload,
@@ -490,8 +490,14 @@ class ContentItem(BaseModel):
 
 class Message(BaseModel):
     role: str
-    content: Union[str, List[ContentItem]]
+    # OpenAI allows null content (e.g. assistant turns that only carry tool_calls)
+    content: Optional[Union[str, List[ContentItem]]] = ""
     name: Optional[str] = None
+
+    @field_validator("content", mode="after")
+    @classmethod
+    def _null_content_to_empty(cls, v):
+        return "" if v is None else v
 
 
 class ChatCompletionRequest(BaseModel):

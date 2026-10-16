@@ -402,6 +402,53 @@ def add_log(level: str, container_num: int | None, message: str):
     })
 
 
+BAD_REQUEST_DIR = STATE_DIR / "bad-requests"
+BAD_REQUEST_KEEP = 30
+
+
+def is_request_validation_error(status_code: int, text: str) -> bool:
+    """Worker rejected the request body itself (FastAPI validation: detail is a list
+    of {loc, msg}). Same body fails on every container, so it must not be retried.
+    The worker's own 422s ("Gemini did not generate …") carry a string detail and
+    stay retryable."""
+    if status_code != 422:
+        return False
+    try:
+        detail = json.loads(text).get("detail")
+    except Exception:
+        return False
+    return isinstance(detail, list) and any(isinstance(d, dict) and "loc" in d for d in detail)
+
+
+def save_bad_request(path: str, body: bytes, error_text: str, headers: dict) -> str:
+    """Keep the full rejected request so the sender can be traced. Latest BAD_REQUEST_KEEP only."""
+    try:
+        BAD_REQUEST_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            req = json.loads(body)
+        except Exception:
+            req = body.decode(errors="replace")
+        try:
+            err = json.loads(error_text)
+        except Exception:
+            err = error_text
+        lower = {k.lower(): v for k, v in (headers or {}).items()}
+        record = {
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "path": path,
+            "client": {k: lower[k] for k in ("user-agent", "x-forwarded-for", "x-real-ip", "referer", "origin") if k in lower},
+            "error": err,
+            "request": req,
+        }
+        target = BAD_REQUEST_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{_uuid.uuid4().hex[:6]}.json"
+        target.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        for old in sorted(BAD_REQUEST_DIR.glob("*.json"))[:-BAD_REQUEST_KEEP]:
+            old.unlink(missing_ok=True)
+        return str(target)
+    except Exception as e:
+        return f"保存失败: {e}"
+
+
 def discover_containers():
     """Discover containers from envs/ directory, apply persisted state."""
     global containers
@@ -1191,6 +1238,15 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                 req = client.build_request("POST", target_url, content=body, headers=headers)
                 resp = await client.send(req, stream=False)
 
+                if is_request_validation_error(resp.status_code, resp.text):
+                    c.busy = False
+                    saved = save_bad_request(path, body, resp.text, headers)
+                    add_log("warn", None, f"请求格式错误(422)，未重试，原文 {saved}")
+                    task.status = "failed"
+                    task.error = f"请求格式错误(422): {resp.text[:300]}"
+                    await task.events.put({"type": "failed", "error": task.error, "final": True})
+                    return
+
                 if resp.status_code >= 500 or resp.status_code == 422:
                     error_body = resp.text[:200]
                     c.busy = False
@@ -1462,9 +1518,15 @@ async def proxy(request: Request, path: str):
                 attempt_headers = resp.headers
 
                 if resp.status_code >= 500 or resp.status_code == 422:
-                    error_body = (await resp.aread()).decode(errors="replace")[:200]
+                    full_error = (await resp.aread()).decode(errors="replace")
+                    error_body = full_error[:200]
                     await resp.aclose()
                     await client.aclose()
+                    if is_request_validation_error(resp.status_code, full_error):
+                        c.busy = False
+                        saved = save_bad_request(path, body, full_error, dict(request.headers))
+                        add_log("warn", None, f"请求格式错误(422)，未重试，已原样退回客户端；原文 {saved}")
+                        return Response(content=full_error, status_code=422, media_type="application/json")
                     # Detect image generation blocked
                     if is_image_req and resp.status_code == 500:
                         lower_err = error_body.lower()
