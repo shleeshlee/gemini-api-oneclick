@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>try{var t=localStorage.getItem('oc-theme');if(t==='terminal')document.documentElement.dataset.theme=t;}catch(e){}</script>
 <title>Gemini Gateway</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍪</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Outfit:wght@300;400;500&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -699,6 +700,206 @@ body::before {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-light); }
+
+/* ═══════════════ THEMES ═══════════════
+   Every color/font below is a token; [data-theme] on <html> swaps the set.
+   No data-theme = 奶油 (the original palette, unchanged). */
+:root {
+  --ok-ink: #2D7A52; --bad-ink: #B94A4A; --warn-ink: #92610E;
+  --info: #5B9BD5; --info-bg: #E8F0FE; --info-ink: #2F5FA8;
+  --disabled-bg: #F3F0ED;
+  --overlay: rgba(60, 40, 30, 0.3);
+  --focus-ring: rgba(255,139,126,0.14);
+  --on-primary: #fff;
+  --glow-1: rgba(255,139,126,0.06); --glow-2: rgba(255,209,102,0.06); --glow-3: rgba(110,200,155,0.04);
+  --tier-plus: linear-gradient(90deg, #5B9BD5, #93CCE8);
+  --tier-pro: linear-gradient(90deg, #B89AE8, #D0BFF0);
+  --tier-ultra: linear-gradient(90deg, #C9880E, #E8B830);
+  --tier-pro-ink: #8A63D2; --tier-ultra-ink: #B07A0C; --tier-plus-ink: #3C7DBA;
+  --font-body: 'Outfit', sans-serif;
+  --font-display: 'Nunito', sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', monospace;
+  --surface: var(--card); --card-bg: var(--card);
+  --card-border: transparent;
+  --bar-h: 6px;
+}
+
+/* 终端 — phosphor green on black, everything monospace */
+:root[data-theme="terminal"] {
+  --bg: #0A0D0B; --bg-warm: #0F1511; --card: #0D1210; --card-hover: #111A15;
+  --primary: #3DFF8C; --primary-light: #1F7A47; --primary-dark: #2BD472;
+  --accent: #FFC93D; --accent-light: #3A3214;
+  --success: #3DFF8C; --success-light: #10301E;
+  --danger: #FF5F56; --danger-light: #331614;
+  --warn: #FFB13D; --warn-light: #33260F;
+  --text: #C8F7D6; --text-muted: #6FA585; --text-light: #3B5E49; --border: #1D2E24;
+  --shadow-sm: none; --shadow-md: 0 0 0 1px #2BD47255, 0 0 24px rgba(61,255,140,0.10); --shadow-lg: 0 0 40px rgba(61,255,140,0.12);
+  --radius: 3px; --radius-sm: 2px;
+  --ok-ink: #3DFF8C; --bad-ink: #FF7A72; --warn-ink: #FFC66B;
+  --info: #4FD1FF; --info-bg: #0F2630; --info-ink: #7FDFFF;
+  --disabled-bg: #0A0D0B; --overlay: rgba(0, 0, 0, 0.7); --focus-ring: rgba(61,255,140,0.15);
+  --on-primary: #04110A;
+  --glow-1: rgba(61,255,140,0.04); --glow-2: transparent; --glow-3: transparent;
+  --tier-plus: #5AA9FF; --tier-pro: #B98CFF; --tier-ultra: #FFC93D;
+  --tier-pro-ink: #C9A6FF; --tier-ultra-ink: #FFC93D; --tier-plus-ink: #7FBFFF;
+  --font-body: 'JetBrains Mono', monospace; --font-display: 'JetBrains Mono', monospace; --font-mono: 'JetBrains Mono', monospace;
+  --card-border: #1D2E24;
+}
+
+/* ── token plumbing: everything that used to be hardcoded ── */
+button { color: var(--text); }
+body, button, input, select, textarea,
+.login-input, .card-btn, .btn-topbar, .form-input-name, .img-chip, .img-select, .dim-chip,
+.task-tab, .img-action-btn, .tag-new-input, .model-chip, .model-toggle, .model-slot-select,
+.threshold-input, .group-def-del, .group-def-btn, .gm-back-btn, .card-preview.empty { font-family: var(--font-body); }
+.login-box h1, .login-btn, .topbar-title, .card-num, .group-badge, .modal-title, .btn, .tab-btn,
+.studio-section-title, .style-tpl-header, .log-header, .guard-section-title, .group-def-name,
+.gm-pick-num, .gm-section-title { font-family: var(--font-display); }
+.card-port, .card-preview, .form-input, .log-entry, .tag, .truth-token, .gm-pick-port { font-family: var(--font-mono); }
+
+body::before {
+  background:
+    radial-gradient(circle at 15% 25%, var(--glow-1) 0%, transparent 50%),
+    radial-gradient(circle at 85% 75%, var(--glow-2) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, var(--glow-3) 0%, transparent 60%);
+}
+.login-input { color: var(--text); }
+.login-input:focus, .form-input:focus { box-shadow: 0 0 0 4px var(--focus-ring); }
+.login-btn, .btn-primary { color: var(--on-primary); }
+.login-btn:hover, .btn-primary:hover { box-shadow: 0 4px 16px var(--focus-ring); }
+.stat-pill.ok { color: var(--ok-ink); }
+.stat-pill.warn { color: var(--bad-ink); }
+.stat-pill.disabled { color: var(--warn-ink); }
+.stat-pill.mode { background: var(--info-bg); color: var(--info-ink); }
+.card { border-color: var(--card-border); }
+.card.disabled-card { background: var(--disabled-bg); }
+.card-status.restarting { border-color: var(--info); border-top-color: transparent; }
+.card.restarting::after { background: var(--info); }
+.card-restarting, .card-busy { color: var(--info-ink); background: var(--info-bg); }
+.card-status.blue { background: var(--info); box-shadow: 0 0 8px var(--info); }
+.card.tier-plus.healthy::after { background: var(--tier-plus); }
+.card.tier-pro.healthy::after { background: var(--tier-pro); }
+.card.tier-ultra.healthy::after { background: var(--tier-ultra); }
+.card-warn { color: var(--warn-ink); }
+.card-btn { color: var(--text); }
+.card-btn.enable, .card-btn.restart { color: var(--ok-ink); }
+.card-btn.disable { color: var(--bad-ink); }
+.card-btn.test { border-color: var(--info); color: var(--info-ink); }
+.toast.ok { color: var(--ok-ink); }
+.toast.err { color: var(--bad-ink); }
+.toast.info { background: var(--info-bg); color: var(--info-ink); }
+.modal-overlay { background: var(--overlay); }
+.modal-close { color: var(--text); }
+.dim-chip.active { color: var(--warn-ink); }
+.img-chip.active { color: var(--on-primary); }
+.gm-pick-item.picked { background: var(--focus-ring); }
+
+/* ── layout fixes ── */
+.grid { grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); }
+.card { display: flex; flex-direction: column; padding: 1.15rem 1.2rem 1rem; }
+.card:hover { background: var(--card-hover); }
+.card-actions { margin-top: auto; padding-top: 0.7rem; align-items: center; }
+.card-btn { white-space: nowrap; }
+.card-head-right { display: inline-flex; align-items: center; gap: 0.45rem; }
+.tier-chip {
+  font-family: var(--font-display); font-size: 0.6rem; font-weight: 800; letter-spacing: 0.09em;
+  padding: 0.08rem 0.38rem; border-radius: 4px; border: 1px solid currentColor; line-height: 1.3;
+}
+.tier-chip.pro { color: var(--tier-pro-ink); }
+.tier-chip.ultra { color: var(--tier-ultra-ink); }
+.tier-chip.plus { color: var(--tier-plus-ink); }
+.tier-chip.free { color: var(--text-light); }
+.card-usage { margin-top: 0.55rem; gap: 0.28rem; }
+.card-usage .u-bar { height: var(--bar-h); background: var(--bg-warm); }
+.card-usage .u-pct { font-family: var(--font-mono); font-size: 0.68rem; }
+.card-stats { margin-top: 0.45rem; }
+@media (max-width: 560px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+/* first paint only: cards rise in one after another (not on the 10s refresh) */
+@keyframes cardIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.grid.first-paint .card { animation: cardIn 0.45s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(var(--i, 0) * 45ms); }
+
+/* ── theme picker ── */
+.theme-dots { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.45rem; border: 2px solid var(--border); border-radius: 999px; background: var(--card); }
+.theme-dot {
+  width: 18px; height: 18px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12); transition: transform 0.15s, box-shadow 0.15s;
+}
+.theme-dot:hover { transform: scale(1.15); }
+.theme-dot.active { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--primary); }
+
+/* ── per-theme character ── */
+
+:root[data-theme="terminal"] body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 2;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
+}
+:root[data-theme="terminal"] .card-num,
+:root[data-theme="terminal"] .topbar-title { text-shadow: 0 0 8px rgba(61,255,140,0.45); color: var(--primary); }
+:root[data-theme="terminal"] .topbar-title::before { content: '> '; color: var(--text-muted); }
+:root[data-theme="terminal"] .card:hover {
+  transform: none; border-color: var(--card-border); background: var(--card-hover);
+  box-shadow: inset 0 0 28px rgba(61,255,140,0.06), 0 0 18px rgba(61,255,140,0.08);
+}
+/* hover = HUD targeting brackets closing in on the card corners */
+:root[data-theme="terminal"] .card::before {
+  content: ''; position: absolute; inset: 12px; pointer-events: none; z-index: 1; opacity: 0;
+  background: linear-gradient(var(--primary), var(--primary)) left top / 14px 2px,
+    linear-gradient(var(--primary), var(--primary)) left top / 2px 14px,
+    linear-gradient(var(--primary), var(--primary)) right top / 14px 2px,
+    linear-gradient(var(--primary), var(--primary)) right top / 2px 14px,
+    linear-gradient(var(--primary), var(--primary)) left bottom / 14px 2px,
+    linear-gradient(var(--primary), var(--primary)) left bottom / 2px 14px,
+    linear-gradient(var(--primary), var(--primary)) right bottom / 14px 2px,
+    linear-gradient(var(--primary), var(--primary)) right bottom / 2px 14px;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 0 4px rgba(61,255,140,0.75));
+  transition: inset 0.18s cubic-bezier(.2,.8,.3,1), opacity 0.12s;
+}
+:root[data-theme="terminal"] .card:hover::before { inset: 3px; opacity: 1; }
+:root[data-theme="terminal"] .card.disabled-card::before { filter: none; opacity: 0; }
+:root[data-theme="terminal"] .card.disabled-card:hover::before { opacity: 0.4; inset: 3px; }
+:root[data-theme="terminal"] .card::after { height: 2px; }
+:root[data-theme="terminal"] .group-badge, :root[data-theme="terminal"] .stat-pill { border-radius: 2px; }
+:root[data-theme="terminal"] .card-usage .u-bar { border-radius: 0; }
+:root[data-theme="terminal"] .card-usage .u-fill { border-radius: 0; background-image: repeating-linear-gradient(90deg, transparent 0 3px, rgba(0,0,0,0.35) 3px 4px); }
+:root[data-theme="terminal"] .theme-dot { border-radius: 2px; }
+
+:root[data-theme="terminal"] .topbar,
+:root[data-theme="terminal"] .tab-bar,
+:root[data-theme="terminal"] .log-panel { border: 1px solid var(--border); }
+
+/* 奶油 hover = cotton candy: a fluffy pastel cloud (pink / lavender / baby blue) that
+   slowly swirls, a springy puff-up, and a soft squish when pressed */
+@keyframes candySwirl {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255,214,228,0.55), -4px -3px 12px -2px rgba(255,182,206,0.60), 4px 3px 12px -2px rgba(176,216,255,0.60), 0 7px 16px -6px rgba(214,190,255,0.55); }
+  50%      { box-shadow: 0 0 0 2px rgba(255,214,228,0.55), 4px -3px 12px -2px rgba(176,216,255,0.60), -4px 3px 12px -2px rgba(255,182,206,0.60), 0 8px 18px -6px rgba(214,190,255,0.60); }
+}
+:root:not([data-theme]) .card {
+  transition: transform 0.45s cubic-bezier(.34,1.56,.64,1), box-shadow 0.3s, background 0.3s;
+}
+:root:not([data-theme]) .card::after { transition: height 0.3s; }
+:root:not([data-theme]) .card:hover {
+  transform: translateY(-4px) scale(1.025);
+  border-color: transparent;
+  background: var(--card);
+  animation: candySwirl 3.2s ease-in-out infinite;
+}
+:root:not([data-theme]) .card:hover::after { height: 5px; }
+:root:not([data-theme]) .card:active {
+  transform: translateY(-1px) scale(0.985);
+  transition-duration: 0.12s;
+}
+:root:not([data-theme]) .card.disabled-card:hover {
+  transform: translateY(-2px) scale(1.01); animation: none;
+  box-shadow: 0 10px 24px -8px rgba(200,190,210,0.5);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-theme]) .card:hover { animation: none; transform: translateY(-2px); }
+}
+
 </style>
 </head>
 <body>
@@ -733,6 +934,7 @@ body::before {
       <span class="stat-pill ok" id="statOk">0 正常</span>
       <span class="stat-pill warn" id="statBad">0 异常</span>
       <span class="stat-pill disabled" id="statOff">0 已禁用</span>
+      <span class="theme-dots" id="themeDots" title="切换主题"></span>
       <button class="btn-topbar" onclick="openGroupManager()"><span class="icon">&#x1F3F7;</span> 分组管理</button>
       <button class="btn-topbar" id="refreshBtn" onclick="doRefresh()"><span class="icon">&#x21BB;</span> 刷新</button>
       <button class="btn-topbar" onclick="openGuardSettings()"><span class="icon">&#x2699;</span> 设置</button>
@@ -1290,7 +1492,7 @@ function renderGrid() {
     gatewayStatus.containers.forEach(c => { gwMap[c.num] = c; });
   }
 
-  const cards = accounts.map(a => {
+  const cards = accounts.map((a, idx) => {
     const num = a.num;
     const hasCookie = a.has_cookie;
     const gw = gwMap[num] || null;
@@ -1367,10 +1569,10 @@ function renderGrid() {
       ? `<span class="group-badge" style="background:${groupColor(group)};color:#fff">${esc(group)}</span>`
       : `<span class="group-badge" style="background:var(--border);color:var(--text-muted)">默认</span>`;
     return `
-      <div class="card ${cardClass}" onclick="openModal(${num})">
+      <div class="card ${cardClass}" style="--i:${idx}" onclick="openModal(${num})">
         <div class="card-header">
           <span class="card-num">#${num} <span class="card-port">:${port}</span></span>
-          <span class="card-status ${dotClass}" title="${stateLabel}"></span>
+          <span class="card-head-right">${tierChip(gw)}<span class="card-status ${dotClass}" title="${stateLabel}"></span></span>
         </div>
         <div class="card-meta"><span class="card-name" ${name ? `onclick="event.stopPropagation();copyText('${esc(name)}',this)" style="cursor:copy" title="点击复制"` : ''}>${esc(name || 'Container ' + num)}</span>${groupBadge}</div>
         <div class="card-preview ${preview ? '' : 'empty'}">
@@ -1389,6 +1591,11 @@ function renderGrid() {
   });
 
   grid.innerHTML = cards.join('');
+  if (!grid.dataset.painted) {
+    grid.dataset.painted = '1';
+    grid.classList.add('first-paint');
+    setTimeout(() => grid.classList.remove('first-paint'), 1400);
+  }
   document.getElementById('statOk').textContent = okCount + ' 正常';
   document.getElementById('statBad').textContent = badCount + ' 异常';
   document.getElementById('statOff').textContent = offCount + ' 已禁用';
@@ -3818,6 +4025,41 @@ async function deleteAudio(audio_id) {
 }
 
 
+
+// ── Themes ─────────────────────────────────────────────────
+const THEMES = [
+  { id: 'cream',    name: '奶油', bg: '#FFF6EE', fg: '#FF8B7E' },
+  { id: 'terminal', name: '终端', bg: '#0A0D0B', fg: '#3DFF8C' },
+];
+
+function currentTheme() {
+  return document.documentElement.dataset.theme || 'cream';
+}
+
+function setTheme(id) {
+  if (id === 'cream') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = id;
+  try { localStorage.setItem('oc-theme', id); } catch (e) {}
+  renderThemeDots();
+}
+
+function renderThemeDots() {
+  const box = document.getElementById('themeDots');
+  if (!box) return;
+  const cur = currentTheme();
+  box.innerHTML = THEMES.map(t =>
+    `<button class="theme-dot${t.id === cur ? ' active' : ''}" title="${t.name}" aria-label="主题：${t.name}"
+      style="background:linear-gradient(135deg, ${t.bg} 0 50%, ${t.fg} 50% 100%)"
+      onclick="setTheme('${t.id}')"></button>`).join('');
+}
+
+function tierChip(gw) {
+  const t = (gw && ((gw.usage && gw.usage.tier) || gw.tier)) || '';
+  if (!t || t === 'unknown') return '';
+  return `<span class="tier-chip ${esc(t)}">${esc(t.toUpperCase())}</span>`;
+}
+
+renderThemeDots();
 </script>
 </body>
 </html>
