@@ -585,6 +585,16 @@ async def health_check():
     }
 
 
+@app.get("/usage")
+async def account_usage(raw: int = 0):
+    """Compute-based usage limits of this account (5h window + weekly)."""
+    client = await get_or_create_client()
+    try:
+        return await client.fetch_usage_info(raw=bool(raw))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Usage: {type(e).__name__}: {e}")
+
+
 @app.get("/v1/models")
 async def list_models():
     """Return model list from live Gemini page data, falling back to vendored constants."""

@@ -201,6 +201,15 @@ body::before {
 .card-stats { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; display: flex; gap: 0.6rem; }
 .card-stats .stat-item { white-space: nowrap; }
 .card-stats .stat-err { color: var(--danger); }
+.card-usage { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.7rem; color: var(--text-muted); }
+.card-usage .u-row { display: flex; align-items: center; gap: 0.4rem; }
+.card-usage .u-label { width: 1.6rem; flex-shrink: 0; }
+.card-usage .u-bar { display: block; flex: 1; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.card-usage .u-fill { display: block; height: 100%; border-radius: 3px; background: var(--success); }
+.card-usage .u-fill.mid { background: var(--warn); }
+.card-usage .u-fill.high { background: var(--danger); }
+.card-usage .u-pct { width: 2.4rem; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.card-usage.stale { opacity: 0.55; }
 .card-error {
   font-size: 0.7rem; color: var(--danger); background: var(--danger-light);
   padding: 0.2rem 0.5rem; border-radius: 6px; margin-top: 0.3rem;
@@ -1344,6 +1353,8 @@ function renderGrid() {
       statsLine = `<div class="card-stats"><span class="stat-item">聊天 ${chat}</span><span class="stat-item">图片 ${img}</span>${errs ? `<span class="stat-item stat-err" onclick="event.stopPropagation();showErrorHistory(${num})" style="cursor:pointer;text-decoration:underline dotted" title="点击查看错误明细">错误 ${errs}</span>` : ''}</div>`;
     }
 
+    const usageBlock = renderUsage(gw);
+
     // Error line only when no warning bar already explains the situation
     const hasWarning = restarting || (gw && (gw.needs_cookie || gw.img_blocked));
     const showErrorLine = gw && gw.last_error && !gw.healthy && !hasWarning;
@@ -1369,6 +1380,7 @@ function renderGrid() {
         ${gw && gw.needs_cookie && !restarting ? '<div class="card-warn">Cookie 无效，需更新</div>' : ''}
         ${gw && gw.img_blocked && !gw.needs_cookie && !restarting ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
         ${gw && gw.busy ? '<div class="card-busy">处理中</div>' : ''}
+        ${usageBlock}
         ${statsLine}
         ${errorLine}
         <div class="card-actions">${actionBtn}</div>
@@ -1395,6 +1407,35 @@ function renderGrid() {
     modePill.textContent = '模式未知';
     modePill.style.display = 'none';
   }
+}
+
+// ── Usage limits (5h window + weekly) ──────────────────────
+function fmtReset(ts) {
+  if (!ts) return '未知';
+  const d = new Date(ts * 1000);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+function renderUsage(gw) {
+  if (!gw || !gw.usage) return '';
+  const u = gw.usage;
+  const row = (label, m) => {
+    if (!m || m.usage_percentage == null) return '';
+    const pct = m.usage_percentage;
+    const cls = pct >= 90 ? 'high' : (pct >= 60 ? 'mid' : '');
+    return `<div class="u-row" title="${label}已用 ${pct}% · ${fmtReset(m.reset_at)} 重置">`
+      + `<span class="u-label">${label}</span>`
+      + `<span class="u-bar"><span class="u-fill ${cls}" style="width:${Math.min(pct, 100)}%"></span></span>`
+      + `<span class="u-pct">${pct}%</span></div>`;
+  };
+  const rows = row('5h', u.current_5h) + row('周', u.weekly);
+  if (!rows) return '';
+  const stale = gw.usage_error ? ' stale' : '';
+  const when = gw.usage_at ? new Date(gw.usage_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const tip = gw.usage_error ? `上次刷新失败：${gw.usage_error}` : `${when} 更新`;
+  return `<div class="card-usage${stale}" title="${esc(tip)}">${rows}</div>`;
 }
 
 // ── Gateway Actions ────────────────────────────────────────

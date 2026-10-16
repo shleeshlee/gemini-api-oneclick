@@ -1577,7 +1577,14 @@ class GeminiClient(GemMixin, ResearchMixin):
         )
 
     @running(retry=2)
-    async def _batch_execute(self, payloads: list[RPCData], close_on_error: bool = True, update_cookies: bool = True, **kwargs) -> Response:
+    async def _batch_execute(
+        self,
+        payloads: list[RPCData],
+        close_on_error: bool = True,
+        update_cookies: bool = True,
+        source_path: str = "/app",
+        **kwargs,
+    ) -> Response:
         """
         Execute a batch of requests to Gemini API.
 
@@ -1603,7 +1610,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                 "rpcids": ",".join([p.rpcid for p in payloads]),
                 "_reqid": _reqid,
                 "rt": "c",
-                "source-path": Endpoint.get_source_path(self.account_index),
+                "source-path": Endpoint.get_source_path(self.account_index, source_path),
             }
             if self.build_label:
                 params["bl"] = self.build_label

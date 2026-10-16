@@ -5,6 +5,7 @@
 # Each slot behaves identically to a single main.py container:
 #   GET  /slot/{num}/health
 #   GET  /slot/{num}/v1/models
+#   GET  /slot/{num}/usage          — 5h/weekly usage limits
 #   POST /slot/{num}/v1/chat/completions
 #   POST /slot/{num}/v1/images/generations
 #   POST /slot/{num}/v1/videos/generations
@@ -768,6 +769,17 @@ async def slot_models(num: int, verbose: int = 0):
             for m in registry.values()
         ]}
     return {"object": "list", "data": await get_runtime_models(client, num)}
+
+
+@app.get("/slot/{num}/usage")
+async def slot_usage(num: int, raw: int = 0):
+    """Compute-based usage limits of this account (5h window + weekly)."""
+    slot = _get_slot(num)
+    client = await _get_client(slot)
+    try:
+        return await client.fetch_usage_info(raw=bool(raw))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Slot {num} usage: {type(e).__name__}: {e}")
 
 
 @app.post("/slot/{num}/v1/chat/completions")

@@ -131,6 +131,7 @@ def verify_panel_auth(request: Request):
     raise HTTPException(status_code=401, detail="未授权")
 
 HEALTH_INTERVAL = 30  # seconds between health checks
+USAGE_INTERVAL = int(os.environ.get("USAGE_INTERVAL", "600"))  # seconds between usage-limit refreshes, 0 = off
 MAX_RETRIES = 5  # max containers to try per request
 ERROR_THRESHOLD = 3  # consecutive errors before auto-disable
 MAX_LOG_ENTRIES = 200
@@ -163,6 +164,9 @@ class Container:
         self.last_actual_model = "unknown"
         self.model_event_ids: set[str] = set()
         self.tier = ""              # "free" | "pro" | "plus" | "ultra" — from container health
+        self.usage = None           # 5h/weekly usage limits from /usage, refreshed by usage_loop
+        self.usage_at = 0           # timestamp of last successful usage fetch
+        self.usage_error = ""       # last usage fetch error (kept usage stays as-is)
 
     @property
     def available(self):
@@ -211,6 +215,9 @@ class Container:
             "tier": self.tier,
             "model_levels": self.model_levels,
             "last_actual_model": self.last_actual_model,
+            "usage": self.usage,
+            "usage_at": self.usage_at,
+            "usage_error": self.usage_error,
         }
 
 
@@ -761,6 +768,38 @@ async def health_loop():
             await asyncio.sleep(HEALTH_INTERVAL)
 
 
+async def fetch_usage(c: Container, client: httpx.AsyncClient):
+    """Pull 5h/weekly usage limits for one account. Failure keeps the previous value."""
+    try:
+        resp = await client.get(f"{c.url}/usage", timeout=30.0)
+        if resp.status_code == 200:
+            c.usage = resp.json()
+            c.usage_at = time.time()
+            c.usage_error = ""
+        else:
+            c.usage_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+    except Exception as e:
+        c.usage_error = f"{type(e).__name__}: {str(e)[:120]}"
+
+
+async def usage_loop():
+    """Background usage-limit refresh, every USAGE_INTERVAL seconds (0 disables)."""
+    if USAGE_INTERVAL <= 0:
+        return
+    await asyncio.sleep(30)  # let health checks settle first
+    sem = asyncio.Semaphore(4)
+
+    async def one(c, client):
+        async with sem:
+            await fetch_usage(c, client)
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            targets = [c for c in containers.values() if c.enabled and c.healthy and not c.needs_cookie]
+            await asyncio.gather(*(one(c, client) for c in targets), return_exceptions=True)
+            await asyncio.sleep(USAGE_INTERVAL)
+
+
 # ── FastAPI App ─────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -773,6 +812,7 @@ async def lifespan(app):
     _models_cache = []
     _models_cache_time = 0
     asyncio.create_task(health_loop())
+    asyncio.create_task(usage_loop())
     yield
 
 app = FastAPI(title="Gemini API Gateway", lifespan=lifespan)

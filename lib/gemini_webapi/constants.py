@@ -52,9 +52,9 @@ class Endpoint(StrEnum):
         return f"https://gemini.google.com{prefix}/_/BardChatUi/data/batchexecute"
 
     @staticmethod
-    def get_source_path(account_index: int = 0) -> str:
+    def get_source_path(account_index: int = 0, path: str = "/app") -> str:
         prefix = Endpoint._get_account_prefix(account_index)
-        return f"{prefix}/app"
+        return f"{prefix}{path}"
 
     @staticmethod
     def get_upload_url(account_index: int = 0) -> str:
@@ -88,6 +88,9 @@ class GRPC(StrEnum):
     DEEP_RESEARCH_MODEL_STATE = "qpEbW"
     DEEP_RESEARCH_CAPS = "aPya6c"
     DEEP_RESEARCH_ACK = "PCck7e"
+
+    # Compute-based usage limits (5h window + weekly), as shown in Settings > Usage limits
+    GET_USAGE_INFO = "jSf9Qc"
 
 
 class Headers(Enum):

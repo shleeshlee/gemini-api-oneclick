@@ -111,6 +111,59 @@ class ResearchMixin:
 
         return result
 
+    async def fetch_usage_info(self, raw: bool = False) -> dict:
+        """Fetch compute-based usage limits (Settings > Usage limits in the Gemini web app).
+
+        Returns plan tier plus usage of the current 5-hour window and the weekly window.
+        Each window: usage_percentage (rounded, as the web UI shows), usage_level (0-1 raw),
+        remaining_credits, reset_at (unix seconds). Accounts with AI credits also get
+        ai_credits_remaining. Raises APIError when the RPC is rejected or returns nothing.
+        """
+        tier_labels = {1: "free", 2: "pro", 3: "ultra", 4: "plus", 6: "ultra"}
+        windows = {1: "current_5h", 2: "weekly"}
+
+        response = await self._batch_execute(
+            [RPCData(rpcid=GRPC.GET_USAGE_INFO, payload="[]")],
+            close_on_error=False,
+            source_path="/usage",
+        )
+
+        for part in extract_json_from_response(response.text):
+            if get_nested_value(part, [0]) != "wrb.fr" or get_nested_value(part, [1]) != GRPC.GET_USAGE_INFO:
+                continue
+            reject_code = get_nested_value(part, [5, 0])
+            body = get_nested_value(part, [2])
+            if not isinstance(body, str):
+                raise APIError(f"Usage info rejected (code={reject_code})")
+            data = json.loads(body)
+
+            tier_id = get_nested_value(data, [0])
+            info: dict = {
+                "tier_id": tier_id,
+                "tier": tier_labels.get(tier_id, f"tier_{tier_id}"),
+                "use_overage_ai_credits": get_nested_value(data, [2]),
+                "current_5h": None,
+                "weekly": None,
+            }
+            for item in get_nested_value(data, [1], []) or []:
+                metric_type = get_nested_value(item, [2])
+                remaining = get_nested_value(item, [0])
+                if metric_type == 3:
+                    info["ai_credits_remaining"] = remaining
+                    continue
+                level = get_nested_value(item, [1])
+                info[windows.get(metric_type, f"type_{metric_type}")] = {
+                    "usage_level": level,
+                    "usage_percentage": round(level * 100) if isinstance(level, (int, float)) else None,
+                    "remaining_credits": remaining,
+                    "reset_at": get_nested_value(item, [3, 0, 0]),
+                }
+            if raw:
+                info["raw"] = data
+            return info
+
+        raise APIError(f"Usage info: no {GRPC.GET_USAGE_INFO} frame in response: {shorten(response.text, width=200)}")
+
     async def _assert_deep_research_capable(self) -> None:
         snapshot = await self.inspect_account_status()
         summary = snapshot.get("summary", {})
