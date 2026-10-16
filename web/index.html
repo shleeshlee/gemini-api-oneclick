@@ -4054,7 +4054,8 @@ function renderThemeDots() {
 }
 
 function tierChip(gw) {
-  const t = (gw && ((gw.usage && gw.usage.tier) || gw.tier)) || '';
+  // gw.tier = what Google actually lets this account use; usage.tier can still say "pro" after the plan stops working
+  const t = (gw && (gw.tier || (gw.usage && gw.usage.tier))) || '';
   if (!t || t === 'unknown') return '';
   return `<span class="tier-chip ${esc(t)}">${esc(t.toUpperCase())}</span>`;
 }
