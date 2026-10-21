@@ -471,6 +471,49 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(entry["success"])
         self.assertEqual(entry["actual_model"], "unknown")
 
+    async def test_counterexample_gateway_chat_timeout_no_retry(self):
+        # A slow answer is still being generated on the first account; retrying elsewhere only duplicates it.
+        a = make_slot(1, model("3.1 Pro")); b = make_slot(2, model("3.1 Pro", "b" * 16))
+        self.install(a, b); ca = self.container(a); cb = self.container(b)
+        calls = []
+        def upstream(request):
+            calls.append(request.url.path)
+            raise httpx.ReadTimeout("mock slow", request=request)
+        with patch.object(gateway.httpx, "AsyncClient", side_effect=lambda **kw: HTTPClient(transport=httpx.MockTransport(upstream), **kw)):
+            response = await self.post(name="pro", app=gateway.app)
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(ca.total_requests + cb.total_requests, 1)
+        self.assertFalse(ca.busy); self.assertFalse(cb.busy)
+        self.assertEqual(ca.total_errors + cb.total_errors, 1)
+        hit = ca if ca.total_requests else cb
+        self.assertGreater(hit.cooldown_until, 0)
+        # Other transport failures still fail over to the next account.
+        calls.clear()
+        def offline(request):
+            calls.append(request.url.path)
+            raise httpx.ConnectError("mock offline", request=request)
+        ca.cooldown_until = cb.cooldown_until = 0
+        with patch.object(gateway.httpx, "AsyncClient", side_effect=lambda **kw: HTTPClient(transport=httpx.MockTransport(offline), **kw)):
+            response = await self.post(name="pro", app=gateway.app)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(len(calls), 2)
+
+    async def test_counterexample_gateway_chat_timeout_by_level(self):
+        s = make_slot(1, model("3.8 Flash"), model("3.1 Pro", "b" * 16)); self.install(s); self.container(s)
+        seen = {}
+        def upstream(request):
+            return httpx.Response(200, json={"ok": True}, headers={"X-OneClick-Success": "true"})
+        def client(**kw):
+            seen[request_name] = kw["timeout"].read
+            return HTTPClient(transport=httpx.MockTransport(upstream), **kw)
+        with patch.object(gateway.httpx, "AsyncClient", side_effect=client):
+            for request_name in ("pro", "gemini-6-flash"):
+                self.assertEqual((await self.post(name=request_name, app=gateway.app)).status_code, 200)
+        self.assertEqual(seen["pro"], gateway.PRO_CHAT_READ_TIMEOUT)
+        self.assertEqual(seen["gemini-6-flash"], gateway.CHAT_READ_TIMEOUT)
+        self.assertEqual((gateway.PRO_CHAT_READ_TIMEOUT, gateway.CHAT_READ_TIMEOUT), (600.0, 300.0))
+
     async def test_counterexample_media_background_dispatch_unchanged(self):
         s = make_slot(1, model("Auto", capacity=1)); self.install(s); c = self.container(s)
         gateway.update_container_models(c, [])  # Media must not depend on chat capabilities.

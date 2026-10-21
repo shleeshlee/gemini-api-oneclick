@@ -133,6 +133,11 @@ def verify_panel_auth(request: Request):
 HEALTH_INTERVAL = 30  # seconds between health checks
 USAGE_INTERVAL = int(os.environ.get("USAGE_INTERVAL", "600"))  # seconds between usage-limit refreshes, 0 = off
 MAX_RETRIES = 5  # max containers to try per request
+# Chat read timeouts. Pro answers routinely take 4-10 minutes (measured 2026-10-18..20: p80 248s, max 673s);
+# the old flat 300s cut them off and then retried the same prompt on another account while the first one
+# kept computing, so one request burned up to 5 accounts' Pro quota and delivered nothing.
+CHAT_READ_TIMEOUT = float(os.environ.get("CHAT_READ_TIMEOUT", "300"))
+PRO_CHAT_READ_TIMEOUT = float(os.environ.get("PRO_CHAT_READ_TIMEOUT", "600"))
 ERROR_THRESHOLD = 3  # consecutive errors before auto-disable
 MAX_LOG_ENTRIES = 200
 
@@ -1500,7 +1505,7 @@ async def proxy(request: Request, path: str):
 
         try:
             # 研究 POST 快速返回 task_id；研究 GET 也快速返回。
-            # 视频 330s（轮询最多300s），图片 180s，聊天 300s。
+            # 视频 330s（轮询最多300s），图片 180s，聊天 300s（pro 600s）。
             if is_research_req:
                 read_timeout = 60.0
             elif "videos" in path:
@@ -1509,8 +1514,10 @@ async def proxy(request: Request, path: str):
                 read_timeout = 180.0
             elif is_music_req:
                 read_timeout = 120.0
+            elif chat_level == "pro":
+                read_timeout = PRO_CHAT_READ_TIMEOUT
             else:
-                read_timeout = 300.0
+                read_timeout = CHAT_READ_TIMEOUT
             client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0))
             try:
                 req = client.build_request(request.method, target_url, content=body, headers=headers)
@@ -1627,8 +1634,14 @@ async def proxy(request: Request, path: str):
             add_log("error", c.num, f"Request failed (attempt {attempt+1}): {error_msg[:100]}")
 
             # Cooldown based on error type — temporary, auto-recovers
-            if "timeout" in error_lower or "timed out" in error_lower:
+            if isinstance(e, httpx.TimeoutException) or "timeout" in error_lower or "timed out" in error_lower:
                 cooldown = 60
+                if path == "chat/completions":
+                    # The account is not broken, it is still generating this very answer. Re-sending the
+                    # prompt to another account only duplicates the slow work (2026-10-20: 4 accounts, 0 delivered).
+                    c.cooldown_until = time.time() + cooldown
+                    add_log("warn", c.num, f"聊天等待超过 {read_timeout:.0f}s，不换号重试，直接报给客户端；冷却 {cooldown}s")
+                    raise HTTPException(status_code=504, detail=f"上游 {read_timeout:.0f}s 内未答完（{error_msg[:100]}），本次未换号重试")
             elif "tls" in error_lower or "ssl" in error_lower or "curl: (35)" in error_lower:
                 cooldown = 60 * min(c.error_count, 5)  # escalate: 60s, 120s, ..., 300s
             elif is_image_req and any(kw in error_lower for kw in ("blocked", "safety", "policy", "restricted", "not available", "can't create")):
