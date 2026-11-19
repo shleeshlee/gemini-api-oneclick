@@ -60,7 +60,8 @@ from gemini_webapi.types.image import GeneratedImage
 from gemini_webapi.types.video import GeneratedVideo
 
 from slot import (Slot, parse_env_file, model_label, model_version, label_level,
-                  request_level, label_model_id, actual_model, logged_in, client_capacity, truth_stream_response)
+                  request_level, label_model_id, actual_model, logged_in, client_capacity, truth_stream_response,
+                  header_safe)
 
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 async def _noop_auto_refresh(self, *a, **kw): pass
@@ -1031,7 +1032,7 @@ async def _chat_completion_impl(
                 snapshot = tracer.get_snapshot()
                 result["oneclick_raw_capture"] = _debug_raw_snapshot(snapshot)
                 result["oneclick_model_hints"] = _debug_model_hints(snapshot)
-            response.headers.update(trace_headers)
+            response.headers.update(header_safe(trace_headers))
             return result
 
     except HTTPException:

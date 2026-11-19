@@ -21,6 +21,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import unquote
 
 import base64
 import uuid as _uuid
@@ -2215,7 +2216,8 @@ def list_model_truth_entries() -> list[dict]:
 
 def record_model_truth(container_num: int, request_path: str, group: str | None,
                        response_headers, *, success=True, level=None, requested_model=None, update_membership=True) -> None:
-    headers = {key.lower(): value for key, value in response_headers.items()}
+    # worker percent-encodes non-latin-1 header values (e.g. Chinese model names)
+    headers = {key.lower(): unquote(value) for key, value in response_headers.items()}
     requested_model = requested_model or headers.get("x-oneclick-requested-model", "")
     if not requested_model:
         return

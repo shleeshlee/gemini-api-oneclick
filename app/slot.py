@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def label_level(label: str) -> str | None:
         return "flash-lite"
     if "flash" in name:
         return "flash"
-    if "auto" in name:
+    if "auto" in name or "自动" in name:
         return None
     name = re.sub(r"\b\d+(?:\.\d+)*\b|\bgemini\b", "", name)
     return re.sub(r"[^\w]+", "-", name).strip("-") or None
@@ -105,10 +106,15 @@ def actual_model(output) -> str:
     return value if isinstance(value, str) and value else "unknown"
 
 
+def header_safe(headers: dict[str, str]) -> dict[str, str]:
+    """HTTP header values must be latin-1; percent-encode anything else (e.g. Chinese model names)."""
+    return {k: (v if v.isascii() else quote(v)) for k, v in headers.items()}
+
+
 async def truth_stream_response(stream, headers):
     """Forward SSE immediately; the actual model is carried by each chunk."""
     from fastapi.responses import StreamingResponse
-    stream_headers = {key: value for key, value in headers.items()
+    stream_headers = {key: value for key, value in header_safe(headers).items()
                       if key.lower() != "x-oneclick-actual-model"}
     return StreamingResponse(stream, media_type="text/event-stream", headers=stream_headers)
 
