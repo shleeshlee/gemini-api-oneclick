@@ -1698,7 +1698,7 @@ function proxyLabel(num) {
   const id = proxyAssignments[String(num)] || '';
   if (!id) return '默认代理';
   const profile = proxyProfiles.find(item => item.id === id);
-  return profile ? proxyDisplay(profile) : '已绑定代理（列表未找到）';
+  return profile ? (safeProxyAddress(profile.name || '') || '未命名代理') : '已绑定代理（列表未找到）';
 }
 
 // ── Usage limits (5h window + weekly) ──────────────────────

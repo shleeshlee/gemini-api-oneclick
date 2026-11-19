@@ -176,17 +176,17 @@ function setup(handler = async () => response()) {
   assert.equal(test.calls.some(x => x.url === '/gateway/deploy/7'), false);
   assert.equal(test.elements.modalMsg.textContent, 'other modal');
 
-  // Card rendering shows the assigned address but never URL authentication fields.
+  // Cards show only the alias, without appending the address or authentication fields.
   test = setup();
   Object.assign(test.context, {accounts:[{num:20,has_cookie:true}],
     esc:value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
     groupColor:() => '', tierChip:() => '', renderUsage:() => ''});
-  test.context.proxyProfiles=[{id:'a',name:'http://synthetic-user:synthetic-secret@proxy.test:8080',url:'http://synthetic-user:synthetic-secret@proxy.test:8080'}];
+  test.context.proxyProfiles=[{id:'a',name:'出口 A',url:'http://synthetic-user:synthetic-secret@proxy.test:8080'}];
   test.context.gatewayStatus.containers[0].enabled=true;
   test.elements.grid=element(); test.elements.grid.dataset.painted='1';
   vm.runInContext(section('function renderGrid()', 'function fmtReset('), test.context);
   test.context.renderGrid();
-  assert.match(test.elements.grid.innerHTML, /proxy\.test:8080/);
-  assert.doesNotMatch(test.elements.grid.innerHTML, /synthetic-user|synthetic-secret/);
+  assert.match(test.elements.grid.innerHTML, /出口 A/);
+  assert.doesNotMatch(test.elements.grid.innerHTML, /proxy\.test|8080|synthetic-user|synthetic-secret/);
   console.log('Panel proxy, metadata-only save and async isolation cases passed');
 })().catch(error => {console.error(error); process.exitCode=1;});
