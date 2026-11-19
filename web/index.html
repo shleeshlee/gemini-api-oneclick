@@ -277,6 +277,8 @@ body::before {
 .proxy-edit-cancel[hidden] { display:none; }
 .proxy-add { display:grid; grid-template-columns:1fr auto; gap:0.55rem; }
 .proxy-add .proxy-address { grid-column:1/-1; }
+.proxy-examples { grid-column:1/-1; font-size:0.72rem; line-height:1.65; color:var(--text-muted); }
+.proxy-examples code { font-family:var(--font-mono,monospace); overflow-wrap:anywhere; }
 .proxy-add .btn { padding:0.6rem 1rem; }
 .proxy-select-msg { font-size:0.76rem; min-height:1.1rem; margin-top:0.35rem; color:var(--text-muted); }
 .proxy-select-msg.err { color:var(--danger); }
@@ -1201,7 +1203,13 @@ body::before {
       <div class="guard-section-title">IP / 代理地址</div>
       <div class="proxy-list" id="proxyList"><div class="model-chip-empty">加载中…</div></div>
       <div class="proxy-add">
-        <input class="form-input proxy-address" id="proxyAddress" aria-label="代理地址" placeholder="代理地址" spellcheck="false" autocomplete="off">
+        <input class="form-input proxy-address" id="proxyAddress" aria-label="代理地址" aria-describedby="proxyExamples" placeholder="例如：http://192.0.2.1:8080" spellcheck="false" autocomplete="off">
+        <div class="proxy-examples" id="proxyExamples">
+          <div>HTTP：<code>http://192.0.2.1:8080</code></div>
+          <div>账号密码：<code>http://username:password@192.0.2.1:8080</code></div>
+          <div>SOCKS5：<code>socks5://username:password@192.0.2.1:1080</code></div>
+          <div>请替换为你的代理 IP 或域名、端口及账号密码；无需认证时省略账号密码。</div>
+        </div>
         <input class="form-input form-input-name" id="proxyName" aria-label="代理名称" placeholder="名称（可选）" autocomplete="off">
         <button class="btn btn-primary" id="proxyAddBtn" onclick="addProxy()">添加</button>
         <button class="card-btn proxy-edit-cancel" id="proxyCancelBtn" onclick="cancelProxyEdit()" hidden>取消编辑</button>
