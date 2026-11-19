@@ -2160,9 +2160,7 @@ async def add_proxy(request: Request):
     if not url:
         raise HTTPException(400, "请填写代理地址")
     identity = _uuid.uuid4().hex
-    # The default label must not expose an optional username/password in the URL.
-    label = name or url.rsplit("@", 1)[-1]
-    profile = {"id": identity, "name": label, "url": url}
+    profile = {"id": identity, "name": name, "url": url}
     async with _proxy_settings_lock:
         profiles = {**proxy_settings.proxies, identity: profile}
         try:
@@ -2185,7 +2183,7 @@ async def edit_proxy(identity: str, request: Request):
         previous = proxy_settings.proxies.get(identity)
         if previous is None:
             raise HTTPException(404, "代理地址不存在")
-        profile = {"id": identity, "name": name or url.rsplit("@", 1)[-1], "url": url}
+        profile = {"id": identity, "name": name, "url": url}
         assigned = sorted(int(num) for num, chosen in proxy_settings.assignments.items()
                           if chosen == identity) if url != previous["url"] else []
         for num in assigned:

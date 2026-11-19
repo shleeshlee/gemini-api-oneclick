@@ -188,5 +188,11 @@ function setup(handler = async () => response()) {
   test.context.renderGrid();
   assert.match(test.elements.grid.innerHTML, /出口 A/);
   assert.doesNotMatch(test.elements.grid.innerHTML, /proxy\.test|8080|synthetic-user|synthetic-secret/);
+  for (const alias of ['', 'proxy.test:8080', 'http://proxy.test:8080']) {
+    test.context.proxyProfiles[0].name = alias;
+    test.context.renderGrid();
+    assert.equal(test.context.proxyLabel(20), 'proxy.test');
+    assert.doesNotMatch(test.elements.grid.innerHTML, /8080|synthetic-user|synthetic-secret/);
+  }
   console.log('Panel proxy, metadata-only save and async isolation cases passed');
 })().catch(error => {console.error(error); process.exitCode=1;});

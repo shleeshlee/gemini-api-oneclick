@@ -1698,7 +1698,14 @@ function proxyLabel(num) {
   const id = proxyAssignments[String(num)] || '';
   if (!id) return '默认代理';
   const profile = proxyProfiles.find(item => item.id === id);
-  return profile ? (safeProxyAddress(profile.name || '') || '未命名代理') : '已绑定代理（列表未找到）';
+  if (!profile) return '已绑定代理（列表未找到）';
+  const name = String(profile.name || '').trim();
+  const address = safeProxyAddress(profile.url);
+  // Older versions filled an empty alias with the address automatically.
+  const generatedNames = [profile.url, address, String(profile.url || '').split('@').pop()];
+  if (name && !generatedNames.includes(name)) return safeProxyAddress(name);
+  try { return new URL(profile.url).hostname || '未命名代理'; }
+  catch (_) { return '未命名代理'; }
 }
 
 // ── Usage limits (5h window + weekly) ──────────────────────

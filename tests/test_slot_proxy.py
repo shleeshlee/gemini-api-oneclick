@@ -175,6 +175,10 @@ class GatewayProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.settings.assignments, {'20': 'a'})
         self.assertEqual(self.settings.proxies['a']['name'], 'Renamed')
+        with self.upstream(lambda _: self.fail('Clearing alias must not contact worker')):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': '', 'url': 'http://proxy.test:80'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.settings.proxies['a']['name'], '')
 
     async def test_edit_address_updates_bound_transport_and_persists_profile(self):
         self.settings.commit(assignments={'20': 'a'})
