@@ -1,7 +1,10 @@
 """Rollout isolation tests with synthetic files and a mocked Docker daemon."""
 import importlib.util
 import json
+import os
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +66,31 @@ class RolloutTests(unittest.TestCase):
         with patch.object(rollout, "command") as command, self.assertRaises(RuntimeError):
             rollout.start(self.args)
         command.assert_not_called()
+
+    def test_gateway_uses_serving_configuration_and_data_with_separate_source(self):
+        environment = dict(os.environ)
+        environment.update(GATEWAY_CONFIG_FILE=str(self.serving / ".env"),
+                           GATEWAY_ENVS_DIR=str(self.serving / "envs"),
+                           GATEWAY_STATE_DIR=str(self.serving / "state"),
+                           GATEWAY_DATA_DIR=str(self.serving / "data"))
+        code = """import gateway as g, json
+print(json.dumps({name: str(getattr(g, name)) for name in (
+    'DOTENV_PATH', 'ENVS_DIR', 'STATE_DIR', 'DATA_DIR', 'ACCOUNTS_FILE',
+    'GATEWAY_STATE_FILE', 'GROUPS_FILE', 'GROUP_DEFS_FILE', 'MODELS_FILE',
+    'MODEL_PROFILES_FILE', 'MODEL_TRUTH_FILE', 'STYLES_DIR')}))
+assert g.API_KEY == 'synthetic-key'
+assert g._image_gallery.media_dir == g.DATA_DIR / 'images'
+assert g._video_gallery.media_dir == g.DATA_DIR / 'videos'
+assert g._audio_gallery.media_dir == g.DATA_DIR / 'audio'
+"""
+        result = subprocess.run([sys.executable, "-c", code], env=environment,
+                                cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, check=True)
+        paths = json.loads(result.stdout)
+        self.assertEqual(paths["DOTENV_PATH"], str(self.serving / ".env"))
+        self.assertEqual(paths["ENVS_DIR"], str(self.serving / "envs"))
+        for name, value in paths.items():
+            self.assertTrue(Path(value).is_relative_to(self.serving), name)
 
     def test_failed_new_gateway_is_killed_then_rollback_verified(self):
         new, old = Mock(pid=2), Mock(pid=3)

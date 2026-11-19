@@ -38,15 +38,17 @@ from app.worker_routing import WorkerRouting, normalized_worker_url
 # ── Config ──────────────────────────────────────────────────────────────
 
 ROOT_DIR = Path(__file__).resolve().parent
-ENVS_DIR = ROOT_DIR / "envs"
+ENVS_DIR = Path(os.environ.get("GATEWAY_ENVS_DIR") or ROOT_DIR / "envs")
 GATEWAY_HTML = ROOT_DIR / "web" / "index.html"
-STATE_DIR = ROOT_DIR / "state"
+STATE_DIR = Path(os.environ.get("GATEWAY_STATE_DIR") or ROOT_DIR / "state")
+DATA_DIR = Path(os.environ.get("GATEWAY_DATA_DIR") or ROOT_DIR / "data")
+DOTENV_PATH = Path(os.environ.get("GATEWAY_CONFIG_FILE") or ROOT_DIR / ".env")
 
 
 def _read_dotenv() -> dict:
     """Read all key=value pairs from .env file."""
     result = {}
-    env_file = ROOT_DIR / ".env"
+    env_file = DOTENV_PATH
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -281,13 +283,13 @@ _SESSION_ROUTE_TTL = 600
 _MAX_SESSION_ROUTES = 200
 account_names: dict[int, str] = {}  # num -> display name, persisted to state/accounts.json
 
-ACCOUNTS_FILE = ROOT_DIR / "state" / "accounts.json"
-GATEWAY_STATE_FILE = ROOT_DIR / "state" / "gateway-state.json"
-GROUPS_FILE = ROOT_DIR / "state" / "groups.json"
-GROUP_DEFS_FILE = ROOT_DIR / "state" / "group-defs.json"
-MODELS_FILE = ROOT_DIR / "state" / "models.json"
-MODEL_PROFILES_FILE = ROOT_DIR / "state" / "model-profiles.json"
-MODEL_TRUTH_FILE = ROOT_DIR / "state" / "model-truth.json"
+ACCOUNTS_FILE = STATE_DIR / "accounts.json"
+GATEWAY_STATE_FILE = STATE_DIR / "gateway-state.json"
+GROUPS_FILE = STATE_DIR / "groups.json"
+GROUP_DEFS_FILE = STATE_DIR / "group-defs.json"
+MODELS_FILE = STATE_DIR / "models.json"
+MODEL_PROFILES_FILE = STATE_DIR / "model-profiles.json"
+MODEL_TRUTH_FILE = STATE_DIR / "model-truth.json"
 
 container_groups: dict[int, str] = {}  # num -> group name (e.g. "pro", "was")
 group_defs: list[str] = []  # defined group names, created by user
@@ -2588,7 +2590,6 @@ _GUARD_KEYS = {
     "GUARD_DISABLE_CODES",
     "GUARD_ERROR_THRESHOLD",
 }
-DOTENV_PATH = ROOT_DIR / ".env"
 
 
 @app.post("/api/login")
@@ -2830,9 +2831,9 @@ class MediaGallery:
         return entry
 
 
-_image_gallery = MediaGallery(ROOT_DIR / "data" / "images", ".png", "image/png")
-_video_gallery = MediaGallery(ROOT_DIR / "data" / "videos", ".mp4", "video/mp4")
-_audio_gallery = MediaGallery(ROOT_DIR / "data" / "audio", ".bin", "")
+_image_gallery = MediaGallery(DATA_DIR / "images", ".png", "image/png")
+_video_gallery = MediaGallery(DATA_DIR / "videos", ".mp4", "video/mp4")
+_audio_gallery = MediaGallery(DATA_DIR / "audio", ".bin", "")
 
 
 @app.post("/gateway/images/save", dependencies=[Depends(verify_panel_auth)])
@@ -2990,7 +2991,7 @@ VIDEOS_DIR = _video_gallery.media_dir
 
 # ── Style Templates ────────────────────────────────────────────────────
 
-STYLES_DIR = ROOT_DIR / "data" / "styles"
+STYLES_DIR = DATA_DIR / "styles"
 STYLES_META = STYLES_DIR / "meta.json"
 
 

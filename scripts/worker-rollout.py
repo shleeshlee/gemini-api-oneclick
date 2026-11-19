@@ -177,13 +177,8 @@ def gateway(args):
         if status != 200 or any(row.get("busy") for row in data.get("containers", [])):
             raise RuntimeError("Gateway has active requests or cannot confirm it is idle; no process was stopped")
         time.sleep(2)
-    for name in (".env", "envs", "state"):
-        destination, original = source / name, serving / name
-        if destination.exists() or destination.is_symlink():
-            if destination.resolve() != original.resolve():
-                raise RuntimeError("Candidate gateway configuration is not the expected serving configuration")
-        else:
-            destination.symlink_to(original, target_is_directory=original.is_dir())
+    environment.update(GATEWAY_CONFIG_FILE=str(serving / ".env"), GATEWAY_ENVS_DIR=str(serving / "envs"),
+                       GATEWAY_STATE_DIR=str(serving / "state"), GATEWAY_DATA_DIR=str(serving / "data"))
     known = environment.get("WORKER_CANDIDATE_URLS") or config.get("WORKER_CANDIDATE_URLS", "")
     environment["WORKER_CANDIDATE_URLS"] = ",".join(sorted(set(filter(None, known.split(","))) | {args.worker_url}))
     set_setting(serving / ".env", "WORKER_CANDIDATE_URLS", environment["WORKER_CANDIDATE_URLS"])
