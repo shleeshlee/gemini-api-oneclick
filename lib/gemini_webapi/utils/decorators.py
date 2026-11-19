@@ -4,7 +4,7 @@ import inspect
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, TypeVar
 
-from ..exceptions import APIError
+from ..exceptions import APIError, AuthError
 
 DELAY_FACTOR = 5
 T = TypeVar("T")
@@ -14,6 +14,8 @@ async def _ensure_client_running(client: Any, func_name: str) -> None:
     """Ensure the client is initialized and running."""
     if client._running:
         return
+    if not getattr(client, "allow_implicit_init", True):
+        raise AuthError("客户端已关闭，请显式恢复此账号")
 
     await client.init(
         timeout=client.timeout,
@@ -59,13 +61,15 @@ def _wrap_async_generator(func: Callable, retry_max: int) -> Callable:
     @functools.wraps(func)
     async def wrapper(client: Any, *args: Any, current_retry: int | None = None, **kwargs: Any) -> AsyncGenerator:
         retries_remaining = retry_max if current_retry is None else current_retry
+        emitted = False
 
         try:
             await _ensure_client_running(client, func.__name__)
             async for item in func(client, *args, **kwargs):
+                emitted = True
                 yield item
         except APIError:
-            if retries_remaining <= 0:
+            if retries_remaining <= 0 or (emitted and not getattr(client, "allow_implicit_init", True)):
                 raise
 
             delay = _calculate_retry_delay(retry_max, retries_remaining)

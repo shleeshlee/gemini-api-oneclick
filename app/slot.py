@@ -23,6 +23,27 @@ _SESSION_TTL = 600   # 10 minutes
 _MAX_SESSIONS = 50   # per slot
 _TLS_RESTART_THRESHOLD = 3
 INIT_TIMEOUT_SECONDS = 60
+_credential_locks: dict[str, Any] = {}
+_credential_locks_guard = threading.Lock()
+
+
+def credential_file_lock(path):
+    key = str(Path(path).resolve()) if path is not None else "<memory>"
+    with _credential_locks_guard:
+        return _credential_locks.setdefault(key, threading.RLock())
+
+
+async def credential_update(path, operation):
+    """Finish a serialized file mutation before releasing its async caller."""
+    def run():
+        with credential_file_lock(path):
+            return operation()
+    task = asyncio.create_task(asyncio.to_thread(run))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
 
 
 def model_label(model) -> str:
@@ -116,7 +137,7 @@ async def truth_stream_response(stream, headers):
     """Forward SSE immediately; the actual model is carried by each chunk."""
     from fastapi.responses import StreamingResponse
     stream_headers = {key: value for key, value in header_safe(headers).items()
-                      if key.lower() != "x-oneclick-actual-model"}
+                      if key.lower() not in {"x-oneclick-actual-model", "x-oneclick-success"}}
     return StreamingResponse(stream, media_type="text/event-stream", headers=stream_headers)
 
 
@@ -162,6 +183,40 @@ class Slot:
     _last_cookie_write: float | None = None
     _pro_probe_done: bool = False
     cookie_audit: Any = field(default=None, repr=False)
+    credential_epoch: int = 0
+    retiring: bool = False
+    active_requests: int = 0
+
+    async def save_credentials(self, path, psid, psidts):
+        def write():
+            lines = path.read_text().splitlines() if path.exists() else []
+            lines = [line for line in lines if line.split("=", 1)[0].strip() not in ("SECURE_1PSID", "SECURE_1PSIDTS")]
+            lines += [f"SECURE_1PSID={psid}", f"SECURE_1PSIDTS={psidts}"]
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+                    temporary = output.name
+                    os.chmod(temporary, 0o600)
+                    output.write("\n".join(lines) + "\n")
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, path)
+                self.credential_epoch += 1
+                self.env_path = path
+                self.psid, self.psidts = psid, psidts
+                self._last_cookie_write = None
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
+        await credential_update(path, write)
+
+    async def retire(self):
+        # Stop admission synchronously before waiting for any in-flight writer.
+        # Cancellation keeps the slot retired; it must never reopen implicitly.
+        self.retiring = True
+        def mark():
+            self.credential_epoch += 1
+        await credential_update(self.env_path, mark)
 
     # ── Factory ──────────────────────────────────────────────────────
 
@@ -233,7 +288,8 @@ class Slot:
 
         try:
             self.state["initializing"] = True
-            self.client = GeminiClient(self.psid, self.psidts, proxy=proxy, cookie_audit=self.cookie_audit)
+            self.client = GeminiClient(self.psid, self.psidts, proxy=proxy, cookie_audit=self.cookie_audit,
+                                       allow_implicit_init=False)
             with cookie_operation("initialization"):
                 if self.cookie_audit is not None:
                     self.cookie_audit.emit("init_start")
@@ -285,13 +341,24 @@ class Slot:
             self.state["last_error"] = str(e)[:200]
             raise
 
-    async def reload(self, psid: str | None = None, psidts: str | None = None) -> None:
+    async def reload(self, psid: str | None = None, psidts: str | None = None,
+                     *, _env_path: Path | None = None) -> None:
         """Destroy current client and reinitialise with (optionally new) credentials."""
-        if psid is not None:
-            self.psid = psid
-        if psidts is not None:
-            self.psidts = psidts
-        old_client, self.client = self.client, None
+        def detach():
+            new_psid, new_psidts = psid, psidts
+            if _env_path is not None:
+                data = parse_env_file(_env_path)
+                new_psid, new_psidts = data.get("SECURE_1PSID", ""), data.get("SECURE_1PSIDTS", "")
+                self.env_path = _env_path
+            if new_psid is not None:
+                self.psid = new_psid
+            if new_psidts is not None:
+                self.psidts = new_psidts
+            self.credential_epoch += 1
+            self._last_cookie_write = None
+            old, self.client = self.client, None
+            return old
+        old_client = await credential_update(_env_path or self.env_path, detach)
         if old_client is not None and callable(getattr(old_client, "close", None)):
             try:
                 async with asyncio.timeout(5):
@@ -313,12 +380,7 @@ class Slot:
     async def reload_from_env(self, envs_dir: Path) -> None:
         """Re-read the env file and reload the client."""
         env_path = envs_dir / f"account{self.num}.env"
-        self.env_path = env_path
-        data = parse_env_file(env_path)
-        await self.reload(
-            psid=data.get("SECURE_1PSID", ""),
-            psidts=data.get("SECURE_1PSIDTS", ""),
-        )
+        await self.reload(_env_path=env_path)
 
     # ── Health ───────────────────────────────────────────────────────
 
@@ -340,7 +402,7 @@ class Slot:
     def health_response(self) -> dict[str, Any]:
         """Return the same JSON shape that main.py /health returns."""
         auth = self.state["auth_status"]
-        client_ready = self.client is not None
+        client_ready = self.client is not None and getattr(self.client, "_running", True)
 
         if self.state["initializing"]:
             status = "initializing"
@@ -358,6 +420,8 @@ class Slot:
         return {
             "status": status,
             "client_ready": client_ready,
+            "retiring": self.retiring,
+            "active_requests": self.active_requests,
             "auth_status": auth,
             "tier": self.detect_tier(),
             "needs_restart": self.state["needs_restart"],
@@ -419,7 +483,13 @@ class Slot:
                 self.cookie_audit.writeback("lock_busy")
             return False
         try:
-            return self._writeback_cookies(envs_dir)
+            path = self.env_path or (envs_dir / f"account{self.num}.env" if envs_dir else None)
+            with credential_file_lock(path):
+                if self.retiring or self.state.get("initializing"):
+                    if self.cookie_audit is not None:
+                        self.cookie_audit.writeback("retiring" if self.retiring else "initializing")
+                    return False
+                return self._writeback_cookies(envs_dir)
         finally:
             self._cookie_lock.release()
 
@@ -463,6 +533,11 @@ class Slot:
             with path.open(encoding="utf-8", newline="") as source:
                 original = source.read()
             current = parse_env_file(path)
+            if self.psid and self.psidts and (
+                current.get("SECURE_1PSID") != self.psid or current.get("SECURE_1PSIDTS") != self.psidts
+            ):
+                audit_write("file_changed")
+                return False
             if all(current.get(key) == value for key, value in values.items()):
                 audit_write("unchanged")
                 return False
@@ -516,7 +591,8 @@ class Slot:
         if isinstance(e, ImageGenerationBlocked):
             self.state["last_error_type"] = "image_blocked"
         elif isinstance(e, AuthError):
-            self.state["last_error_type"] = "cookie_expired"
+            self.state.update(last_error_type="auth_failed", auth_status="UNAUTHENTICATED",
+                              last_http_status=getattr(e, "http_status", None), needs_restart=False)
         elif isinstance(e, UsageLimitExceeded):
             self.state["last_error_type"] = "usage_limit"
         elif isinstance(e, RateLimitExceeded):

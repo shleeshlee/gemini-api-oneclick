@@ -357,6 +357,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         "_gems",  # From GemMixin
         "_lock",
         "_init_task",
+        "allow_implicit_init",
         "_model_registry",
         "_reqid",
         "_running",
@@ -392,6 +393,7 @@ class GeminiClient(GemMixin, ResearchMixin):
     ):
         super().__init__()
         self.cookie_audit = kwargs.pop("cookie_audit", None)
+        self.allow_implicit_init = kwargs.pop("allow_implicit_init", True)
         self.cookies = Cookies()
         self.proxy = proxy
         self.account_index = account_index

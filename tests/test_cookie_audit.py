@@ -36,8 +36,10 @@ class AuditContracts(unittest.IsolatedAsyncioTestCase):
     def slot(self, content="SECURE_1PSID=old-first\nSECURE_1PSIDTS=old-second\n"):
         env = self.root / "account9.env"
         env.write_text(content)
-        return Slot(num=9, env_path=env, cookie_audit=self.audit,
+        slot = Slot(num=9, env_path=env, cookie_audit=self.audit,
                     client=SimpleNamespace(cookies=pair(), client=SimpleNamespace(cookies=pair())))
+        slot.state["initializing"] = False
+        return slot
 
     def test_scoped_add_change_delete_and_no_values(self):
         jar = Cookies()
@@ -185,6 +187,20 @@ class AuditContracts(unittest.IsolatedAsyncioTestCase):
         with patch.dict(slots, {9: slot}, clear=True):
             await CookieWritebackMiddleware(app)({"path": "/slot/9/v1/chat/completions", "method": "POST"}, AsyncMock(), AsyncMock())
         self.assertFalse(self.events()[-2]["transport_success"])
+        self.assertEqual(self.events()[-1]["reason"], "request_failed")
+
+    async def test_sse_business_failure_keeps_transport_success_separate(self):
+        from worker import CookieWritebackMiddleware, slots, mark_request_failed
+        slot = self.slot()
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            mark_request_failed()
+
+        with patch.dict(slots, {9: slot}, clear=True):
+            await CookieWritebackMiddleware(app)({"path": "/slot/9/v1/chat/completions", "method": "POST"}, AsyncMock(), AsyncMock())
+        self.assertTrue(self.events()[-2]["transport_success"])
+        self.assertFalse(self.events()[-2]["business_success"])
         self.assertEqual(self.events()[-1]["reason"], "request_failed")
 
     def test_writeback_success_skip_and_atomic_failure(self):

@@ -20,6 +20,7 @@ import asyncio
 import base64
 import json
 import logging
+import hmac
 import os
 import random
 import re
@@ -27,6 +28,7 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -62,7 +64,7 @@ from gemini_webapi.types.video import GeneratedVideo
 
 from slot import (Slot, parse_env_file, model_label, model_version, label_level,
                   request_level, label_model_id, actual_model, logged_in, client_capacity, truth_stream_response,
-                  header_safe)
+                  header_safe, credential_update)
 
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 async def _noop_auto_refresh(self, *a, **kw): pass
@@ -78,6 +80,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 ENVS_DIR = Path(os.environ.get("ENVS_DIR", "")) if os.environ.get("ENVS_DIR") else ROOT_DIR / "envs"
 PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
 API_KEY = os.environ.get("API_KEY", "")
+WORKER_MANAGEMENT_KEY = os.environ.get("WORKER_MANAGEMENT_KEY", "") or API_KEY
 IMAGE_DOWNLOAD_SIZE = os.environ.get("IMAGE_DOWNLOAD_SIZE", "0").strip() or "0"
 RUNTIME_MODELS_CACHE_TTL = 300
 MODEL_REFRESH_INTERVAL_SECONDS = max(1.0, float(os.environ.get("MODEL_REFRESH_INTERVAL_SECONDS", "21600")))
@@ -106,11 +109,35 @@ def slot_log(num: int, msg: str):
 
 # ── Startup ──────────────────────────────────────────────────────────
 _slot_tasks: dict[int, asyncio.Task] = {}
+_management_locks: dict[int, asyncio.Lock] = {}
+_request_result = ContextVar("worker_request_result", default=None)
+
+
+def management_lock(num):
+    # Keep locks after deletion so a waiting operation cannot acquire a new lock.
+    return _management_locks.setdefault(num, asyncio.Lock())
+
+
+def mark_request_failed():
+    result = _request_result.get()
+    if result is not None:
+        result["failed"] = True
+
+
+def _verify_management_key(authorization: str = Header(None)):
+    expected = WORKER_MANAGEMENT_KEY or API_KEY
+    if not expected:
+        raise HTTPException(status_code=503, detail="Worker management authentication is not configured")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid worker management credentials")
 
 
 def schedule_slot_init(slot: Slot, *, reload=False, delay=0):
     """One bounded background recovery per slot; never restart the worker."""
     previous = _slot_tasks.get(slot.num)
+    if slot.retiring:
+        return False
     if previous is not None and not previous.done():
         return False
     slot.state.update(initializing=True, auth_status="unknown", last_error="",
@@ -196,21 +223,32 @@ class CookieWritebackMiddleware:
         with cookie_operation("api_request"):
             error_type = None
             starting_slot = slots.get(int(match.group(1)))
+            starting_client = getattr(starting_slot, "client", None)
+            result = {"failed": False}
+            token = _request_result.set(result)
             request_audit = starting_slot.cookie_audit if isinstance(starting_slot, Slot) else None
+            if isinstance(starting_slot, Slot):
+                starting_slot.active_requests += 1
             try:
                 await self.app(scope, receive, capture)
             except BaseException as exc:
                 error_type = type(exc).__name__
                 raise
             finally:
+                if isinstance(starting_slot, Slot):
+                    starting_slot.active_requests -= 1
+                success = success and not result["failed"]
+                _request_result.reset(token)
                 if request_audit is not None:
-                    request_audit.emit("api_complete", status=status, transport_success=status < 400 and success and error_type is None,
-                                           error_type=error_type)
+                    request_audit.emit("api_complete", status=status,
+                                       transport_success=status < 400 and error_type is None,
+                                       business_success=status < 400 and success and error_type is None,
+                                       error_type=error_type)
                     if error_type is not None or status >= 400 or not success:
                         request_audit.writeback("request_failed")
             if status < 400 and success:
                 slot = slots.get(int(match.group(1)))
-                if isinstance(slot, Slot):
+                if isinstance(slot, Slot) and slot is starting_slot and slot.client is starting_client:
                     await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
 
 
@@ -239,14 +277,22 @@ def _get_slot(num: int) -> Slot:
 async def _get_client(slot: Slot) -> GeminiClient:
     """Ensure the slot has an initialised client, return it."""
     state = getattr(slot, "state", {})
+    if getattr(slot, "retiring", False):
+        raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 已停止接收新请求")
     if state.get("initializing"):
         raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 初始化中")
+    if state.get("auth_status") == "UNAUTHENTICATED" and state.get("last_error_type") != "auth_failed":
+        state.update(last_error_type="auth_failed", last_error="认证失败，需要重新认证")
     if state.get("last_error_type") == "auth_failed":
         raise HTTPException(status_code=state.get("last_http_status") or 401, detail=state["last_error"])
     if state.get("last_error_type") == "init_timeout":
         raise HTTPException(status_code=504, detail=state["last_error"])
     if slot.client is None:
         raise HTTPException(status_code=503, detail=f"Slot {slot.num}: client not available")
+    if not getattr(slot.client, "_running", True):
+        state.update(auth_status="unknown", last_error_type="client_closed",
+                     last_error="客户端已关闭，请显式恢复此账号")
+        raise HTTPException(status_code=503, detail=state["last_error"])
     return slot.client
 
 
@@ -340,8 +386,9 @@ async def _refresh_slot_models(slot: Slot):
     # Metadata refresh has its own lock; chat only locks client initialization.
     async with slot.refresh_lock:
         client = slot.client
-        if client is None or slot.state.get("initializing"):
+        if client is None or slot.state.get("initializing") or slot.retiring:
             return
+        epoch = slot.credential_epoch
         with cookie_operation("model_refresh"):
             try:
                 await client.refresh_models()
@@ -351,10 +398,13 @@ async def _refresh_slot_models(slot: Slot):
                     audit.emit("model_refresh_error", error_type=type(exc).__name__)
                 logger.warning("Slot %d: model refresh failed; keeping previous registry", slot.num)
             finally:
-                status = getattr(client, "account_status", None)
-                slot.state["auth_status"] = status.name if status else "unknown"
-                _publish_models(slot)
-                await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
+                if slots.get(slot.num) is slot and slot.client is client and slot.credential_epoch == epoch and not slot.retiring:
+                    status = getattr(client, "account_status", None)
+                    slot.state["auth_status"] = status.name if status else "unknown"
+                    if status == AccountStatus.UNAUTHENTICATED:
+                        slot.state.update(last_error_type="auth_failed", last_error="认证失败，需要重新认证")
+                    _publish_models(slot)
+                    await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
 
 
 async def _refresh_models_loop():
@@ -626,9 +676,9 @@ class MusicGenerationRequest(BaseModel):
 
 # ── Conversation prep ────────────────────────────────────────────────
 
-def prepare_conversation(messages: list) -> tuple[str, list[str]]:
+def prepare_conversation(messages: list, temp_files=None) -> tuple[str, list[str]]:
     conversation = ""
-    temp_files: list[str] = []
+    temp_files = [] if temp_files is None else temp_files
     for msg in messages:
         content = msg.content
         role = msg.role
@@ -841,9 +891,11 @@ async def _chat_completion_impl(
     ):
         raise HTTPException(status_code=400, detail="oneclick_force_model_token must be 16 hexadecimal characters")
     trace_headers: dict[str, str] = {}
+    temp_files: list[str] = []
+    stream_owns_files = False
     try:
         client = await _get_client(slot)
-        conversation, temp_files = prepare_conversation(request.messages)
+        conversation, temp_files = prepare_conversation(request.messages, temp_files)
         if not debug_probe:
             logger.info("Slot %d chat: %s...", num, conversation[:200])
             slot_log(num, f"Chat: {conversation[:80]}")
@@ -885,6 +937,8 @@ async def _chat_completion_impl(
                 full_thoughts = ""
                 last_output = None
                 first = True
+                completed = False
+                delivered = False
                 stream_model = trace_headers["X-OneClick-Model-Level"]
                 try:
                     stream_gen = client.generate_content_stream(
@@ -927,6 +981,7 @@ async def _chat_completion_impl(
                             "created": created_time, "model": stream_model,
                             "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
                         }
+                        delivered = True
                         yield f"data: {json.dumps(chunk)}\n\n"
 
                     # A metadata-only tail frame can update the last output in place.
@@ -950,12 +1005,17 @@ async def _chat_completion_impl(
                                     "created": created_time, "model": stream_model,
                                     "choices": [{"index": 0, "delta": {"content": f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"}, "finish_reason": None}],
                                 }
+                                delivered = True
                                 yield f"data: {json.dumps(img_chunk)}\n\n"
 
+                    if not delivered:
+                        raise RuntimeError("Empty response from Gemini")
                     observe(last_output)
+                    completed = True
 
                 except Exception as e:
                     trace_headers["X-OneClick-Success"] = "false"
+                    mark_request_failed()
                     audit = getattr(client, "cookie_audit", None)
                     if not debug_probe and audit is not None:
                         audit.emit("chat_stream_error", error_type=type(e).__name__)
@@ -975,18 +1035,8 @@ async def _chat_completion_impl(
                             )
                         except Exception:
                             pass
-                    if first:
-                        role_chunk = {
-                            "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created_time, "model": stream_model,
-                            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-                        }
-                        yield f"data: {json.dumps(role_chunk)}\n\n"
-                    err_chunk = {
-                        "id": completion_id, "object": "chat.completion.chunk",
-                        "created": created_time, "model": stream_model,
-                        "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)[:200]}]"}, "finish_reason": None}],
-                    }
+                    err_chunk = {"error": {"message": str(e)[:200], "type": "upstream_error",
+                                           "code": getattr(e, "http_status", None) or "upstream_error"}}
                     yield f"data: {json.dumps(err_chunk)}\n\n"
                 finally:
                     for tf in temp_files:
@@ -994,15 +1044,18 @@ async def _chat_completion_impl(
                             os.unlink(tf)
                         except Exception:
                             pass
+                if completed:
                     done_chunk = {
                         "id": completion_id, "object": "chat.completion.chunk",
                         "created": created_time, "model": stream_model,
                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     }
                     yield f"data: {json.dumps(done_chunk)}\n\n"
-                    yield "data: [DONE]\n\n"
+                yield "data: [DONE]\n\n"
 
-            return await truth_stream_response(stream_relay(), trace_headers)
+            stream_response = await truth_stream_response(stream_relay(), trace_headers)
+            stream_owns_files = True
+            return stream_response
 
         else:
             full_text = ""
@@ -1016,12 +1069,6 @@ async def _chat_completion_impl(
                 full_text += output.text_delta or ""
                 full_thoughts += output.thoughts_delta or ""
                 last_output = output
-
-            for tf in temp_files:
-                try:
-                    os.unlink(tf)
-                except Exception:
-                    pass
 
             reply_text = ""
             if full_thoughts:
@@ -1039,7 +1086,7 @@ async def _chat_completion_impl(
             reply_text = re.sub(r"```\s*\n(<[a-zA-Z][\s\S]*?)\n```", r"\1", reply_text)
             reply_text = correct_markdown(reply_text)
             if not reply_text.strip():
-                reply_text = "Empty response from Gemini."
+                raise HTTPException(status_code=502, detail="Empty response from Gemini")
 
             observe(last_output)
             result = build_chat_completion_payload(
@@ -1092,6 +1139,14 @@ async def _chat_completion_impl(
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
             raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+    finally:
+        if not stream_owns_files:
+            for tf in temp_files:
+                try:
+                    os.unlink(tf)
+                except OSError:
+                    pass
 
 
 @app.post("/slot/{num}/v1/images/generations")
@@ -1212,7 +1267,7 @@ async def slot_image_generation(
             result["session_id"] = session_id
         if raw_image_urls:
             result["raw_image_urls"] = raw_image_urls[:4]
-        response.headers.update(trace_headers)
+        response.headers.update(header_safe(trace_headers))
         return result
 
     except HTTPException:
@@ -1232,7 +1287,7 @@ async def slot_image_generation(
             }
             if session_id:
                 result["session_id"] = session_id
-            response.headers.update(trace_headers)
+            response.headers.update(header_safe(trace_headers))
             return result
         logger.error("Slot %d image error: %s", num, e, exc_info=True)
         error_event = build_worker_event(
@@ -1328,7 +1383,7 @@ async def slot_video_generation(
         result = {"created": int(time.time()), "data": result_data, "text": gemini_response.text or ""}
         if raw_video_urls:
             result["raw_video_urls"] = raw_video_urls[:4]
-        response.headers.update(trace_headers)
+        response.headers.update(header_safe(trace_headers))
         return result
 
     except HTTPException:
@@ -1346,7 +1401,7 @@ async def slot_video_generation(
                 "text": "",
                 "raw_video_urls": recovered_urls[:4],
             }
-            response.headers.update(trace_headers)
+            response.headers.update(header_safe(trace_headers))
             return result
         logger.error("Slot %d video error: %s", num, e, exc_info=True)
         error_event = build_worker_event(
@@ -1483,7 +1538,7 @@ async def slot_music_generation(
         if raw_urls:
             result["raw_urls"] = raw_urls
 
-        response.headers.update(trace_headers)
+        response.headers.update(header_safe(trace_headers))
         return result
 
     except HTTPException:
@@ -1565,6 +1620,9 @@ async def _run_research_background(slot_num: int, client, prompt: str, poll_inte
         task["finished_at"] = int(time.time())
         logger.info("Slot %d research [%s] finished. done=%s text_len=%d sources=%d", slot_num, task_id[:8], result.done, len(result.text), len(sources))
 
+    except asyncio.CancelledError:
+        task.update(finished=True, finished_at=int(time.time()), error="cancelled")
+        raise
     except Exception as e:
         task["finished"] = True
         task["finished_at"] = int(time.time())
@@ -1677,16 +1735,22 @@ async def list_research_tasks(
 #  Worker management endpoints — /worker/...
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.post("/worker/reload-slot/{num}")
+@app.post("/worker/reload-slot/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_reload_slot(num: int):
     """Re-read env file and reinitialise the slot's GeminiClient."""
-    slot = _get_slot(num)
-    started = schedule_slot_init(slot, reload=True)
-    return JSONResponse(status_code=202, content={"ok": True, "started": started,
-                        "message": f"账号 #{num} 正在单独恢复", "health": slot.health_response()})
+    async with management_lock(num):
+        slot = _get_slot(num)
+        if slot.retiring:
+            raise HTTPException(status_code=409, detail="该账号已停止接收请求")
+        if slot.active_requests or any(t["slot"] == num and not t["finished"] for t in _research_tasks.values()):
+            raise HTTPException(status_code=409, detail="该账号仍有运行中的请求或研究任务")
+        started = schedule_slot_init(slot, reload=True)
+        return JSONResponse(status_code=202, content={"ok": True, "started": started,
+                            "message": f"账号 #{num} 正在单独恢复", "health": slot.health_response()})
 
 
-@app.get("/worker/status")
+
+@app.get("/worker/status", dependencies=[Depends(_verify_management_key)])
 async def worker_status():
     """Summary of all slots."""
     slot_list = []
@@ -1695,8 +1759,9 @@ async def worker_status():
         h = s.health_response()
         h["num"] = num
         h["has_credentials"] = bool(s.psid)
+        h["research_active"] = sum(t["slot"] == num and not t["finished"] for t in _research_tasks.values())
         slot_list.append(h)
-    available = sum(1 for s in slots.values() if s.client is not None and not s.state["initializing"])
+    available = sum(1 for s in slots.values() if not s.retiring and s.health_response()["status"] == "healthy")
     return {
         "total": len(slots),
         "available": available,
@@ -1704,7 +1769,7 @@ async def worker_status():
     }
 
 
-@app.post("/worker/deploy-slot/{num}")
+@app.post("/worker/deploy-slot/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_deploy_slot(num: int, request: Request):
     """Update cookie credentials and reinitialise the slot."""
     body = await request.json()
@@ -1712,33 +1777,42 @@ async def worker_deploy_slot(num: int, request: Request):
     psidts = body.get("psidts", "").strip()
     if not psid or not psidts:
         raise HTTPException(status_code=400, detail="psid and psidts required")
-    active = _slot_tasks.get(num)
-    if active is not None and not active.done():
-        raise HTTPException(status_code=409, detail="该账号正在初始化，请等待结果后再更新 Cookie")
+    if any("\n" in value or "\r" in value for value in (psid, psidts)):
+        raise HTTPException(status_code=400, detail="Invalid cookie value")
+    async with management_lock(num):
+        active = _slot_tasks.get(num)
+        if active is not None and not active.done():
+            raise HTTPException(status_code=409, detail="该账号正在初始化，请等待结果后再更新 Cookie")
+        slot = slots.get(num)
+        if slot is not None and (slot.retiring or slot.active_requests or
+                                any(t["slot"] == num and not t["finished"] for t in _research_tasks.values())):
+            raise HTTPException(status_code=409, detail="该账号正在处理请求或已停止接收请求")
+        env_file = ENVS_DIR / f"account{num}.env"
+        if slot is None:
+            slot = Slot(num=num, env_path=env_file)
+        previous_initializing = slot.state["initializing"]
+        previous_epoch = slot.credential_epoch
+        slot.state["initializing"] = True
+        try:
+            await slot.save_credentials(env_file, psid, psidts)
+        except BaseException:
+            if slot.credential_epoch != previous_epoch:
+                # The atomic save completed before cancellation. Finish recovery
+                # so the old client cannot write its cookies over the new file.
+                slots[num] = slot
+                schedule_slot_init(slot, reload=True)
+            else:
+                slot.state["initializing"] = previous_initializing
+            raise
+        slots[num] = slot
+        schedule_slot_init(slot, reload=True)
+        slot_log(num, "Cookie 已保存，正在单独恢复账号")
+        return JSONResponse(status_code=202, content={"ok": True, "message": f"Slot {num} accepted",
+                            "health": slot.health_response()})
 
-    # Write env file
-    env_file = ENVS_DIR / f"account{num}.env"
-    lines = []
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            key = line.split("=", 1)[0].strip()
-            if key not in ("SECURE_1PSID", "SECURE_1PSIDTS"):
-                lines.append(line)
-    lines.append(f"SECURE_1PSID={psid}")
-    lines.append(f"SECURE_1PSIDTS={psidts}")
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    # Reload or create slot
-    if num not in slots:
-        slots[num] = Slot(num=num, psid=psid, psidts=psidts, env_path=env_file)
-    slots[num].env_path = env_file
-    schedule_slot_init(slots[num], reload=True)
-    slot_log(num, "Cookie 已保存，正在单独恢复账号")
-    return JSONResponse(status_code=202, content={"ok": True, "message": f"Slot {num} accepted",
-                        "health": slots[num].health_response()})
 
 
-@app.get("/worker/slot-logs/{num}")
+@app.get("/worker/slot-logs/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_slot_logs(num: int, tail: int = 60):
     """Return recent log entries for a slot."""
     logs = list(_slot_logs.get(num, []))
@@ -1747,15 +1821,15 @@ async def worker_slot_logs(num: int, tail: int = 60):
     return {"ok": True, "lines": logs}
 
 
-@app.post("/worker/test-slot/{num}")
+@app.post("/worker/test-slot/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_test_slot(num: int):
     """Send a minimal chat request to verify the slot works."""
     slot = _get_slot(num)
-    if not slot.client or slot.state.get("initializing"):
-        raise HTTPException(status_code=503, detail=f"Slot {num} not ready")
+    client = await _get_client(slot)
+    slot.active_requests += 1
 
     try:
-        models = await get_runtime_models(slot.client)
+        models = await get_runtime_models(client)
         model_name = None
         for m in models:
             mid = m.get("id", "")
@@ -1767,7 +1841,7 @@ async def worker_test_slot(num: int):
         if not model_name:
             raise HTTPException(status_code=500, detail="No models available")
 
-        chat = slot.client.start_chat()
+        chat = client.start_chat()
         response = await chat.send_message("hi")
         reply = response.text[:100] if response and response.text else "(empty)"
         # Strip think tags
@@ -1779,37 +1853,52 @@ async def worker_test_slot(num: int):
     except Exception as e:
         slot_log(num, f"Test failed: {str(e)[:80]}")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)[:200]})
+    finally:
+        slot.active_requests -= 1
 
 
-@app.delete("/worker/slot/{num}")
+@app.delete("/worker/slot/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_delete_slot(num: int):
     """Remove a slot: close client, delete env file, drop from registry."""
-    if num not in slots:
-        raise HTTPException(status_code=404, detail=f"Slot {num} not found")
+    async with management_lock(num):
+        slot = _get_slot(num)
+        if slot.active_requests or any(t["slot"] == num and not t["finished"] for t in _research_tasks.values()):
+            raise HTTPException(status_code=409, detail="该账号仍有运行中的请求或研究任务")
+        slot.retiring = True
+        task = _slot_tasks.get(num)
+        if task is not None and not task.done():
+            task.cancel()
+            _, pending = await asyncio.wait([task], timeout=12)
+            if pending:
+                raise HTTPException(status_code=409, detail="该账号仍在清理初始化任务，请稍后删除")
+        _slot_tasks.pop(num, None)
+        await slot.retire()
+        if slot.client:
+            try:
+                async with asyncio.timeout(5):
+                    await slot.client.close()
+            except Exception:
+                pass
+        slot.edit_sessions.clear()
+        env_file = ENVS_DIR / f"account{num}.env"
+        await credential_update(env_file, lambda: env_file.unlink(missing_ok=True))
+        slots.pop(num, None)
+        _slot_logs.pop(num, None)
+        slot_log(num, "Slot deleted")
+        return {"ok": True, "message": f"Slot {num} deleted"}
 
-    task = _slot_tasks.get(num)
-    if task is not None and not task.done():
-        task.cancel()
-        _, pending = await asyncio.wait([task], timeout=12)
-        if pending:
-            raise HTTPException(status_code=409, detail="该账号仍在清理初始化任务，请稍后删除")
-    _slot_tasks.pop(num, None)
-    slot = slots.pop(num)
-    if slot.client:
-        try:
-            async with asyncio.timeout(5):
-                await slot.client.close()
-        except Exception:
-            pass
-    slot.edit_sessions.clear()
 
-    env_file = ENVS_DIR / f"account{num}.env"
-    if env_file.exists():
-        env_file.unlink()
+@app.post("/worker/retire-slot/{num}", dependencies=[Depends(_verify_management_key)])
+async def worker_retire_slot(num: int):
+    async with management_lock(num):
+        slot = _get_slot(num)
+        task = _slot_tasks.get(num)
+        if task is not None and not task.done():
+            raise HTTPException(status_code=409, detail="该账号正在初始化")
+        await slot.retire()
+        return {"ok": True, "health": slot.health_response(),
+                "research_active": sum(t["slot"] == num and not t["finished"] for t in _research_tasks.values())}
 
-    _slot_logs.pop(num, None)
-    slot_log(num, "Slot deleted")
-    return {"ok": True, "message": f"Slot {num} deleted"}
 
 
 @app.get("/")

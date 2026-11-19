@@ -33,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.slot import request_level, label_level, model_version
+from app.worker_routing import WorkerRouting, normalized_worker_url
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -65,7 +66,46 @@ COOKIE_MANAGER_PASSWORD = _dotenv.get("COOKIE_MANAGER_PASSWORD", "")
 _worker_mode_raw = os.environ.get("WORKER_MODE") or _dotenv.get("WORKER_MODE", "")
 WORKER_MODE = _worker_mode_raw.lower() in ("1", "true", "yes")
 WORKER_URL = os.environ.get("WORKER_URL") or _dotenv.get("WORKER_URL", "http://127.0.0.1:7860")
+WORKER_MANAGEMENT_KEY = os.environ.get("WORKER_MANAGEMENT_KEY") or _dotenv.get("WORKER_MANAGEMENT_KEY") or API_KEY
+WORKER_CANDIDATE_URLS = {normalized_worker_url(url.strip()) for url in
+                        (os.environ.get("WORKER_CANDIDATE_URLS") or _dotenv.get("WORKER_CANDIDATE_URLS", "")).split(",") if url.strip()}
+worker_routing = WorkerRouting(STATE_DIR / "worker-routes.json")
+_worker_route_locks: dict[int, asyncio.Lock] = {}
 ARCH_MODE = "worker" if WORKER_MODE else "accounts"
+
+
+def worker_base(num):
+    current = containers.get(num)
+    if current is not None and WORKER_MODE:
+        return current.url.rsplit("/slot/", 1)[0]
+    return worker_routing.account(num, WORKER_URL)
+
+
+def worker_management_headers():
+    return {"Authorization": f"Bearer {WORKER_MANAGEMENT_KEY}"} if WORKER_MANAGEMENT_KEY else {}
+
+
+def remember_worker_session(sid, num, base):
+    worker_routing.remember("session", sid, num, base)
+    _session_routes[sid] = (num, time.time())
+
+
+def image_session_destination(body, target_group):
+    sid = (body or {}).get("session_id")
+    if not sid:
+        return None, None
+    saved = _session_routes.get(sid)
+    if not saved or time.time() - saved[1] >= _SESSION_ROUTE_TTL:
+        raise HTTPException(status_code=409, detail="图片编辑会话路由已失效，请重新上传图片开始新会话")
+    num, _ = saved
+    account = containers.get(num)
+    if account is None or not account.enabled:
+        raise HTTPException(status_code=409, detail="图片编辑会话所属账号不可用")
+    if account not in group_containers(target_group):
+        raise HTTPException(status_code=409, detail="图片编辑会话不属于当前分组")
+    base = worker_routing.sessions.get(sid, {}).get("worker", account.url.rsplit("/slot/", 1)[0])
+    remember_worker_session(sid, num, base)
+    return account, base
 
 def _safe_compare(a: str, b: str) -> bool:
     """Timing-safe string comparison."""
@@ -148,7 +188,7 @@ class Container:
     def __init__(self, num: int, port: int):
         self.num = num
         self.port = port
-        self.url = f"{WORKER_URL}/slot/{num}" if WORKER_MODE else f"http://127.0.0.1:{port}"
+        self.url = f"{worker_routing.account(num, WORKER_URL)}/slot/{num}" if WORKER_MODE else f"http://127.0.0.1:{port}"
         self.healthy = False
         self.enabled = True
         self.error_count = 0
@@ -202,6 +242,7 @@ class Container:
     def to_dict(self):
         return {
             "num": self.num,
+            "worker_url": self.url.rsplit("/slot/", 1)[0] if WORKER_MODE else None,
             "port": self.port,
             "name": account_names.get(self.num, ""),
             "group": container_groups.get(self.num, ""),
@@ -507,8 +548,11 @@ def get_next_available(group: str | None = None, is_image: bool = False, level: 
 HEALTH_FAIL_TOLERANCE = 2   # consecutive failures before marking unhealthy
 async def check_health(c: Container, client: httpx.AsyncClient):
     """Read container's real state and make management decisions."""
+    checked_url = c.url
     try:
-        resp = await client.get(f"{c.url}/health", timeout=5.0)
+        resp = await client.get(f"{checked_url}/health", timeout=5.0)
+        if c.url != checked_url:
+            return
         data = resp.json()
         c.last_check = time.time()
 
@@ -603,6 +647,8 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             add_log("warn", c.num, f"状态异常: {status}, auth={auth_status}")
 
     except Exception as e:
+        if c.url != checked_url:
+            return
         c.health_fail_count += 1
         c.last_check = time.time()
         if c.health_fail_count == HEALTH_FAIL_TOLERANCE:
@@ -620,7 +666,7 @@ async def _container_exists(num: int) -> bool:
     if WORKER_MODE:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{WORKER_URL}/slot/{num}/health", timeout=3)
+                resp = await client.get(f"{worker_base(num)}/slot/{num}/health", timeout=3)
                 return resp.status_code != 404
         except Exception:
             return True  # assume exists if worker unreachable
@@ -654,7 +700,8 @@ async def _do_restart(c: Container):
         c.initializing = True
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.post(f"{WORKER_URL}/worker/reload-slot/{c.num}", timeout=30)
+                resp = await client.post(f"{worker_base(c.num)}/worker/reload-slot/{c.num}", timeout=30,
+                                         headers=worker_management_headers())
                 if resp.status_code in (200, 202):
                     c.health_fail_count = 0
                     c.healthy = False
@@ -843,8 +890,11 @@ async def health_loop():
 
 async def fetch_usage(c: Container, client: httpx.AsyncClient):
     """Pull 5h/weekly usage limits for one account. Failure keeps the previous value."""
+    checked_url = c.url
     try:
-        resp = await client.get(f"{c.url}/usage", timeout=30.0)
+        resp = await client.get(f"{checked_url}/usage", timeout=30.0)
+        if c.url != checked_url:
+            return
         if resp.status_code == 200:
             c.usage = resp.json()
             c.usage_at = time.time()
@@ -852,7 +902,8 @@ async def fetch_usage(c: Container, client: httpx.AsyncClient):
         else:
             c.usage_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
     except Exception as e:
-        c.usage_error = f"{type(e).__name__}: {str(e)[:120]}"
+        if c.url == checked_url:
+            c.usage_error = f"{type(e).__name__}: {str(e)[:120]}"
 
 
 async def usage_loop():
@@ -877,6 +928,8 @@ async def usage_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    worker_routing.load()
+    _session_routes.update({sid: (row["slot"], row["updated_at"]) for sid, row in worker_routing.sessions.items()})
     load_account_names()
     load_groups()
     discover_containers()
@@ -1222,7 +1275,14 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                              and n not in container_groups
                              and (not is_image_req or not c.img_blocked))
 
-    retries = min(MAX_RETRIES, pool_available)
+    try:
+        pinned_account, pinned_base = image_session_destination(body_json, target_group) if task.task_type == "image" else (None, None)
+    except HTTPException as exc:
+        task.status = "failed"
+        task.error = str(exc.detail)
+        await task.events.put({"type": "failed", "error": task.error, "final": True})
+        return
+    retries = 1 if pinned_account is not None else min(MAX_RETRIES, pool_available)
     if retries == 0:
         task.status = "failed"
         task.error = f"没有可用容器（分组 [{target_group}]）" if target_group else "请求未指定分组前缀，无默认无分组池"
@@ -1242,7 +1302,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
             await task.events.put({"type": "cancelled", "final": True})
             return
 
-        c = get_next_available(target_group, is_image=is_image_req)
+        c = pinned_account or get_next_available(target_group, is_image=is_image_req)
         if not c:
             break
 
@@ -1252,7 +1312,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
             "container": container_label, "container_num": c.num,
         })
 
-        target_url = f"{c.url}/v1/{path}"
+        target_url = f"{pinned_base}/slot/{c.num}/v1/{path}" if pinned_base else f"{c.url}/v1/{path}"
         c.total_requests += 1
         c.busy = True
 
@@ -1273,7 +1333,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                     await task.events.put({"type": "failed", "error": task.error, "final": True})
                     return
 
-                if resp.status_code >= 500 or resp.status_code == 422:
+                if resp.status_code >= 400:
                     error_body = resp.text[:200]
                     c.busy = False
                     c.error_count += 1
@@ -1306,7 +1366,7 @@ async def _run_generation_task(task: GenerationTask, body_json: dict, headers: d
                 if task.task_type == "image":
                     sid = resp_json.get("session_id")
                     if sid:
-                        _session_routes[sid] = (c.num, time.time())
+                        remember_worker_session(sid, c.num, target_url.rsplit("/slot/", 1)[0])
 
                 task.status = "success"
                 task.result = resp_json
@@ -1363,14 +1423,43 @@ async def proxy_research_query(request: Request, task_id: str = ""):
         headers["authorization"] = f"Bearer {API_KEY}"
 
     # Research task queries go to worker root, not per-slot endpoint
-    worker_base = WORKER_URL if WORKER_MODE else "http://127.0.0.1:7860"
+    worker_routing.prune()
+    origin = worker_routing.research.get(task_id)
+    default_base = WORKER_URL if WORKER_MODE else "http://127.0.0.1:7860"
     path = f"/v1/research/{task_id}" if task_id else "/v1/research"
 
     try:
         client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0))
         try:
-            resp = await client.get(f"{worker_base}{path}", headers=headers)
-            return JSONResponse(content=resp.json(), status_code=resp.status_code)
+            if origin:
+                resp = await client.get(f"{origin['worker']}{path}", headers=headers)
+                worker_routing.remember("research", task_id, origin["slot"], origin["worker"])
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+            bases = sorted(worker_routing.workers(default_base)) if WORKER_MODE else [default_base]
+            rows = []
+            failures = 0
+            for base in bases:
+                try:
+                    resp = await client.get(f"{base}{path}", headers=headers)
+                    if task_id:
+                        if resp.status_code == 404:
+                            continue
+                        if resp.status_code != 200:
+                            failures += 1
+                            continue
+                        body = resp.json()
+                        worker_routing.remember("research", task_id, int(body["slot"]), base)
+                        return JSONResponse(content=body)
+                    if resp.status_code != 200:
+                        failures += 1
+                        continue
+                    rows.extend(resp.json().get("tasks", []))
+                except httpx.HTTPError:
+                    failures += 1
+            if task_id:
+                return JSONResponse(status_code=502 if failures else 404,
+                                    content={"detail": "研究任务所在 worker 无法确认" if failures else "Research task not found"})
+            return {"tasks": rows, "partial": bool(failures)}
         finally:
             await client.aclose()
     except Exception as e:
@@ -1382,6 +1471,8 @@ class _StreamModelTruth:
     def __init__(self, levels):
         self.levels = set(levels) | {"flash", "flash-lite", "lite", "pro", "unknown", ""}
         self.actual = "unknown"
+        self.failed = False
+        self.error = ""
         self.pending = b""
         self.data = []
 
@@ -1403,6 +1494,10 @@ class _StreamModelTruth:
             event = json.loads(b"\n".join(data))
         except (ValueError, UnicodeDecodeError):
             return
+        if isinstance(event, dict) and event.get("error") is not None:
+            self.failed = True
+            detail = event["error"]
+            self.error = str(detail.get("message", "流式请求失败") if isinstance(detail, dict) else detail)[:200]
         model = event.get("model") if isinstance(event, dict) else None
         if isinstance(model, str) and model.strip().lower() not in self.levels:
             self.actual = model
@@ -1468,13 +1563,9 @@ async def proxy(request: Request, path: str):
         del _session_routes[k]
 
     session_affinity_container = None
+    session_worker_base = None
     if body_json and "images" in path:
-        req_session_id = body_json.get("session_id")
-        if req_session_id and req_session_id in _session_routes:
-            cnum, ts = _session_routes[req_session_id]
-            if cnum in containers and containers[cnum].available:
-                session_affinity_container = containers[cnum]
-                _session_routes[req_session_id] = (cnum, now)
+        session_affinity_container, session_worker_base = image_session_destination(body_json, target_group)
 
     if body_json and "images" in path:
         body_json, body, headers = _build_image_prompt(body_json, headers)
@@ -1495,6 +1586,8 @@ async def proxy(request: Request, path: str):
 
     if chat_level is not None:
         pool_available = sum(c.available for c in present)
+    if session_affinity_container is not None:
+        pool_available = 1  # Existing conversations must never fail over to another worker.
 
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
@@ -1525,7 +1618,9 @@ async def proxy(request: Request, path: str):
             break
 
         attempt_headers = {}
-        target_url = f"{c.url}/v1/{path}"
+        request_slot_url = (f"{session_worker_base}/slot/{c.num}" if session_affinity_container is c and session_worker_base else c.url)
+        request_worker_base = request_slot_url.rsplit("/slot/", 1)[0]
+        target_url = f"{request_slot_url}/v1/{path}"
         c.total_requests += 1
         c.busy = True
 
@@ -1570,8 +1665,10 @@ async def proxy(request: Request, path: str):
                         f"HTTP {resp.status_code}: {error_body}",
                         request=resp.request, response=resp
                     )
-                c.error_count = 0
-                c.cooldown_until = 0
+                is_chat_stream = chat_level is not None and (body_json or {}).get("stream")
+                if not is_chat_stream and resp.status_code < 400:
+                    c.error_count = 0
+                    c.cooldown_until = 0
                 if "images" in path or "videos" in path:
                     c.image_requests += 1
                 else:
@@ -1602,7 +1699,7 @@ async def proxy(request: Request, path: str):
                         resp_json = json.loads(resp_body)
                         sid = resp_json.get("session_id")
                         if sid:
-                            _session_routes[sid] = (c.num, time.time())
+                            remember_worker_session(sid, c.num, request_worker_base)
                     except (json.JSONDecodeError, AttributeError):
                         pass
                     return Response(
@@ -1612,6 +1709,18 @@ async def proxy(request: Request, path: str):
                         headers=trace_headers,
                     )
 
+                if is_research_req and request.method == "POST":
+                    resp_body = await resp.aread()
+                    c.busy = False
+                    await resp.aclose()
+                    await client.aclose()
+                    if resp.status_code < 400:
+                        task_id = json.loads(resp_body).get("task_id")
+                        if task_id:
+                            worker_routing.remember("research", task_id, c.num, request_worker_base)
+                    return Response(content=resp_body, status_code=resp.status_code,
+                                    media_type="application/json", headers=trace_headers)
+
                 async def stream_generator():
                     succeeded = False
                     try:
@@ -1619,7 +1728,18 @@ async def proxy(request: Request, path: str):
                             yield chunk
                             if stream_truth is not None:
                                 stream_truth.feed(chunk)
-                        succeeded = resp.status_code < 400 and resp.headers.get("x-oneclick-success") != "false"
+                        if stream_truth is not None:
+                            stream_truth.finish()
+                        succeeded = (resp.status_code < 400 and resp.headers.get("x-oneclick-success") != "false"
+                                     and not (stream_truth and stream_truth.failed))
+                        if succeeded:
+                            c.error_count = 0
+                            c.cooldown_until = 0
+                        elif stream_truth and stream_truth.failed:
+                            c.error_count += 1
+                            c.total_errors += 1
+                            c.last_error = stream_truth.error
+                            add_log("error", c.num, f"流式请求失败: {stream_truth.error}")
                     finally:
                         if chat_level is not None:
                             truth_headers = dict(resp.headers)
@@ -1704,6 +1824,83 @@ async def gateway_status():
     }
 
 
+@app.post("/gateway/worker-route/{num}", dependencies=[Depends(verify_panel_auth)])
+async def switch_worker_route(num: int, request: Request):
+    """Validate the candidate without changing the serving worker on failure."""
+    global _models_cache_time
+    if not WORKER_MODE:
+        raise HTTPException(status_code=409, detail="当前不是 worker 模式")
+    c = containers.get(num)
+    if c is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    body = await request.json()
+    try:
+        candidate = normalized_worker_url(body.get("worker_url", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    allowed = {WORKER_URL, *WORKER_CANDIDATE_URLS, *worker_routing.accounts.values()}
+    if candidate not in allowed:
+        raise HTTPException(status_code=400, detail="该 worker 未列入允许迁移的地址")
+    async with _worker_route_locks.setdefault(num, asyncio.Lock()):
+        previous = worker_base(num)
+        if candidate == previous:
+            return {"ok": True, "changed": False, "worker_url": previous}
+        if c.busy:
+            raise HTTPException(status_code=409, detail="账号仍有请求执行中，完成后再切换")
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                health_response = await client.get(f"{candidate}/slot/{num}/health", timeout=10)
+                health_response.raise_for_status()
+                health = health_response.json()
+                if (health.get("status") != "healthy" or health.get("auth_status") != "AVAILABLE"
+                        or not health.get("client_ready") or health.get("retiring")):
+                    raise HTTPException(status_code=409, detail="新 worker 账号尚未认证成功，保留原路由")
+                models = health.get("models") or []
+                model = next((row.get("id") for row in models if row.get("level") == "flash"), None)
+                model = model or next((row.get("id") for row in models if row.get("id")), None)
+                if not model:
+                    raise HTTPException(status_code=409, detail="新 worker 没有可用模型，保留原路由")
+                probe = await client.post(f"{candidate}/slot/{num}/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {API_KEY}"}, json={"model": model,
+                    "messages": [{"role": "user", "content": "Reply with OK."}], "stream": False, "max_tokens": 8})
+                probe.raise_for_status()
+                output = probe.json()
+                reply = (output.get("choices") or [{}])[0].get("message", {}).get("content")
+                if output.get("error") or probe.headers.get("x-oneclick-success") == "false" or not isinstance(reply, str) or not reply.strip():
+                    raise HTTPException(status_code=409, detail="新 worker 未通过聊天验证，保留原路由")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="新 worker 验证失败，原账号会话与路由保持不变")
+        if c.busy or containers.get(num) is not c or worker_base(num) != previous:
+            raise HTTPException(status_code=409, detail="验证期间账号状态变化，请重试切换")
+        # Persist first. A failed disk write must not switch the live destination.
+        worker_routing.switch(num, candidate)
+        c.url = f"{candidate}/slot/{num}"
+        c.healthy = True
+        c.initializing = False
+        c.needs_cookie = False
+        c.last_error = ""
+        c.last_error_type = ""
+        c.last_http_status = None
+        c.health_fail_count = 0
+        c.error_count = 0
+        c.cooldown_until = 0
+        c.usage = None
+        c.usage_at = 0
+        c.usage_error = ""
+        update_container_models(c, health.get("models", []))
+        _models_cache_time = 0
+        add_log("info", num, "新 worker 登录与聊天验证通过，已切换新请求；旧任务仍留在原实例")
+        return {"ok": True, "changed": True, "worker_url": candidate, "previous_worker_url": previous}
+
+
+@app.get("/gateway/worker-routes", dependencies=[Depends(verify_panel_auth)])
+async def gateway_worker_routes():
+    worker_routing.prune()
+    return {"accounts": {str(num): worker_base(num) for num in containers},
+            "workers": sorted(worker_routing.workers(WORKER_URL)),
+            "pinned_sessions": len(worker_routing.sessions), "pinned_research": len(worker_routing.research)}
+
+
 @app.get("/gateway/logs", dependencies=[Depends(verify_panel_auth)])
 async def gateway_logs(limit: int = 50, raw: bool = False):
     """Return recent gateway logs, filtered to core items by default."""
@@ -1747,9 +1944,12 @@ async def delete_container(num: int):
     if WORKER_MODE:
         try:
             async with httpx.AsyncClient() as client:
-                await client.delete(f"{WORKER_URL}/worker/slot/{num}", timeout=10)
-        except Exception:
-            pass  # slot may already be gone
+                resp = await client.delete(f"{worker_base(num)}/worker/slot/{num}", timeout=20,
+                                           headers=worker_management_headers())
+                if resp.status_code not in (200, 404):
+                    raise HTTPException(status_code=resp.status_code, detail="账号删除未完成，保留网关记录")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="无法确认账号删除结果，保留网关记录")
     else:
         cname = f"gemini_api_account_{num}"
         try:
@@ -1952,9 +2152,10 @@ async def deploy_cookie(num: int, request: Request):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    f"{WORKER_URL}/worker/deploy-slot/{num}",
+                    f"{worker_base(num)}/worker/deploy-slot/{num}",
                     json={"psid": psid, "psidts": psidts},
                     timeout=30,
+                    headers=worker_management_headers(),
                 )
                 if resp.status_code not in (200, 202):
                     detail = resp.text[:200]
@@ -2038,7 +2239,8 @@ async def container_log(num: int, tail: int = 60):
     if WORKER_MODE:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{WORKER_URL}/worker/slot-logs/{num}?tail={tail}", timeout=5)
+                resp = await client.get(f"{worker_base(num)}/worker/slot-logs/{num}?tail={tail}", timeout=5,
+                                        headers=worker_management_headers())
                 data = resp.json()
                 return {"ok": True, "lines": data.get("lines", [])}
         except Exception as e:

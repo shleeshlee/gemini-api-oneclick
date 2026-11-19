@@ -37,6 +37,9 @@ class LoginRecovery(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        routing_patch = patch.object(gateway, "worker_routing", gateway.WorkerRouting(self.root / "worker-routes.json"))
+        routing_patch.start()
+        self.addCleanup(routing_patch.stop)
         self.patches = [patch("gemini_webapi.cookie_audit.CookieAudit.create", return_value=None),
                         patch.object(worker, "_slot_tasks", {}),
                         patch.object(worker, "slots", {}),

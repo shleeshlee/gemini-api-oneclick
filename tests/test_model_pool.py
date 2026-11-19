@@ -131,6 +131,7 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
             (gateway, "group_round_robin", {}), (gateway, "group_defs", []), (gateway, "API_KEY", ""),
             (gateway, "_models_cache_time", float("inf")), (gateway, "_known_model_levels", set()),
             (gateway, "MODEL_TRUTH_FILE", self.tmp / "truth.json"),
+            (gateway, "worker_routing", gateway.WorkerRouting(self.tmp / "worker-routes.json")),
             (gateway, "add_log", Mock()), (gateway, "ENVS_DIR", self.tmp),
             (main, "_model_slot", Slot(num=0)), (main, "_main_best_labels", {}),
         ):
@@ -320,12 +321,21 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.post(name="pro")).status_code, 404)
 
     def test_counterexample_media_unchanged(self):
+        class NormalizeHeaderEncoding(ast.NodeTransformer):
+            def visit_Call(self, node):
+                node = self.generic_visit(node)
+                if isinstance(node.func, ast.Name) and node.func.id == "header_safe" and len(node.args) == 1:
+                    return node.args[0]
+                return node
         baseline = json.loads((ROOT / "tests/media_probe_baseline.json").read_text())
         for filename, expected in baseline.items():
             tree = ast.parse((ROOT / filename).read_text())
             nodes = {n.name: n for n in tree.body if hasattr(n, "name")}
             for name, digest in expected.items():
                 with self.subTest(file=filename, function=name):
+                    # Response encoding is now fixed; keep the original media
+                    # model selection/generation logic snapshot unchanged.
+                    nodes[name] = NormalizeHeaderEncoding().visit(nodes[name])
                     self.assertEqual(hashlib.sha256(ast.dump(nodes[name], include_attributes=False).encode()).hexdigest(), digest)
         for name in ("pro", "argon", "anything"):
             self.assertIs(worker.resolve_model_for_media(name)[0], Model.BASIC_FLASH)

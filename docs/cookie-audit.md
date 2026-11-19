@@ -20,7 +20,7 @@ python3 scripts/cookie-audit.py --state-dir state --slot 9 --limit 100 --json
 3. `cookie_writeback`：written / unchanged / throttled / lock_busy / no_client / no_env_path / invalid_cookie_pair / incomplete_env / failed / request_failed。written 同时带内存候选值、旧文件、新文件的指纹；节流会记录剩余等待时间。写回策略仍只保存原有两项 Cookie，保持 600 秒间隔及原文件锁。
 4. 下次启动再次记录 `credentials_loaded`，与最后观察或写回的文件版本比较。匹配只证明这两项凭据版本一致，不代表 Google 一定接受登录。
 
-`api_complete.transport_success` 只表示 HTTP/ASGI 传输是否完成，不等于模型成功；HTTP 200 的 SSE 内部错误另记 `chat_stream_error`。成功流式请求也会产生 HTTP 与写回审计。
+`api_complete.transport_success` 只表示 HTTP/ASGI 传输是否完成，不等于模型成功；`business_success` 单独记录业务是否成功，HTTP 200 的 SSE 内部错误另记 `chat_stream_error`，且跳过 Cookie 写回。成功流式请求也会产生 HTTP 与写回审计。凭据文件被外部更新、账号正在初始化或退休时，写回分别记录 `file_changed`、`initializing`、`retiring` 并放弃写入。
 
 并发请求共享 Cookie 容器，因此 `changes` 是共享容器在请求期间观察到的差异；`overlapped=true` 时不能把全部差异归因于这一条响应，应结合 `response_cookies` 和时间顺序。会话重载后，旧请求仍保留旧 client_id；写回期间实例被替换会标 `client_changed_during_write`。
 
