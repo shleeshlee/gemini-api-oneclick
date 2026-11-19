@@ -303,12 +303,16 @@ def main():
         if restore_needed:
             report['routing_restored'] = restore_routing(panel, panel_key, report['original_enabled'])
             report['manual_restore_required'] = not report['routing_restored']
-        current = {name: json.loads(run('docker', 'inspect', name))[0]['State']['StartedAt'] for name in report['original_started']}
-        report['serving_workers_not_restarted'] = current == report['original_started']
-        code, final_health = request('http://127.0.0.1:7860/slot/20/health', api_key)
-        report['serving_final_health'] = {k: final_health.get(k) for k in ('status', 'auth_status', 'last_error_type')}
-        emit('experiment_finished', serving_workers_not_restarted=report['serving_workers_not_restarted'],
-             routing_restored=report.get('routing_restored'), serving_health=report['serving_final_health'])
+            emit('routing_restore_checked', restored=report['routing_restored'], manual_restore_required=report['manual_restore_required'])
+        try:
+            current = {name: json.loads(run('docker', 'inspect', name))[0]['State']['StartedAt'] for name in report['original_started']}
+            report['serving_workers_not_restarted'] = current == report['original_started']
+            code, final_health = request('http://127.0.0.1:7860/slot/20/health', api_key)
+            report['serving_final_health'] = {k: final_health.get(k) for k in ('status', 'auth_status', 'last_error_type')}
+        except Exception as exc:
+            emit('final_diagnostic_error', error_type=type(exc).__name__)
+        emit('experiment_finished', serving_workers_not_restarted=report.get('serving_workers_not_restarted'),
+             routing_restored=report.get('routing_restored'), serving_health=report.get('serving_final_health'))
         if report.get('manual_restore_required'):
             raise RuntimeError('Account 20 routing restoration failed; manual restoration required')
 
