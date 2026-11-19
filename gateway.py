@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from app.slot import request_level, label_level, model_version
 from app.worker_routing import WorkerRouting, normalized_worker_url
+from app.proxy_settings import ProxySettings
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -72,6 +73,8 @@ WORKER_MANAGEMENT_KEY = os.environ.get("WORKER_MANAGEMENT_KEY") or _dotenv.get("
 WORKER_CANDIDATE_URLS = {normalized_worker_url(url.strip()) for url in
                         (os.environ.get("WORKER_CANDIDATE_URLS") or _dotenv.get("WORKER_CANDIDATE_URLS", "")).split(",") if url.strip()}
 worker_routing = WorkerRouting(STATE_DIR / "worker-routes.json")
+proxy_settings = ProxySettings(STATE_DIR / "proxy-settings.json")
+_proxy_settings_lock = asyncio.Lock()
 _worker_route_locks: dict[int, asyncio.Lock] = {}
 ARCH_MODE = "worker" if WORKER_MODE else "accounts"
 
@@ -687,6 +690,11 @@ async def _container_exists(num: int) -> bool:
 
 async def _remove_container(num: int):
     """Remove container from gateway: delete env file and drop from memory."""
+    async with _proxy_settings_lock:
+        if str(num) in proxy_settings.assignments:
+            choices = dict(proxy_settings.assignments)
+            choices.pop(str(num), None)
+            proxy_settings.commit(assignments=choices)
     env_file = ENVS_DIR / f"account{num}.env"
     if env_file.exists():
         env_file.unlink()
@@ -931,6 +939,7 @@ async def usage_loop():
 @asynccontextmanager
 async def lifespan(app):
     worker_routing.load()
+    proxy_settings.load()
     _session_routes.update({sid: (row["slot"], row["updated_at"]) for sid, row in worker_routing.sessions.items()})
     load_account_names()
     load_groups()
@@ -1843,7 +1852,7 @@ async def switch_worker_route(num: int, request: Request):
     allowed = {WORKER_URL, *WORKER_CANDIDATE_URLS, *worker_routing.accounts.values()}
     if candidate not in allowed:
         raise HTTPException(status_code=400, detail="该 worker 未列入允许迁移的地址")
-    async with _worker_route_locks.setdefault(num, asyncio.Lock()):
+    async with _proxy_settings_lock, _worker_route_locks.setdefault(num, asyncio.Lock()):
         previous = worker_base(num)
         if candidate == previous:
             return {"ok": True, "changed": False, "worker_url": previous}
@@ -1854,6 +1863,17 @@ async def switch_worker_route(num: int, request: Request):
                 health_response = await client.get(f"{candidate}/slot/{num}/health", timeout=10)
                 health_response.raise_for_status()
                 health = health_response.json()
+                expected_id = proxy_settings.assignments.get(str(num), "")
+                if expected_id or health.get("proxy_id"):
+                    binding_response = await client.get(f"{candidate}/worker/proxy/{num}",
+                                                        headers=worker_management_headers(), timeout=10)
+                    binding_response.raise_for_status()
+                    binding = binding_response.json()
+                    profile = proxy_settings.proxies.get(expected_id)
+                    expected_url = profile["url"] if profile else ""
+                    if (binding.get("proxy_id") != expected_id or binding.get("proxy_url") != expected_url
+                            or (expected_id and profile is None)):
+                        raise HTTPException(409, "新 worker 的代理分配不一致，保留原路由")
                 if (health.get("status") != "healthy" or health.get("auth_status") != "AVAILABLE"
                         or not health.get("client_ready") or health.get("retiring")):
                     raise HTTPException(status_code=409, detail="新 worker 账号尚未认证成功，保留原路由")
@@ -2125,14 +2145,113 @@ async def delete_group(request: Request):
     return {"ok": True, "ungrouped": len(removed)}
 
 
+@app.get("/gateway/proxies", dependencies=[Depends(verify_panel_auth)])
+async def list_proxies():
+    return proxy_settings.public()
+
+
+@app.post("/gateway/proxies", dependencies=[Depends(verify_panel_auth)])
+async def add_proxy(request: Request):
+    body = await request.json()
+    name, url = body.get("name", ""), body.get("url", "")
+    if any(not isinstance(value, str) or any(c in value for c in "\r\n\0") for value in (name, url)):
+        raise HTTPException(400, "名称或代理地址格式无效")
+    name, url = name.strip(), url.strip()
+    if not url:
+        raise HTTPException(400, "请填写代理地址")
+    identity = _uuid.uuid4().hex
+    # The default label must not expose an optional username/password in the URL.
+    label = name or url.rsplit("@", 1)[-1]
+    profile = {"id": identity, "name": label, "url": url}
+    async with _proxy_settings_lock:
+        profiles = {**proxy_settings.proxies, identity: profile}
+        try:
+            proxy_settings.commit(proxies=profiles)
+        except OSError:
+            raise HTTPException(500, "代理地址保存失败")
+    return {"ok": True, "proxy": profile}
+
+
+@app.delete("/gateway/proxies/{identity}", dependencies=[Depends(verify_panel_auth)])
+async def delete_proxy(identity: str):
+    async with _proxy_settings_lock:
+        if identity not in proxy_settings.proxies:
+            raise HTTPException(404, "代理地址不存在")
+        if identity in proxy_settings.assignments.values():
+            raise HTTPException(409, "该代理已分配给账号，请先取消分配")
+        profiles = dict(proxy_settings.proxies)
+        del profiles[identity]
+        try:
+            proxy_settings.commit(proxies=profiles)
+        except OSError:
+            raise HTTPException(500, "代理地址删除失败")
+    return {"ok": True}
+
+
+@app.post("/gateway/proxy/{num}", dependencies=[Depends(verify_panel_auth)])
+async def assign_proxy(num: int, request: Request):
+    if num not in containers:
+        raise HTTPException(404, "账号不存在")
+    if not WORKER_MODE:
+        raise HTTPException(409, "当前部署模式不支持单账号代理")
+    body = await request.json()
+    identity = body.get("proxy_id", "")
+    if not isinstance(identity, str):
+        raise HTTPException(400, "代理选择格式无效")
+    async with _proxy_settings_lock, _worker_route_locks.setdefault(num, asyncio.Lock()):
+        if identity and identity not in proxy_settings.proxies:
+            raise HTTPException(404, "代理地址不存在")
+        profile = proxy_settings.proxies.get(identity)
+        payload = {"proxy_id": identity, "proxy_url": profile["url"] if profile else ""}
+        endpoint = f"{worker_base(num)}/worker/proxy/{num}"
+        async with httpx.AsyncClient(timeout=30, headers=worker_management_headers()) as client:
+            try:
+                previous = await client.get(endpoint)
+                if previous.status_code != 200:
+                    raise HTTPException(previous.status_code, "无法读取该账号的代理配置")
+                old = previous.json()
+                if not isinstance(old.get("proxy_id"), str) or not isinstance(old.get("proxy_url"), str):
+                    raise HTTPException(502, "账号代理配置响应无效")
+                old = {key: old[key] for key in ("proxy_id", "proxy_url")}
+                try:
+                    response = await client.post(endpoint, json=payload)
+                except asyncio.CancelledError:
+                    await asyncio.shield(client.post(endpoint, json=old))
+                    raise
+                except httpx.HTTPError:
+                    # The request may have committed before the connection failed.
+                    await client.post(endpoint, json=old)
+                    raise HTTPException(502, "代理保存结果未确认，请重新选择")
+                if response.status_code != 200:
+                    detail = "账号正在处理请求，请稍后保存" if response.status_code == 409 else "账号代理保存失败"
+                    raise HTTPException(response.status_code, detail)
+                choices = dict(proxy_settings.assignments)
+                if identity:
+                    choices[str(num)] = identity
+                else:
+                    choices.pop(str(num), None)
+                try:
+                    proxy_settings.commit(assignments=choices)
+                except OSError:
+                    rollback = await client.post(endpoint, json=old)
+                    if rollback.status_code != 200:
+                        raise HTTPException(500, "配置保存及回滚失败，请重新保存该账号代理")
+                    raise HTTPException(500, "配置保存失败，已恢复原代理")
+            except httpx.HTTPError:
+                raise HTTPException(502, "无法连接账号服务，请重试")
+    return {"ok": True, "proxy_id": identity}
+
+
 @app.post("/gateway/deploy/{num}", dependencies=[Depends(verify_panel_auth)])
 async def deploy_cookie(num: int, request: Request):
     """Deploy cookies to a container: write env file and recreate container."""
     body = await request.json()
     psid = body.get("psid", "").strip().replace("\n", "").replace("\r", "")
     psidts = body.get("psidts", "").strip().replace("\n", "").replace("\r", "")
-    if not psid:
-        raise HTTPException(status_code=400, detail="psid 不能为空")
+    if not psid and not psidts:
+        return {"ok": True, "deployed": False, "message": "没有新 Cookie，未重新部署"}
+    if not psid or not psidts:
+        raise HTTPException(status_code=400, detail="请完整填写两项新 Cookie")
 
     # Write env file, preserving existing API_KEY
     env_file = ENVS_DIR / f"account{num}.env"

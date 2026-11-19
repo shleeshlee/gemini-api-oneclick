@@ -333,8 +333,8 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
             nodes = {n.name: n for n in tree.body if hasattr(n, "name")}
             for name, digest in expected.items():
                 with self.subTest(file=filename, function=name):
-                    # Response encoding is now fixed; keep the original media
-                    # model selection/generation logic snapshot unchanged.
+                    # Snapshot includes explicit slot download proxies and safe error
+                    # summaries; BASIC_FLASH routing is also asserted below.
                     nodes[name] = NormalizeHeaderEncoding().visit(nodes[name])
                     self.assertEqual(hashlib.sha256(ast.dump(nodes[name], include_attributes=False).encode()).hexdigest(), digest)
         for name in ("pro", "argon", "anything"):

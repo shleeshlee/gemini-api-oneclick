@@ -56,6 +56,143 @@ class WorkerSafety(unittest.IsolatedAsyncioTestCase):
             return await client.post(path, json=body,
                 headers={"Authorization": "Bearer synthetic-test-key"} if authorized else {})
 
+    def test_output_redaction_preserves_media_urls_models_and_ids(self):
+        proxy = "http://user:gemini@proxy.invalid:8080"
+        value = {"url": "https://lh3.googleusercontent.com/gemini-image", "model": "gemini-flash",
+                 "id": "user-gemini-123", "error": f"Failed via {proxy}; password gemini",
+                 "frames": [{"part_json": ["https://lh3.googleusercontent.com/gemini-image", "user-gemini-123"]}],
+                 "proxy_url": proxy}
+        token = worker._request_proxies.set((proxy,))
+        try:
+            result = worker.safe_event_data(value)
+        finally:
+            worker._request_proxies.reset(token)
+        for key in ("url", "model", "id", "frames"):
+            self.assertEqual(result[key], value[key])
+        self.assertEqual(result["proxy_url"], "http://proxy.invalid:8080")
+        self.assertNotIn("gemini", result["error"])
+        self.assertEqual(value["proxy_url"], proxy)
+
+    async def test_media_parser_and_raw_fallback_receive_original_snapshot(self):
+        self.slot.proxy_url = self.client.proxy = "http://user:image@proxy.invalid:8080"
+        url = "https://lh3.googleusercontent.com/synthetic-image"
+        raw = {"frames": [{"part_json": [None, None, None, None, [["rcid", ["image"], url]]]}]}
+        output = SimpleNamespace(images=[SimpleNamespace(url=url)], text="image", candidates=[])
+        self.client.start_chat = Mock(return_value=SimpleNamespace(send_message=AsyncMock(return_value=output), cid="synthetic"))
+        async def parse(images, **kwargs):
+            self.assertIs(kwargs["raw_capture"], raw)
+            return [], worker.collect_generated_image_urls(kwargs["raw_capture"])
+        with patch.object(worker.RawCaptureTracer, "get_snapshot", return_value=raw):
+            with patch.object(worker, "parse_image_generation_result", side_effect=parse):
+                result = await self.post("/slot/7/v1/images/generations", {"prompt": "test"})
+                self.assertEqual(result.status_code, 200, result.text)
+                self.assertEqual(result.json()["data"], [{"url": url}])
+            self.client.start_chat.return_value.send_message.side_effect = RuntimeError("synthetic failure")
+            result = await self.post("/slot/7/v1/images/generations", {"prompt": "test"})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["data"], [{"url": url}])
+        self.assertEqual(worker.collect_generated_image_urls(raw), [url])
+
+    async def test_other_account_proxy_password_does_not_rewrite_error(self):
+        other = Slot(num=8, proxy_url="http://user:gemini@proxy.invalid:8080")
+        self.slot.proxy_url = self.client.proxy = "http://own:synthetic-secret@proxy.invalid:8080"
+        async def broken(*args, **kwargs):
+            raise RuntimeError("gemini-flash failed for user; synthetic-secret")
+            yield
+        self.client.generate_content_stream = broken
+        with patch.dict(worker.slots, {8: other}):
+            result = await self.post("/slot/7/v1/chat/completions", {"model": "gemini-flash", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(result.status_code, 500)
+        self.assertIn("gemini-flash failed for user", result.text)
+        self.assertNotIn("synthetic-secret", result.text)
+
+    async def test_media_download_helpers_explicit_proxy_and_no_environment(self):
+        proxy = "http://synthetic-user:synthetic-password@proxy.invalid:8080"
+        media = SimpleNamespace(url="https://example.invalid/media", cookies={}, account_index=0, proxy=proxy)
+        response = SimpleNamespace(status_code=200, content=b"\x00\x00\x00\x18ftypisom")
+        http = SimpleNamespace(get=AsyncMock(return_value=response))
+        context = AsyncMock()
+        context.__aenter__.return_value = http
+        with patch.object(worker, "AsyncClient", return_value=context) as factory:
+            self.assertTrue(await worker.download_image_as_base64(media))
+            self.assertTrue(await worker.download_video_as_base64(media))
+            self.assertTrue(await worker.download_audio_as_base64(media.url, proxy=proxy))
+            for call in factory.call_args_list:
+                self.assertEqual(call.kwargs["proxy"], proxy)
+                self.assertFalse(call.kwargs["trust_env"])
+            factory.reset_mock()
+            # Explicit direct mode must override the object's stale old proxy.
+            self.assertTrue(await worker.download_image_as_base64(media, proxy=None))
+            self.assertIsNone(factory.call_args.kwargs["proxy"])
+
+    async def test_media_and_chat_downloads_use_current_client_proxy(self):
+        self.client.proxy = "http://current.invalid:8080"
+        media = SimpleNamespace(url="https://example.invalid/media", mp3_url="https://example.invalid/audio",
+                                cookies={}, account_index=0, proxy="http://stale.invalid:8080",
+                                thumbnail_url="", mp3_thumbnail="")
+        output = SimpleNamespace(images=[media], videos=[media], media=[media], text="generated",
+                                 text_delta="generated", thoughts_delta="", candidates=[])
+        self.client.start_chat = Mock(return_value=SimpleNamespace(send_message=AsyncMock(return_value=output), cid="synthetic"))
+        self.client.generate_content = AsyncMock(return_value=output)
+        self.client.watchdog_timeout = 180
+        async def stream(*args, **kwargs):
+            yield output
+        self.client.generate_content_stream = stream
+        response = SimpleNamespace(status_code=200, content=b"\x00\x00\x00\x18ftypisom")
+        context = AsyncMock()
+        context.__aenter__.return_value = SimpleNamespace(get=AsyncMock(return_value=response))
+        with patch.object(worker, "AsyncClient", return_value=context) as factory:
+            for kind in ("images", "videos", "music"):
+                with self.subTest(kind=kind):
+                    result = await self.post(f"/slot/7/v1/{kind}/generations", {"prompt": "test"})
+                    self.assertEqual(result.status_code, 200, result.text)
+            for streaming in (False, True):
+                result = await self.post("/slot/7/v1/chat/completions", {"model": "gemini-flash",
+                    "messages": [{"role": "user", "content": "hi"}], "stream": streaming})
+                self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(factory.call_count, 6)
+            self.assertTrue(all(call.kwargs["proxy"] == self.client.proxy for call in factory.call_args_list))
+
+    async def test_proxy_error_is_redacted_in_responses_logs_events_and_raw_capture(self):
+        secret = "synthetic-password"
+        proxy = f"http://synthetic-user:{secret}@127.0.0.1:bad"
+        self.slot.proxy_url = self.client.proxy = proxy
+        failure = RuntimeError(f"Failed to perform, curl: (5) Unsupported proxy syntax in '{proxy}'")
+        async def broken(*args, **kwargs):
+            raise failure
+            yield
+        self.client.generate_content_stream = broken
+        self.client.start_chat = Mock(return_value=SimpleNamespace(send_message=AsyncMock(side_effect=failure), cid="synthetic"))
+        self.client.generate_content = AsyncMock(side_effect=failure)
+        self.client.watchdog_timeout = 180
+        cases = [("chat/completions", {"model": "gemini-flash", "messages": [{"role": "user", "content": "hi"}], "stream": streaming}) for streaming in (False, True)]
+        cases += [(f"{kind}/generations", {"prompt": "test"}) for kind in ("images", "videos", "music")]
+        with patch.object(worker.logger, "error") as error_log, patch.object(worker.RawCaptureTracer, "get_snapshot", return_value={"frames": [{"error": str(failure)}]}):
+            for route, body in cases:
+                with self.subTest(route=route, stream=body.get("stream")):
+                    self.slot.state.update(initializing=False, auth_status="AVAILABLE", last_error_type="")
+                    result = await self.post(f"/slot/7/v1/{route}", body)
+                    self.assertIn(result.status_code, (200, 500))
+                    self.assertNotIn(secret, result.text)
+                    self.assertIn("[proxy]", result.text)
+            self.assertNotIn(secret, repr(error_log.call_args_list))
+            self.assertTrue(all(not call.kwargs.get("exc_info") for call in error_log.call_args_list))
+        self.assertNotIn(secret, repr(worker.log_worker_event.call_args_list))
+        self.assertNotIn(secret, repr(worker.slot_log.call_args_list))
+        self.assertNotIn(secret, self.slot.state["last_error"])
+
+    async def test_raw_fallback_error_log_redacts_proxy(self):
+        self.slot.proxy_url = self.client.proxy = "http://synthetic-user:synthetic-password@proxy.invalid:8080"
+        failure = RuntimeError(f"Failed via {self.client.proxy}")
+        self.client.start_chat = Mock(return_value=SimpleNamespace(send_message=AsyncMock(side_effect=failure), cid="synthetic"))
+        self.client.generate_content = AsyncMock(side_effect=failure)
+        with patch.object(worker.logger, "warning") as logs:
+            for kind in ("image", "video"):
+                with patch.object(worker, f"collect_generated_{kind}_urls", return_value=["https://example.invalid/result"]):
+                    result = await self.post(f"/slot/7/v1/{kind}s/generations", {"prompt": "test"})
+                    self.assertEqual(result.status_code, 200)
+        self.assertNotIn("synthetic-password", repr(logs.call_args_list))
+
     async def test_stream_failure_is_reported_as_structured_error(self):
         async def broken(*args, **kwargs):
             raise RuntimeError("synthetic upstream failure")

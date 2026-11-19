@@ -264,6 +264,18 @@ body::before {
 .form-input:focus { border-color: var(--primary-light); box-shadow: 0 0 0 4px rgba(255,139,126,0.08); }
 .form-input::placeholder { color: var(--text-light); }
 .form-input-name { font-family: 'Outfit', sans-serif; font-size: 0.95rem; }
+.card-proxy { display:flex; gap:0.45rem; margin:0.65rem 0; font-size:0.74rem; color:var(--text-muted); }
+.card-proxy-label { flex-shrink:0; color:var(--text-light); }
+.card-proxy-value { min-width:0; overflow-wrap:anywhere; }
+.proxy-list { display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.8rem; }
+.proxy-row { display:flex; align-items:center; gap:0.65rem; padding:0.65rem 0.75rem; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); }
+.proxy-row-info { flex:1; min-width:0; overflow-wrap:anywhere; font-size:0.8rem; }
+.proxy-row-address { color:var(--text-muted); margin-top:0.15rem; font-family:var(--font-mono,monospace); font-size:0.72rem; }
+.proxy-add { display:grid; grid-template-columns:1fr auto; gap:0.55rem; }
+.proxy-add .proxy-address { grid-column:1/-1; }
+.proxy-add .btn { padding:0.6rem 1rem; }
+.proxy-select-msg { font-size:0.76rem; min-height:1.1rem; margin-top:0.35rem; color:var(--text-muted); }
+.proxy-select-msg.err { color:var(--danger); }
 
 .modal-actions { display: flex; gap: 0.8rem; margin-top: 1.5rem; }
 .btn { flex: 1; padding: 0.85rem; border-radius: var(--radius-sm); border: none; font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.95rem; cursor: pointer; transition: all 0.15s; }
@@ -1141,6 +1153,13 @@ body::before {
       </select>
     </div>
     <div class="form-group">
+      <label class="form-label" for="mProxy">IP / 代理分配</label>
+      <select class="form-input form-input-name" id="mProxy" onchange="saveSlotProxy()" disabled>
+        <option value="">加载中…</option>
+      </select>
+      <div class="proxy-select-msg" id="mProxyMsg" aria-live="polite">选择即保存</div>
+    </div>
+    <div class="form-group">
       <label class="form-label">SECURE_1PSID</label>
       <input type="text" class="form-input" id="mPsid" placeholder="粘贴 cookie 值" spellcheck="false">
     </div>
@@ -1170,8 +1189,19 @@ body::before {
 <div class="modal-overlay" id="guardOverlay" onclick="event.target===this&&closeGuardSettings()">
   <div class="modal">
     <div class="modal-header">
-      <div class="modal-title">&#x1F6E1; Channel Guard</div>
+      <div class="modal-title">设置</div>
       <button class="modal-close" onclick="closeGuardSettings()">&#x2715;</button>
+    </div>
+
+    <div class="guard-section">
+      <div class="guard-section-title">IP / 代理地址</div>
+      <div class="proxy-list" id="proxyList"><div class="model-chip-empty">加载中…</div></div>
+      <div class="proxy-add">
+        <input class="form-input proxy-address" id="proxyAddress" aria-label="代理地址" placeholder="代理地址" spellcheck="false" autocomplete="off">
+        <input class="form-input form-input-name" id="proxyName" aria-label="代理名称" placeholder="名称（可选）" autocomplete="off">
+        <button class="btn btn-primary" id="proxyAddBtn" onclick="addProxy()">添加</button>
+      </div>
+      <div class="modal-msg" id="proxySettingsMsg" aria-live="polite"></div>
     </div>
 
     <div class="guard-section">
@@ -1332,6 +1362,14 @@ let autoRefreshTimer = null;
 let modelProfiles = null;
 let modelTruthEntries = [];
 let currentMode = 'unknown';
+let proxyProfiles = [];
+let proxyAssignments = {};
+let proxySettingsLoaded = false;
+let proxySettingsError = '';
+let proxyLoadVersion = 0;
+let proxyMutationVersion = 0;
+let modalVersion = 0;
+const pendingProxySaves = new Map();
 
 // ── Helpers ────────────────────────────────────────────────
 function esc(s) {
@@ -1366,13 +1404,12 @@ function loadNames() {
   try { names = JSON.parse(localStorage.getItem('cm-names') || '{}'); } catch { names = {}; }
 }
 
-function saveName(num, name) {
+async function saveName(num, name) {
+  await panelRequest(`/gateway/name/${num}`, {method:'POST', body:JSON.stringify({name:name || ''})});
   if (name) names[num] = name; else delete names[num];
   localStorage.setItem('cm-names', JSON.stringify(names));
-  fetch(`/gateway/name/${num}`, {
-    method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({name: name || ''})
-  }).catch(() => {});
+  const row = gatewayStatus && gatewayStatus.containers && gatewayStatus.containers.find(c => c.num === num);
+  if (row) row.name = name || '';
 }
 
 // ── Login ──────────────────────────────────────────────────
@@ -1436,6 +1473,7 @@ async function loadAll() {
       fetch(API + '/accounts', {headers: authHeaders()}),
       fetch('/gateway/status', {headers: authHeaders()}),
       fetch('/gateway/logs?limit=80', {headers: authHeaders()}),
+      loadProxySettings(),
     ]);
     if (accountsRes.ok) {
       const data = await accountsRes.json();
@@ -1583,6 +1621,7 @@ function renderGrid() {
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
+        <div class="card-proxy"><span class="card-proxy-label">IP / 代理</span><span class="card-proxy-value">${esc(proxyLabel(num))}</span></div>
         ${restarting ? '<div class="card-restarting">正在验证登录…</div>' : ''}
         ${gw && gw.needs_cookie && !restarting ? '<div class="card-warn">认证失败，需要重新认证</div>' : ''}
         ${gw && gw.img_blocked && !gw.needs_cookie && !restarting ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
@@ -1619,6 +1658,32 @@ function renderGrid() {
     modePill.textContent = '模式未知';
     modePill.style.display = 'none';
   }
+}
+
+function safeProxyAddress(value) {
+  const raw = String(value || '');
+  try {
+    const parsed = new URL(raw);
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch (_) {
+    return raw.includes('@') ? raw.slice(raw.lastIndexOf('@') + 1) : raw;
+  }
+}
+
+function proxyDisplay(profile) {
+  const address = safeProxyAddress(profile.url);
+  const name = safeProxyAddress(profile.name || '');
+  return name && name !== address ? name + ' · ' + address : address;
+}
+
+function proxyLabel(num) {
+  if (typeof proxySettingsLoaded === 'undefined' || !proxySettingsLoaded) return '未加载';
+  const id = proxyAssignments[String(num)] || '';
+  if (!id) return '默认代理';
+  const profile = proxyProfiles.find(item => item.id === id);
+  return profile ? proxyDisplay(profile) : '已绑定代理（列表未找到）';
 }
 
 // ── Usage limits (5h window + weekly) ──────────────────────
@@ -3229,9 +3294,200 @@ function toggleLogs() {
   arrow.classList.toggle('open');
 }
 
+// ── Proxy settings and account assignment ──────────────────
+async function panelRequest(url, options = {}) {
+  const response = await fetch(url, {...options, headers:authHeaders(options.headers)});
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = data.detail || data.error || '保存失败';
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+  }
+  return data;
+}
+
+async function loadProxySettings() {
+  const version = ++proxyLoadVersion;
+  const mutation = proxyMutationVersion;
+  try {
+    const data = await panelRequest('/gateway/proxies');
+    if (version !== proxyLoadVersion || mutation !== proxyMutationVersion) return;
+    if (!Array.isArray(data.proxies) || !data.assignments || typeof data.assignments !== 'object') {
+      throw new Error('代理列表格式错误');
+    }
+    proxyProfiles = data.proxies;
+    proxyAssignments = data.assignments;
+    proxySettingsLoaded = true;
+    proxySettingsError = '';
+  } catch (error) {
+    if (version !== proxyLoadVersion || mutation !== proxyMutationVersion) return;
+    proxySettingsError = '代理列表加载失败';
+  }
+  renderProxySettings();
+  populateProxySelect();
+}
+
+function populateProxySelect() {
+  const select = document.getElementById('mProxy');
+  const msg = document.getElementById('mProxyMsg');
+  if (currentNum === null) return;
+  if (!proxySettingsLoaded || proxySettingsError) {
+    select.innerHTML = '<option value="">' + (proxySettingsError ? '代理列表加载失败' : '加载中…') + '</option>';
+    select.disabled = true;
+    msg.textContent = proxySettingsError || '选择即保存';
+    msg.className = 'proxy-select-msg' + (proxySettingsError ? ' err' : '');
+    return;
+  }
+  const selected = proxyAssignments[String(currentNum)] || '';
+  select.replaceChildren();
+  const append = (value, label) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  };
+  append('', '默认代理');
+  for (const profile of proxyProfiles) append(profile.id, proxyDisplay(profile));
+  if (selected && !proxyProfiles.some(item => item.id === selected)) append(selected, '当前绑定（列表未找到）');
+  select.value = selected;
+  select.disabled = pendingProxySaves.has(currentNum);
+}
+
+function renderProxySettings() {
+  const list = document.getElementById('proxyList');
+  list.replaceChildren();
+  if (proxySettingsError || !proxySettingsLoaded) {
+    const message = document.createElement('div');
+    message.className = 'model-chip-empty';
+    message.textContent = proxySettingsError || '加载中…';
+    list.appendChild(message);
+    return;
+  }
+  if (!proxyProfiles.length) {
+    const empty = document.createElement('div');
+    empty.className = 'model-chip-empty';
+    empty.textContent = '还没有代理地址';
+    list.appendChild(empty);
+  }
+  for (const profile of proxyProfiles) {
+    const row = document.createElement('div');
+    row.className = 'proxy-row';
+    const info = document.createElement('div');
+    info.className = 'proxy-row-info';
+    const name = document.createElement('div');
+    name.textContent = safeProxyAddress(profile.name || '') || safeProxyAddress(profile.url);
+    info.appendChild(name);
+    if (profile.name && safeProxyAddress(profile.name) !== safeProxyAddress(profile.url)) {
+      const address = document.createElement('div');
+      address.className = 'proxy-row-address';
+      address.textContent = safeProxyAddress(profile.url);
+      info.appendChild(address);
+    }
+    const remove = document.createElement('button');
+    remove.className = 'card-btn disable';
+    remove.textContent = '删除';
+    remove.onclick = () => deleteProxy(profile.id, remove);
+    row.appendChild(info);
+    row.appendChild(remove);
+    list.appendChild(row);
+  }
+}
+
+async function addProxy() {
+  const address = document.getElementById('proxyAddress');
+  const name = document.getElementById('proxyName');
+  const button = document.getElementById('proxyAddBtn');
+  const msg = document.getElementById('proxySettingsMsg');
+  const url = address.value.trim();
+  if (!url) { msg.className = 'modal-msg err'; msg.textContent = '请输入代理地址'; return; }
+  button.disabled = true;
+  msg.className = 'modal-msg';
+  msg.textContent = '保存中…';
+  ++proxyMutationVersion;
+  try {
+    await panelRequest('/gateway/proxies', {method:'POST', body:JSON.stringify({name:name.value.trim(), url})});
+    ++proxyMutationVersion;
+    address.value = '';
+    name.value = '';
+    await loadProxySettings();
+    renderGrid();
+    msg.className = 'modal-msg ok';
+    msg.textContent = proxySettingsError ? '已添加，列表刷新失败' : '已添加';
+  } catch (error) {
+    msg.className = 'modal-msg err';
+    msg.textContent = error.message;
+  } finally { button.disabled = false; }
+}
+
+async function deleteProxy(id, button) {
+  const msg = document.getElementById('proxySettingsMsg');
+  button.disabled = true;
+  ++proxyMutationVersion;
+  try {
+    await panelRequest('/gateway/proxies/' + encodeURIComponent(id), {method:'DELETE'});
+    ++proxyMutationVersion;
+    proxyProfiles = proxyProfiles.filter(profile => profile.id !== id);
+    renderProxySettings();
+    populateProxySelect();
+    renderGrid();
+    msg.className = 'modal-msg ok';
+    msg.textContent = '已删除';
+  } catch (error) {
+    msg.className = 'modal-msg err';
+    msg.textContent = error.message;
+  } finally { button.disabled = false; }
+}
+
+async function saveSlotProxy() {
+  const num = currentNum;
+  const version = modalVersion;
+  const select = document.getElementById('mProxy');
+  const msg = document.getElementById('mProxyMsg');
+  if (num === null || !proxySettingsLoaded || proxySettingsError || pendingProxySaves.has(num)) return false;
+  const previous = proxyAssignments[String(num)] || '';
+  const chosen = select.value;
+  if (chosen === previous) return true;
+  select.disabled = true;
+  msg.className = 'proxy-select-msg';
+  msg.textContent = '保存中…';
+  ++proxyMutationVersion;
+  const task = (async () => {
+    try {
+      await panelRequest(`/gateway/proxy/${num}`, {method:'POST', body:JSON.stringify({proxy_id:chosen})});
+      ++proxyMutationVersion;
+      if (chosen) proxyAssignments[String(num)] = chosen; else delete proxyAssignments[String(num)];
+      if (currentNum === num && modalVersion === version) {
+        msg.className = 'proxy-select-msg';
+        msg.textContent = '已保存';
+      }
+      renderGrid();
+      return true;
+    } catch (error) {
+      if (currentNum === num && modalVersion === version) {
+        select.value = previous;
+        msg.className = 'proxy-select-msg err';
+        msg.textContent = error.message;
+      }
+      toast('#' + num + ' 代理保存失败: ' + error.message, 'err');
+      return false;
+    }
+  })();
+  pendingProxySaves.set(num, task);
+  const saved = await task;
+  pendingProxySaves.delete(num);
+  if (currentNum === num) populateProxySelect();
+  return saved;
+}
+
+async function persistModalMetadata(num, name, group) {
+  const pendingProxy = pendingProxySaves.get(num);
+  await Promise.all([saveName(num, name), saveGroup(num, group)]);
+  if (pendingProxy && !await pendingProxy) throw new Error('代理未保存，请重新选择');
+}
+
 // ── Deploy Modal ───────────────────────────────────────────
 function openModal(num) {
   currentNum = num;
+  const version = ++modalVersion;
   const gw = gatewayStatus && gatewayStatus.containers ? gatewayStatus.containers.find(c => c.num === num) : null;
   const displayName = (gw && gw.name) || names[num] || '';
   const group = (gw && gw.group) || '';
@@ -3241,6 +3497,10 @@ function openModal(num) {
   document.getElementById('mGroup').value = group;
   document.getElementById('mPsid').value = '';
   document.getElementById('mPsidts').value = '';
+  document.getElementById('mProxyMsg').className = 'proxy-select-msg';
+  document.getElementById('mProxyMsg').textContent = '选择即保存';
+  populateProxySelect();
+  loadProxySettings();
   document.getElementById('modalMsg').textContent = '';
   document.getElementById('deployBtn').disabled = false;
   document.getElementById('deployBtn').textContent = '部署';
@@ -3249,18 +3509,29 @@ function openModal(num) {
   document.getElementById('cLogArrow').classList.remove('open');
   document.getElementById('cLogList').innerHTML = '';
   document.getElementById('modalOverlay').classList.add('active');
-  setTimeout(() => document.getElementById('mPsid').focus(), 200);
+  setTimeout(() => { if (currentNum === num && modalVersion === version) document.getElementById('mPsid').focus(); }, 200);
 }
 
-function closeModal() {
-  if (currentNum !== null) {
+async function closeModal(alreadySaved = false) {
+  const num = currentNum;
+  const version = modalVersion;
+  if (num !== null && !alreadySaved) {
     const nameVal = document.getElementById('mName').value.trim();
-    saveName(currentNum, nameVal);
-    saveGroup(currentNum, document.getElementById('mGroup').value.trim());
+    try {
+      await persistModalMetadata(num, nameVal, document.getElementById('mGroup').value.trim());
+    } catch (error) {
+      if (currentNum === num && modalVersion === version) {
+        document.getElementById('modalMsg').className = 'modal-msg err';
+        document.getElementById('modalMsg').textContent = error.message;
+      }
+      return;
+    }
     renderGrid();
   }
+  if (currentNum !== num || modalVersion !== version) return;
   document.getElementById('modalOverlay').classList.remove('active');
   currentNum = null;
+  ++modalVersion;
 }
 
 function showErrorHistory(num) {
@@ -3292,11 +3563,10 @@ function closeErrorHistory() {
   document.getElementById('errHistOverlay').classList.remove('active');
 }
 
-function saveGroup(num, group) {
-  fetch(`/gateway/group/${num}`, {
-    method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({group: group || ''})
-  }).then(() => loadAll()).catch(() => {});
+async function saveGroup(num, group) {
+  await panelRequest(`/gateway/group/${num}`, {method:'POST', body:JSON.stringify({group:group || ''})});
+  const row = gatewayStatus && gatewayStatus.containers && gatewayStatus.containers.find(c => c.num === num);
+  if (row) row.group = group || '';
 }
 
 document.addEventListener('keydown', e => {
@@ -3307,56 +3577,67 @@ document.addEventListener('keydown', e => {
   }
 });
 
-function doDeploy() {
+async function doDeploy() {
+  const num = currentNum;
+  const version = modalVersion;
   const psid = document.getElementById('mPsid').value.trim();
   const psidts = document.getElementById('mPsidts').value.trim();
+  const name = document.getElementById('mName').value.trim();
+  const group = document.getElementById('mGroup').value.trim();
   const msg = document.getElementById('modalMsg');
   const btn = document.getElementById('deployBtn');
-
-  if (!psid) {
+  if (num === null || btn.disabled) return;
+  if (!!psid !== !!psidts) {
     msg.className = 'modal-msg err';
-    msg.textContent = 'SECURE_1PSID 不能为空';
+    msg.textContent = '更新 Cookie 时请填写完整的两项 Cookie';
     return;
   }
 
-  const nameVal = document.getElementById('mName').value.trim();
-  saveName(currentNum, nameVal);
-  saveGroup(currentNum, document.getElementById('mGroup').value.trim());
-
+  const deploying = !!psid;
+  let ownsRestarting = false;
+  const isCurrent = () => currentNum === num && modalVersion === version;
   btn.disabled = true;
-  btn.textContent = '部署中...';
+  btn.textContent = deploying ? '部署中...' : '保存中...';
   msg.className = 'modal-msg';
   msg.textContent = '';
-  const deployNum = currentNum;
-  localRestarting.add(deployNum);
-  renderGrid();
-
-  fetch(`/gateway/deploy/${currentNum}`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ psid: psid, psidts: psidts })
-  })
-  .then(r => r.json().then(data => ({ ok: r.ok, data })))
-  .then(({ ok, data }) => {
-    localRestarting.delete(deployNum);
-    if (ok) {
+  try {
+    await persistModalMetadata(num, name, group);
+    if (!deploying) {
+      renderGrid();
+      if (isCurrent()) {
+        msg.className = 'modal-msg ok';
+        msg.textContent = '信息已保存';
+      }
+      toast('#' + num + ' 信息已保存', 'ok');
+      return;
+    }
+    localRestarting.add(num);
+    ownsRestarting = true;
+    renderGrid();
+    await panelRequest(`/gateway/deploy/${num}`, {
+      method:'POST', body:JSON.stringify({psid, psidts})
+    });
+    if (isCurrent()) {
       msg.className = 'modal-msg ok';
       msg.textContent = currentMode === 'worker' ? 'Cookie 已保存，正在验证登录' : '部署成功！';
-      toast('#' + currentNum + ' 已部署', 'ok');
-      setTimeout(() => { loadAll(); closeModal(); }, 1200);
-    } else {
-      throw new Error(data.detail || data.error || '部署失败');
+      setTimeout(() => { if (isCurrent()) closeModal(true); }, 1200);
     }
-  })
-  .catch(e => {
-    localRestarting.delete(deployNum);
-    loadAll();
-    msg.className = 'modal-msg err';
-    msg.textContent = e.message;
-    btn.disabled = false;
-    btn.textContent = '部署';
-    toast('#' + currentNum + ' 失败: ' + e.message, 'err');
-  });
+    toast('#' + num + ' 已部署', 'ok');
+    await loadAll();
+  } catch (error) {
+    if (isCurrent()) {
+      msg.className = 'modal-msg err';
+      msg.textContent = error.message;
+    }
+    toast('#' + num + ' 保存失败: ' + error.message, 'err');
+  } finally {
+    if (ownsRestarting) localRestarting.delete(num);
+    renderGrid();
+    if (isCurrent()) {
+      btn.disabled = false;
+      btn.textContent = '部署';
+    }
+  }
 }
 
 // ── Toast ──────────────────────────────────────────────────
@@ -3506,6 +3787,8 @@ function openGuardSettings() {
   document.getElementById('guardSaveBtn').disabled = true;
   document.getElementById('guardSaveBtn').textContent = '加载中...';
   document.getElementById('guardOverlay').classList.add('active');
+  document.getElementById('proxySettingsMsg').textContent = '';
+  loadProxySettings().then(() => renderGrid());
 
   fetch(API + '/guard-settings', {headers: authHeaders()})
     .then(r => r.json())

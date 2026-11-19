@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,32 @@ async def credential_update(path, operation):
     except asyncio.CancelledError:
         await task
         raise
+
+
+def redact_url_credentials(value: str) -> str:
+    """Remove URL userinfo while preserving hosts, paths, IDs and normal text."""
+    return re.sub(r"(?i)\b((?:https?|socks(?:4a?|5h?)?)://)[^\s/]+@", r"\1", value)
+
+
+def safe_error_summary(error, *proxies) -> str:
+    """Keep diagnostic text without proxy credentials, including decoded errors."""
+    message = str(error)
+    secrets = set()
+    for proxy in proxies:
+        if not isinstance(proxy, str) or not proxy:
+            continue
+        message = message.replace(proxy, "[proxy]")
+        try:
+            parsed = urlsplit(proxy)
+            for value in (parsed.password,):
+                if value:
+                    secrets.update((value, unquote(value)))
+        except ValueError:
+            pass
+    for secret in sorted(secrets, key=len, reverse=True):
+        message = message.replace(secret, "[redacted]")
+    # Curl may echo a previous proxy after a live switch, or normalize its URL.
+    return re.sub(r"(?i)\b(?:https?|socks(?:4a?|5h?)?)://[^\s/]+@", "[proxy]@", message)
 
 
 def model_label(model) -> str:
@@ -186,6 +212,48 @@ class Slot:
     credential_epoch: int = 0
     retiring: bool = False
     active_requests: int = 0
+    proxy_id: str = ""
+    proxy_url: str = field(default="", repr=False)
+    proxy_changing: bool = False
+
+    async def save_proxy(self, proxy_id, proxy_url, default_proxy=None):
+        """Persist binding and update only the existing transport; never log in here."""
+        path = self.env_path
+        if path is None or not path.exists():
+            raise ValueError("Account configuration is missing")
+
+        def write():
+            lines = path.read_text().splitlines()
+            lines = [line for line in lines if line.split("=", 1)[0].strip() not in ("SLOT_PROXY_ID", "SLOT_PROXY")]
+            lines += [f"SLOT_PROXY_ID={proxy_id}", f"SLOT_PROXY={proxy_url}"]
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+                    temporary = output.name
+                    os.chmod(temporary, 0o600)
+                    output.write("\n".join(lines) + "\n")
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, path)
+                self.proxy_id, self.proxy_url = proxy_id, proxy_url
+                self.credential_epoch += 1
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
+
+        self.proxy_changing = True
+        previous_epoch = self.credential_epoch
+        try:
+            await credential_update(path, write)
+        finally:
+            # A cancelled caller still completes the disk mutation; keep transport aligned.
+            if self.credential_epoch != previous_epoch and self.client is not None:
+                actual = self.proxy_url or default_proxy or None
+                transport = getattr(self.client, "client", None)
+                if transport is not None:
+                    transport.proxies = {"all": actual} if actual else {}
+                self.client.proxy = actual
+            self.proxy_changing = False
 
     async def save_credentials(self, path, psid, psidts):
         def write():
@@ -228,6 +296,8 @@ class Slot:
             psid=data.get("SECURE_1PSID", ""),
             psidts=data.get("SECURE_1PSIDTS", ""),
             env_path=env_path,
+            proxy_id=data.get("SLOT_PROXY_ID", ""),
+            proxy_url=data.get("SLOT_PROXY", ""),
         )
 
     # ── Lifecycle ────────────────────────────────────────────────────
@@ -258,6 +328,7 @@ class Slot:
 
     async def _init_client(self, proxy: str | None = None) -> None:
         """Create and initialise the GeminiClient for this slot."""
+        proxy = self.proxy_url or proxy
         from gemini_webapi import GeminiClient
         from gemini_webapi.constants import AccountStatus
         from gemini_webapi.exceptions import AuthError
@@ -316,7 +387,7 @@ class Slot:
         except Exception as e:
             if self.cookie_audit is not None:
                 self.cookie_audit.emit("init_error", error_type=type(e).__name__)
-            logger.error("Slot %d: init failed: %s", self.num, e)
+            logger.error("Slot %d: init failed (%s)", self.num, type(e).__name__)
             client, self.client = self.client, None
             if client is not None and callable(getattr(client, "close", None)):
                 try:
@@ -338,7 +409,8 @@ class Slot:
                     self.state["needs_restart"] = True
             else:
                 self.state["last_error_type"] = "init_failed"
-            self.state["last_error"] = str(e)[:200]
+            message = safe_error_summary(e, proxy)
+            self.state["last_error"] = message[:200]
             raise
 
     async def reload(self, psid: str | None = None, psidts: str | None = None,
@@ -349,6 +421,7 @@ class Slot:
             if _env_path is not None:
                 data = parse_env_file(_env_path)
                 new_psid, new_psidts = data.get("SECURE_1PSID", ""), data.get("SECURE_1PSIDTS", "")
+                self.proxy_id, self.proxy_url = data.get("SLOT_PROXY_ID", ""), data.get("SLOT_PROXY", "")
                 self.env_path = _env_path
             if new_psid is not None:
                 self.psid = new_psid
@@ -420,6 +493,7 @@ class Slot:
         return {
             "status": status,
             "client_ready": client_ready,
+            "proxy_id": self.proxy_id,
             "retiring": self.retiring,
             "active_requests": self.active_requests,
             "auth_status": auth,
@@ -585,7 +659,7 @@ class Slot:
             AuthError, RateLimitExceeded, UsageLimitExceeded,
             ImageGenerationBlocked, TemporarilyBlocked,
         )
-        error_str = str(e)
+        error_str = safe_error_summary(e, self.proxy_url, getattr(self.client, "proxy", None))
         error_lower = error_str.lower()
 
         if isinstance(e, ImageGenerationBlocked):

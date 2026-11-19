@@ -30,6 +30,7 @@ import uuid
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -64,7 +65,7 @@ from gemini_webapi.types.video import GeneratedVideo
 
 from slot import (Slot, parse_env_file, model_label, model_version, label_level,
                   request_level, label_model_id, actual_model, logged_in, client_capacity, truth_stream_response,
-                  header_safe, credential_update)
+                  header_safe, credential_update, safe_error_summary, redact_url_credentials)
 
 # ⚠️ DO NOT REMOVE — auto_refresh kills cookies permanently.
 async def _noop_auto_refresh(self, *a, **kw): pass
@@ -201,6 +202,9 @@ app.add_middleware(
 )
 
 
+_request_proxies = ContextVar("worker_request_proxies", default=())
+
+
 class CookieWritebackMiddleware:
     def __init__(self, app):
         self.app = app
@@ -226,6 +230,8 @@ class CookieWritebackMiddleware:
             starting_client = getattr(starting_slot, "client", None)
             result = {"failed": False}
             token = _request_result.set(result)
+            proxy_token = _request_proxies.set((getattr(starting_slot, "proxy_url", None),
+                                                getattr(starting_client, "proxy", None)))
             request_audit = starting_slot.cookie_audit if isinstance(starting_slot, Slot) else None
             if isinstance(starting_slot, Slot):
                 starting_slot.active_requests += 1
@@ -239,6 +245,7 @@ class CookieWritebackMiddleware:
                     starting_slot.active_requests -= 1
                 success = success and not result["failed"]
                 _request_result.reset(token)
+                _request_proxies.reset(proxy_token)
                 if request_audit is not None:
                     request_audit.emit("api_complete", status=status,
                                        transport_success=status < 400 and error_type is None,
@@ -279,6 +286,8 @@ async def _get_client(slot: Slot) -> GeminiClient:
     state = getattr(slot, "state", {})
     if getattr(slot, "retiring", False):
         raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 已停止接收新请求")
+    if getattr(slot, "proxy_changing", False):
+        raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 正在保存代理，请稍后重试")
     if state.get("initializing"):
         raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 初始化中")
     if state.get("auth_status") == "UNAUTHENTICATED" and state.get("last_error_type") != "auth_failed":
@@ -544,8 +553,31 @@ def correct_markdown(md_text: str) -> str:
     return re.sub(pattern, r'\1', fixed_google_links)
 
 
+def error_summary(error) -> str:
+    # Capture only this request's proxy; another account's password must not
+    # change this account's diagnostics. Background tasks inherit this context.
+    return safe_error_summary(error, *_request_proxies.get(), PROXY)
+
+
+def safe_event_data(value, *, error_field=False):
+    """Sanitize output only: exception fields may contain bare proxy passwords.
+
+    Structured media URLs, model names and IDs are opaque data. Their normal
+    substrings must not be rewritten, even when they match a proxy password.
+    """
+    if isinstance(value, str):
+        return error_summary(value) if error_field else redact_url_credentials(value)
+    if isinstance(value, dict):
+        return {key: safe_event_data(item, error_field=error_field or key in {"error", "error_summary", "exception"})
+                for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [safe_event_data(item, error_field=error_field) for item in value]
+    return value
+
+
 def log_worker_event(event, payload: dict[str, Any] | None = None):
-    persisted = persist_worker_event(event, payload=payload)
+    event = type(event).model_validate(safe_event_data(event.model_dump()))
+    persisted = persist_worker_event(event, payload=safe_event_data(payload))
     logger.info("Worker event: %s", persisted.model_dump_json())
     return persisted
 
@@ -706,7 +738,7 @@ def prepare_conversation(messages: list, temp_files=None) -> tuple[str, list[str
                                     tmp.write(image_data)
                                     temp_files.append(tmp.name)
                             except Exception as e:
-                                logger.error("Error processing base64 media: %s", e)
+                                logger.error("Error processing base64 media: %s", error_summary(e))
             conversation += "\n\n"
     conversation += "Assistant: "
     return conversation, temp_files
@@ -724,7 +756,7 @@ _RECOVERABLE_MEDIA_ERRORS = (
 
 
 def _is_recoverable_media_error(exc: Exception) -> bool:
-    return any(token in str(exc).lower() for token in _RECOVERABLE_MEDIA_ERRORS)
+    return any(token in error_summary(exc).lower() for token in _RECOVERABLE_MEDIA_ERRORS)
 
 
 async def _retry_media_request(label: str, factory, retries: int = 2):
@@ -744,7 +776,7 @@ async def _retry_media_request(label: str, factory, retries: int = 2):
             if attempt >= retries or not _is_recoverable_media_error(exc):
                 exc._last_tracer = last_tracer  # type: ignore[attr-defined]
                 raise
-            logger.warning("%s transient failure (attempt %d/%d): %s", label, attempt, retries, exc)
+            logger.warning("%s transient failure (attempt %d/%d): %s", label, attempt, retries, error_summary(exc))
             await asyncio.sleep(min(attempt, 2))
     raise RuntimeError(f"{label} failed")
 
@@ -769,15 +801,20 @@ def _flatten_cookies(raw_cookies) -> dict | None:
     return merged
 
 
-async def download_image_as_base64(image, cookies=None) -> str | None:
+_MEDIA_PROXY_UNSET = object()
+
+
+async def download_image_as_base64(image, cookies=None, *, proxy=_MEDIA_PROXY_UNSET) -> str | None:
     try:
+        if proxy is _MEDIA_PROXY_UNSET:
+            proxy = getattr(image, "proxy", None)
         url = image.url
         req_cookies = cookies
         if isinstance(image, GeneratedImage):
             url = url + f"=s{IMAGE_DOWNLOAD_SIZE}"
             req_cookies = _flatten_cookies(image.cookies)
         for attempt in range(1, _DOWNLOAD_RETRIES + 1):
-            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=90.0) as http_client:
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, proxy=proxy, trust_env=False, timeout=90.0) as http_client:
                 resp = await http_client.get(url)
                 if resp.status_code == 200:
                     return base64.b64encode(resp.content).decode("utf-8")
@@ -788,7 +825,7 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
             if attempt < _DOWNLOAD_RETRIES:
                 await asyncio.sleep(attempt)
     except Exception as e:
-        logger.error("Error downloading image: %s", e)
+        logger.error("Error downloading image: %s", safe_error_summary(error_summary(e), proxy))
         return None
 
 
@@ -798,14 +835,16 @@ def _looks_like_video(data: bytes) -> bool:
     return len(data) > 8 and (data[4:8] == b"ftyp" or data[:4] == b"\x1a\x45\xdf\xa3")
 
 
-async def download_video_as_base64(video: GeneratedVideo) -> str | None:
+async def download_video_as_base64(video: GeneratedVideo, *, proxy=_MEDIA_PROXY_UNSET) -> str | None:
     try:
+        if proxy is _MEDIA_PROXY_UNSET:
+            proxy = getattr(video, "proxy", None)
         url = video.url
         req_cookies = _flatten_cookies(video.cookies) or {}
         if "usercontent.google.com" in url and "authuser" not in url:
             url += f"&authuser={video.account_index}" if "?" in url else f"?authuser={video.account_index}"
         for attempt in range(1, _DOWNLOAD_RETRIES + 1):
-            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=120.0) as http_client:
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, proxy=proxy, trust_env=False, timeout=120.0) as http_client:
                 resp = await http_client.get(url)
                 if resp.status_code == 200:
                     if not _looks_like_video(resp.content):
@@ -820,7 +859,7 @@ async def download_video_as_base64(video: GeneratedVideo) -> str | None:
             if attempt < _DOWNLOAD_RETRIES:
                 await asyncio.sleep(attempt)
     except Exception as e:
-        logger.error("Error downloading video: %s", e)
+        logger.error("Error downloading video: %s", safe_error_summary(error_summary(e), proxy))
         return None
 
 
@@ -998,7 +1037,7 @@ async def _chat_completion_impl(
 
                     if last_output and hasattr(last_output, 'images') and last_output.images:
                         for idx, img in enumerate(last_output.images):
-                            b64 = await download_image_as_base64(img)
+                            b64 = await download_image_as_base64(img, proxy=getattr(client, "proxy", None))
                             if b64:
                                 img_chunk = {
                                     "id": completion_id, "object": "chat.completion.chunk",
@@ -1020,22 +1059,22 @@ async def _chat_completion_impl(
                     if not debug_probe and audit is not None:
                         audit.emit("chat_stream_error", error_type=type(e).__name__)
                     if not debug_probe:
-                        logger.error("Slot %d stream error: %s", num, e, exc_info=True)
+                        logger.error("Slot %d stream error: %s", num, error_summary(e))
                     slot.report_error(e)
                     if not debug_probe:
-                        slot_log(num, f"Error: {str(e)[:80]}")
+                        slot_log(num, f"Error: {error_summary(e)[:80]}")
                         try:
                             log_worker_event(
-                                build_worker_event("chat", trace_headers, None, error_summary=str(e)[:200]),
+                                build_worker_event("chat", trace_headers, None, error_summary=error_summary(e)[:200]),
                                 payload={
                                     "request": {"model": request.model, "prompt": conversation[:1000], "stream": True},
-                                    "error": str(e)[:500],
-                                    "raw_capture": tracer.get_snapshot() if tracer else None,
+                                    "error": error_summary(e)[:500],
+                                    "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
                                 },
                             )
                         except Exception:
                             pass
-                    err_chunk = {"error": {"message": str(e)[:200], "type": "upstream_error",
+                    err_chunk = {"error": {"message": error_summary(e)[:200], "type": "upstream_error",
                                            "code": getattr(e, "http_status", None) or "upstream_error"}}
                     yield f"data: {json.dumps(err_chunk)}\n\n"
                 finally:
@@ -1077,7 +1116,7 @@ async def _chat_completion_impl(
 
             if last_output and hasattr(last_output, 'images') and last_output.images:
                 for idx, img in enumerate(last_output.images):
-                    b64 = await download_image_as_base64(img)
+                    b64 = await download_image_as_base64(img, proxy=getattr(client, "proxy", None))
                     if b64:
                         reply_text += f"\n\n![generated_image_{idx}](data:image/png;base64,{b64})"
 
@@ -1102,13 +1141,13 @@ async def _chat_completion_impl(
                         build_worker_event("chat", trace_headers, last_output),
                         payload={
                             "request": {"model": request.model, "prompt": conversation[:1000], "stream": False},
-                            "raw_capture": tracer.get_snapshot() if tracer else None,
+                            "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
                         },
                     )
                 except Exception:
                     pass
             if debug_raw:
-                snapshot = tracer.get_snapshot()
+                snapshot = safe_event_data(tracer.get_snapshot())
                 result["oneclick_raw_capture"] = _debug_raw_snapshot(snapshot)
                 result["oneclick_model_hints"] = _debug_model_hints(snapshot)
             response.headers.update(header_safe(trace_headers))
@@ -1117,28 +1156,28 @@ async def _chat_completion_impl(
     except HTTPException:
         raise
     except Exception as e:
-        error_msg = str(e).lower()
+        error_msg = error_summary(e).lower()
         if not debug_probe:
-            logger.error("Slot %d chat error: %s", num, e, exc_info=True)
+            logger.error("Slot %d chat error: %s", num, error_summary(e))
         slot.report_error(e)
         if not debug_probe:
-            slot_log(num, f"Error: {str(e)[:80]}")
+            slot_log(num, f"Error: {error_summary(e)[:80]}")
             try:
                 log_worker_event(
-                    build_worker_event("chat", locals().get("trace_headers") or {}, None, error_summary=str(e)[:200]),
+                    build_worker_event("chat", locals().get("trace_headers") or {}, None, error_summary=error_summary(e)[:200]),
                     payload={
                         "request": {"model": request.model,
                                     "prompt": locals().get("conversation", "")[:1000],
                                     "stream": request.stream},
-                        "error": str(e)[:500],
-                        "raw_capture": locals()["tracer"].get_snapshot() if "tracer" in locals() and locals()["tracer"] else None,
+                        "error": error_summary(e)[:500],
+                        "raw_capture": safe_event_data(locals()["tracer"].get_snapshot()) if "tracer" in locals() and locals()["tracer"] else None,
                     },
                 )
             except Exception:
                 pass
         if any(kw in error_msg for kw in ['429', 'rate limit', 'resource exhausted', 'quota']):
-            raise HTTPException(status_code=429, detail=f"Rate limited: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+            raise HTTPException(status_code=429, detail=f"Rate limited: {error_summary(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {error_summary(e)}")
 
     finally:
         if not stream_owns_files:
@@ -1198,7 +1237,7 @@ async def slot_image_generation(
                         temp_files.append(tmp.name)
                     kwargs["files"] = temp_files
                 except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
+                    raise HTTPException(status_code=400, detail=f"Invalid base64 image: {error_summary(e)}")
 
                 async def _edit_factory(attempt_tracer, _attempt):
                     new_chat = client.start_chat()
@@ -1237,7 +1276,7 @@ async def slot_image_generation(
             )
 
         result_data, raw_image_urls = await parse_image_generation_result(
-            images, limit=request.n, image_downloader=download_image_as_base64,
+            images, limit=request.n, image_downloader=partial(download_image_as_base64, proxy=getattr(client, "proxy", None)),
             raw_capture=tracer.get_snapshot() if tracer else None,
         )
 
@@ -1258,7 +1297,7 @@ async def slot_image_generation(
                 "session_id": session_id,
             },
             "response": build_gemini_response_snapshot(gemini_response),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
         })
         trace_headers.update(build_worker_event_headers(worker_event))
 
@@ -1278,7 +1317,7 @@ async def slot_image_generation(
         raw_capture = tracer.get_snapshot() if tracer else None
         recovered_urls = collect_generated_image_urls(raw_capture)
         if recovered_urls:
-            logger.warning("Slot %d recovering %d image URLs from raw capture after: %s", num, len(recovered_urls), e)
+            logger.warning("Slot %d recovering %d image URLs from raw capture after: %s", num, len(recovered_urls), error_summary(e))
             result = {
                 "created": int(time.time()),
                 "data": [{"url": url} for url in recovered_urls[:request.n]],
@@ -1289,11 +1328,11 @@ async def slot_image_generation(
                 result["session_id"] = session_id
             response.headers.update(header_safe(trace_headers))
             return result
-        logger.error("Slot %d image error: %s", num, e, exc_info=True)
+        logger.error("Slot %d image error: %s", num, error_summary(e))
         error_event = build_worker_event(
             "image", trace_headers, None,
             chat_id=getattr(chat, "cid", "") if chat else "", session_id=session_id or "",
-            raw_response_preview=str(e), error_summary=str(e),
+            raw_response_preview=error_summary(e), error_summary=error_summary(e),
         )
         log_worker_event(error_event, payload={
             "request": {
@@ -1302,14 +1341,14 @@ async def slot_image_generation(
                 "has_input_media": bool(request.image), "media_type": request.media_type,
                 "session_id": session_id,
             },
-            "error": str(e),
-            "raw_capture": raw_capture,
+            "error": error_summary(e),
+            "raw_capture": safe_event_data(raw_capture),
         })
         if session_id and session_id in slot.edit_sessions and not request.session_id:
             del slot.edit_sessions[session_id]
         slot.report_error(e)
-        slot_log(num, f"Image error: {str(e)[:80]}")
-        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+        slot_log(num, f"Image error: {error_summary(e)[:80]}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {error_summary(e)}")
     finally:
         for tf in temp_files:
             try:
@@ -1352,7 +1391,7 @@ async def slot_video_generation(
                     temp_files.append(tmp.name)
                 kwargs["files"] = temp_files
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Invalid base64 image: {error_summary(e)}")
 
         gemini_response, tracer = await _retry_media_request(
             "video generation",
@@ -1366,7 +1405,7 @@ async def slot_video_generation(
             )
 
         result_data, raw_video_urls = await parse_video_generation_result(
-            gemini_response.videos, video_downloader=download_video_as_base64,
+            gemini_response.videos, video_downloader=partial(download_video_as_base64, proxy=getattr(client, "proxy", None)),
             raw_capture=tracer.get_snapshot() if tracer else None,
         )
         worker_event = build_worker_event("video", trace_headers, gemini_response)
@@ -1376,7 +1415,7 @@ async def slot_video_generation(
                 "has_input_media": bool(request.image), "media_type": request.media_type,
             },
             "response": build_gemini_response_snapshot(gemini_response),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
         })
         trace_headers.update(build_worker_event_headers(worker_event))
 
@@ -1394,7 +1433,7 @@ async def slot_video_generation(
         raw_capture = tracer.get_snapshot() if tracer else None
         recovered_urls = collect_generated_video_urls(raw_capture)
         if recovered_urls:
-            logger.warning("Slot %d recovering %d video URLs from raw capture after: %s", num, len(recovered_urls), e)
+            logger.warning("Slot %d recovering %d video URLs from raw capture after: %s", num, len(recovered_urls), error_summary(e))
             result = {
                 "created": int(time.time()),
                 "data": [{"url": url, "thumbnail_url": ""} for url in recovered_urls],
@@ -1403,23 +1442,23 @@ async def slot_video_generation(
             }
             response.headers.update(header_safe(trace_headers))
             return result
-        logger.error("Slot %d video error: %s", num, e, exc_info=True)
+        logger.error("Slot %d video error: %s", num, error_summary(e))
         error_event = build_worker_event(
             "video", trace_headers, None,
-            raw_response_preview=str(e), error_summary=str(e),
+            raw_response_preview=error_summary(e), error_summary=error_summary(e),
         )
         log_worker_event(error_event, payload={
             "request": {
                 "model": request.model, "prompt": request.prompt,
                 "has_input_media": bool(request.image), "media_type": request.media_type,
             },
-            "error": str(e),
-            "raw_capture": raw_capture,
+            "error": error_summary(e),
+            "raw_capture": safe_event_data(raw_capture),
         })
         slot.report_error(e)
-        if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
-            raise HTTPException(status_code=429, detail=f"Video rate limited: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
+        if any(kw in error_summary(e).lower() for kw in ['rate limit', '429', 'quota', "can't generate more videos"]):
+            raise HTTPException(status_code=429, detail=f"Video rate limited: {error_summary(e)}")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {error_summary(e)}")
     finally:
         for tf in temp_files:
             try:
@@ -1432,13 +1471,13 @@ async def slot_video_generation(
 #  Music endpoint — /slot/{num}/v1/music/generations
 # ═══════════════════════════════════════════════════════════════════════
 
-async def download_audio_as_base64(url: str, cookies: dict | None = None, account_index: int = 0) -> str | None:
+async def download_audio_as_base64(url: str, cookies: dict | None = None, account_index: int = 0, *, proxy=None) -> str | None:
     try:
         req_cookies = cookies or {}
         if "usercontent.google.com" in url and "authuser" not in url:
             url += f"&authuser={account_index}" if "?" in url else f"?authuser={account_index}"
         for attempt in range(1, _DOWNLOAD_RETRIES + 1):
-            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, timeout=120.0) as http_client:
+            async with AsyncClient(http2=True, follow_redirects=True, cookies=req_cookies, proxy=proxy, trust_env=False, timeout=120.0) as http_client:
                 resp = await http_client.get(url)
                 if resp.status_code == 200:
                     return base64.b64encode(resp.content).decode("utf-8")
@@ -1449,7 +1488,7 @@ async def download_audio_as_base64(url: str, cookies: dict | None = None, accoun
             if attempt < _DOWNLOAD_RETRIES:
                 await asyncio.sleep(attempt)
     except Exception as e:
-        logger.error("Error downloading audio: %s", e)
+        logger.error("Error downloading audio: %s", safe_error_summary(error_summary(e), proxy))
         return None
 
 
@@ -1495,12 +1534,12 @@ async def slot_music_generation(
         mp3_b64 = None
         if media_item.mp3_url:
             req_cookies = _flatten_cookies(media_item.cookies) or {}
-            mp3_b64 = await download_audio_as_base64(media_item.mp3_url, req_cookies, media_item.account_index)
+            mp3_b64 = await download_audio_as_base64(media_item.mp3_url, req_cookies, media_item.account_index, proxy=getattr(client, "proxy", None))
 
         # Download MP4 video
         mp4_b64 = None
         if media_item.url:
-            mp4_b64 = await download_video_as_base64(media_item)
+            mp4_b64 = await download_video_as_base64(media_item, proxy=getattr(client, "proxy", None))
 
         entry: dict[str, Any] = {}
         if mp3_b64:
@@ -1521,7 +1560,7 @@ async def slot_music_generation(
         worker_event = log_worker_event(worker_event, payload={
             "request": {"model": request.model, "prompt": request.prompt},
             "response": build_gemini_response_snapshot(gemini_response),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
         })
         trace_headers.update(build_worker_event_headers(worker_event))
 
@@ -1544,20 +1583,20 @@ async def slot_music_generation(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Slot %d music error: %s", num, e, exc_info=True)
+        logger.error("Slot %d music error: %s", num, error_summary(e))
         error_event = build_worker_event(
             "music", trace_headers, None,
-            raw_response_preview=str(e), error_summary=str(e),
+            raw_response_preview=error_summary(e), error_summary=error_summary(e),
         )
         log_worker_event(error_event, payload={
             "request": {"model": request.model, "prompt": request.prompt},
-            "error": str(e),
-            "raw_capture": tracer.get_snapshot() if tracer else None,
+            "error": error_summary(e),
+            "raw_capture": safe_event_data(tracer.get_snapshot()) if tracer else None,
         })
         slot.report_error(e)
-        if any(kw in str(e).lower() for kw in ['rate limit', '429', 'quota']):
-            raise HTTPException(status_code=429, detail=f"Music rate limited: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Music generation failed: {str(e)}")
+        if any(kw in error_summary(e).lower() for kw in ['rate limit', '429', 'quota']):
+            raise HTTPException(status_code=429, detail=f"Music rate limited: {error_summary(e)}")
+        raise HTTPException(status_code=500, detail=f"Music generation failed: {error_summary(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1626,8 +1665,8 @@ async def _run_research_background(slot_num: int, client, prompt: str, poll_inte
     except Exception as e:
         task["finished"] = True
         task["finished_at"] = int(time.time())
-        task["error"] = str(e)
-        logger.error("Slot %d research [%s] error: %s", slot_num, task_id[:8], e)
+        task["error"] = error_summary(e)
+        logger.error("Slot %d research [%s] error: %s", slot_num, task_id[:8], error_summary(e))
 
 
 @app.post("/slot/{num}/v1/research")
@@ -1675,11 +1714,11 @@ async def slot_deep_research(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Slot %d research start error: %s", num, e, exc_info=True)
+        logger.error("Slot %d research start error: %s", num, error_summary(e))
         slot.report_error(e)
-        if "not eligible" in str(e).lower():
-            raise HTTPException(status_code=403, detail=f"Account not eligible for deep research: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Deep research failed to start: {str(e)}")
+        if "not eligible" in error_summary(e).lower():
+            raise HTTPException(status_code=403, detail=f"Account not eligible for deep research: {error_summary(e)}")
+        raise HTTPException(status_code=500, detail=f"Deep research failed to start: {error_summary(e)}")
 
 
 @app.get("/v1/research/{task_id}")
@@ -1734,6 +1773,33 @@ async def list_research_tasks(
 # ═══════════════════════════════════════════════════════════════════════
 #  Worker management endpoints — /worker/...
 # ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/worker/proxy/{num}", dependencies=[Depends(_verify_management_key)])
+async def worker_get_proxy(num: int):
+    slot = _get_slot(num)
+    return {"proxy_id": slot.proxy_id, "proxy_url": slot.proxy_url}
+
+
+@app.post("/worker/proxy/{num}", dependencies=[Depends(_verify_management_key)])
+async def worker_set_proxy(num: int, request: Request):
+    body = await request.json()
+    proxy_id, proxy_url = body.get("proxy_id", ""), body.get("proxy_url", "")
+    if any(not isinstance(value, str) or any(c in value for c in "\r\n\0") for value in (proxy_id, proxy_url)):
+        raise HTTPException(400, "代理配置格式无效")
+    if bool(proxy_id) != bool(proxy_url):
+        raise HTTPException(400, "代理标识与地址必须一起填写或清空")
+    async with management_lock(num):
+        slot = _get_slot(num)
+        if slot.retiring or slot.state.get("initializing"):
+            raise HTTPException(409, "账号正在初始化或已停止接收请求")
+        async with slot.lock, slot.refresh_lock:
+            if slot.active_requests or any(t["slot"] == num and not t["finished"] for t in _research_tasks.values()):
+                raise HTTPException(409, "账号正在处理请求，请稍后保存")
+            try:
+                await slot.save_proxy(proxy_id, proxy_url, PROXY)
+            except (OSError, ValueError):
+                raise HTTPException(500, "代理保存失败")
+    return {"ok": True, "proxy_id": slot.proxy_id}
 
 @app.post("/worker/reload-slot/{num}", dependencies=[Depends(_verify_management_key)])
 async def worker_reload_slot(num: int):
@@ -1851,8 +1917,9 @@ async def worker_test_slot(num: int):
     except HTTPException:
         raise
     except Exception as e:
-        slot_log(num, f"Test failed: {str(e)[:80]}")
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)[:200]})
+        message = safe_error_summary(e, slot.proxy_url, getattr(client, "proxy", None))
+        slot_log(num, f"Test failed: {message[:80]}")
+        return JSONResponse(status_code=500, content={"ok": False, "error": message[:200]})
     finally:
         slot.active_requests -= 1
 
