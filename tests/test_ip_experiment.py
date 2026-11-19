@@ -1,15 +1,51 @@
 """Offline checks for the isolated experiment's routing boundary."""
 import importlib.util
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from fastapi import FastAPI, HTTPException
 
 spec = importlib.util.spec_from_file_location('experiment', Path(__file__).resolve().parents[1] / 'scripts/ip-restart-experiment.py')
 experiment = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(experiment)
+worker_spec = importlib.util.spec_from_file_location('ip_test_worker', Path(__file__).resolve().parents[1] / 'scripts/ip-experiment-worker.py')
+test_worker = importlib.util.module_from_spec(worker_spec)
+with patch.dict(sys.modules, {'worker': SimpleNamespace(app=FastAPI(), _verify_management_key=lambda: None)}):
+    worker_spec.loader.exec_module(test_worker)
 
 
 class ProxyIsolation(unittest.TestCase):
+    def synthetic_slot(self):
+        transport = SimpleNamespace(proxies={'all': 'http://127.0.0.1:27890'}, cookies={'synthetic': 'unchanged'})
+        audit = SimpleNamespace(snapshot=lambda cookies: dict(cookies), client_id='same-client')
+        client = SimpleNamespace(_running=True, client=transport, cookie_audit=audit, proxy='http://127.0.0.1:27890')
+        return SimpleNamespace(active_requests=0, state={}, retiring=False, client=client)
+
+    def test_transport_switch_retains_client_and_cookie_jar(self):
+        slot = self.synthetic_slot()
+        client, transport, cookies = slot.client, slot.client.client, slot.client.client.cookies
+        for index in (0, 1, 2):
+            result = test_worker.switch_transport(slot, index)
+            self.assertTrue(result['same_client'])
+            self.assertTrue(result['cookies_unchanged'])
+            self.assertIs(slot.client, client)
+            self.assertIs(slot.client.client, transport)
+            self.assertIs(slot.client.client.cookies, cookies)
+            self.assertEqual(transport.proxies, {'all': f'http://127.0.0.1:{27890+index}'})
+
+    def test_switch_rejects_busy_client_and_unlisted_proxy_selection(self):
+        slot = self.synthetic_slot()
+        slot.active_requests = 1
+        with self.assertRaises(HTTPException):
+            test_worker.switch_transport(slot, 1)
+        slot.active_requests = 0
+        for index in (-1, 3, True, 'http://outside.test'):
+            with self.assertRaises(HTTPException):
+                test_worker.switch_transport(slot, index)
+        self.assertEqual(slot.client.client.proxies, {'all': 'http://127.0.0.1:27890'})
+
     def test_only_test_inbounds_and_selected_outbounds_are_included(self):
         original = {'inbounds': [{'port': 443}], 'routing': {'rules': [{'outboundTag': 'unrelated'}]},
                     'outbounds': [{'tag': tag, 'settings': {'servers': [{'address': 'offline.test'}]}}

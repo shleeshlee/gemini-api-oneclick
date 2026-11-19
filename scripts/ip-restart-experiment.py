@@ -102,14 +102,17 @@ def wait_idle(base, key):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--controlled', action='store_true', help='Keep the same client; force A/A/A versus A/B/C, restart both through A')
     args = parser.parse_args()
     root = args.runtime.resolve()
+    prefix = 'oneclick_ip20_control_' if args.controlled else 'oneclick_ip20_'
+    names = tuple(prefix + suffix for suffix in ('proxy', 'fixed', 'multi'))
     if root.exists() or root == SERVING or SERVING in root.parents or root == SOURCE or SOURCE in root.parents:
         raise RuntimeError('Experiment runtime must be new and separate from serving/source')
     if run('git', '-C', str(SOURCE), 'status', '--porcelain', '--untracked-files=no'):
         raise RuntimeError('Source is not clean')
     existing = set(run('docker', 'ps', '-a', '--format', '{{.Names}}').splitlines())
-    if existing.intersection(NAMES):
+    if existing.intersection(names):
         raise RuntimeError('Experiment container already exists; refusing reuse')
     for port in PORTS:
         with socket.socket() as sock:
@@ -133,7 +136,7 @@ def main():
     candidate = json.loads(run('docker', 'inspect', 'gemini_worker_candidate'))[0]
     proxy = json.loads(run('docker', 'inspect', 'xray'))[0]
     report = {'started': time.time(), 'source_commit': run('git', '-C', str(SOURCE), 'rev-parse', 'HEAD'),
-              'slot': 20, 'original_enabled': account['enabled'], 'requests_per_arm': 3,
+              'slot': 20, 'controlled': args.controlled, 'original_enabled': account['enabled'], 'requests_per_arm': 3,
               'original_started': {'gemini_worker': old['State']['StartedAt'], 'gemini_worker_candidate': candidate['State']['StartedAt']},
               'egress': {}, 'arms': {}, 'events': []}
     key = os.urandom(32)
@@ -177,15 +180,18 @@ def main():
         if any('\n' in value or '\r' in value for value in env.values()):
             raise RuntimeError('Invalid multiline environment')
         private(directory / 'runtime.env', ''.join(f'{k}={v}\n' for k, v in env.items()))
-        name = 'oneclick_ip20_' + arm
+        name = prefix + arm
         command = ['docker', 'run', '-d', '--name', name, '--network', 'host', '--env-file', str(directory / 'runtime.env')]
         mounts = [(directory / 'envs', '/app/envs', 'rw'), (directory / 'state', '/app/state', 'rw'),
                   (SOURCE / 'lib/gemini_webapi', '/app/gemini_webapi', 'ro'), (SOURCE / 'app/parsers', '/app/parsers', 'ro')]
         mounts += [(SOURCE / 'app' / name, '/app/' + name, 'ro') for name in
                    ('worker.py', 'slot.py', 'worker_events.py', 'raw_capture_tracer.py')]
+        if args.controlled:
+            mounts.append((SOURCE / 'scripts/ip-experiment-worker.py', '/app/ip_experiment_worker.py', 'ro'))
         for host, target, mode in mounts:
             command += ['-v', f'{host}:{target}:{mode}']
-        command += [old['Image'], '/app/.venv/bin/python', '-m', 'uvicorn', 'worker:app', '--host', '127.0.0.1', '--port', str(port)]
+        module = 'ip_experiment_worker:app' if args.controlled else 'worker:app'
+        command += [old['Image'], '/app/.venv/bin/python', '-m', 'uvicorn', module, '--host', '127.0.0.1', '--port', str(port)]
         started.append(name)
         run(*command)
         return directory, name, f'http://127.0.0.1:{port}'
@@ -198,7 +204,8 @@ def main():
             stream.seek(offset)
             lines = stream.read().splitlines()
         # No authentication fields or account payloads are present in CONNECT logs.
-        return [line for line in lines if 'google.com:443' in line and f'[ip20-{0 if arm == "fixed" else 3} ' in line]
+        return [line for line in lines if 'google.com:443' in line and
+                ('[ip20-' in line if args.controlled else f'[ip20-{0 if arm == "fixed" else 3} ' in line)]
 
     def interrupted(signum, frame):
         raise KeyboardInterrupt()
@@ -208,8 +215,8 @@ def main():
     try:
         original_proxy = json.loads(Path('/etc/xray/config.json').read_text())
         private(root / 'proxy/config.json', json.dumps(proxy_config(original_proxy, Path('/experiment'))))
-        started.append(NAMES[0])
-        run('docker', 'run', '-d', '--name', NAMES[0], '--network', 'host',
+        started.append(names[0])
+        run('docker', 'run', '-d', '--name', names[0], '--network', 'host',
             '-v', f'{root / "proxy/config.json"}:/etc/xray/config.json:ro',
             '-v', f'{root / "proxy"}:/experiment:rw', proxy['Image'])
         time.sleep(2)
@@ -235,6 +242,8 @@ def main():
         report['baseline_credentials'] = fingerprints(root / 'seed.env')
         emit('routing_paused', slot=20)
         for arm, port, proxy_port in [('fixed', 27860, 27890), ('multi', 27861, 27893)]:
+            if args.controlled:
+                proxy_port = 27890
             offset = (root / 'proxy/access.log').stat().st_size
             directory, name, base = begin_worker(arm, port, proxy_port, seed)
             report['arms'][arm] = data = {'requests': []}
@@ -248,6 +257,14 @@ def main():
                 break
             for index in range(3):
                 chat_offset = (root / 'proxy/access.log').stat().st_size
+                if args.controlled:
+                    code, changed = request(base + '/_experiment/egress', management_key,
+                                            {'index': index if arm == 'multi' else 0})
+                    data.setdefault('transport_switches', []).append(changed)
+                    if code != 200 or not changed.get('same_client') or not changed.get('cookies_unchanged'):
+                        raise RuntimeError('Unable to switch only the test transport')
+                    if len({row['client_id'] for row in data['transport_switches']}) != 1:
+                        raise RuntimeError('Test client changed unexpectedly between requests')
                 start = time.monotonic()
                 try:
                     code, reply = request(base + '/slot/20/v1/chat/completions', api_key,
