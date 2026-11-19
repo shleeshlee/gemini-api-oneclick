@@ -159,6 +159,7 @@ class Slot:
     env_path: Path | None = None
     _last_cookie_write: float | None = None
     _pro_probe_done: bool = False
+    cookie_audit: Any = field(default=None, repr=False)
 
     # ── Factory ──────────────────────────────────────────────────────
 
@@ -178,6 +179,20 @@ class Slot:
         """Create and initialise the GeminiClient for this slot."""
         from gemini_webapi import GeminiClient
         from gemini_webapi.constants import AccountStatus
+        from gemini_webapi.cookie_audit import CookieAudit, cookie_operation
+        if self.cookie_audit is None:
+            self.cookie_audit = CookieAudit.create(self.num)
+        else:
+            # Old in-flight sessions retain their own immutable identity.
+            self.cookie_audit = CookieAudit(self.num, self.cookie_audit.store)
+        if self.cookie_audit is not None:
+            try:
+                data = parse_env_file(self.env_path) if self.env_path is not None else None
+                disk = {"__Secure-1PSID": data.get("SECURE_1PSID", ""),
+                        "__Secure-1PSIDTS": data.get("SECURE_1PSIDTS", "")} if data is not None else None
+                self.cookie_audit.loaded({"__Secure-1PSID": self.psid, "__Secure-1PSIDTS": self.psidts}, disk)
+            except Exception as exc:
+                self.cookie_audit.emit("audit_error", stage="read_env", error_type=type(exc).__name__)
         self.pro_verified = False
         self.pro_denied = False
         self._pro_probe_done = False
@@ -191,8 +206,13 @@ class Slot:
 
         try:
             self.state["initializing"] = True
-            self.client = GeminiClient(self.psid, self.psidts, proxy=proxy)
-            await self.client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
+            self.client = GeminiClient(self.psid, self.psidts, proxy=proxy, cookie_audit=self.cookie_audit)
+            with cookie_operation("initialization"):
+                if self.cookie_audit is not None:
+                    self.cookie_audit.emit("init_start")
+                await self.client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
+                if self.cookie_audit is not None:
+                    self.cookie_audit.emit("init_complete")
 
             status = getattr(self.client, "account_status", None)
             self.state["auth_status"] = status.name if status else "unknown"
@@ -209,6 +229,8 @@ class Slot:
             logger.info("Slot %d: client initialised", self.num)
 
         except Exception as e:
+            if self.cookie_audit is not None:
+                self.cookie_audit.emit("init_error", error_type=type(e).__name__)
             logger.error("Slot %d: init failed: %s", self.num, e)
             self.client = None
             self.state["initializing"] = False
@@ -339,6 +361,8 @@ class Slot:
     def writeback_cookies(self, envs_dir: Path | None = None) -> bool:
         """Serialize file writes independently, without waiting on chat or refresh."""
         if not self._cookie_lock.acquire(blocking=False):
+            if self.cookie_audit is not None:
+                self.cookie_audit.writeback("lock_busy")
             return False
         try:
             return self._writeback_cookies(envs_dir)
@@ -347,28 +371,46 @@ class Slot:
 
     def _writeback_cookies(self, envs_dir: Path | None = None) -> bool:
         """Persist the current session jar only; no RPC, init or rotation."""
+        client = self.client
+        audit = getattr(client, "cookie_audit", self.cookie_audit)
         now = time.monotonic()
         if self._last_cookie_write is not None and now - self._last_cookie_write < 600:
+            if audit is not None:
+                audit.writeback("throttled", retry_after_seconds=round(600 - (now - self._last_cookie_write), 3))
             return False
         path = self.env_path or (envs_dir / f"account{self.num}.env" if envs_dir else None)
-        if not self.client or path is None:
+        if not client or path is None:
+            if audit is not None:
+                audit.writeback("no_client" if not client else "no_env_path")
             return False
         temporary = None
+        values = None
+        current = None
+
+        def audit_write(reason, **extra):
+            if audit is not None:
+                pair = lambda data: {"__Secure-1PSID": data.get("SECURE_1PSID", ""),
+                                     "__Secure-1PSIDTS": data.get("SECURE_1PSIDTS", "")}
+                audit.writeback(reason, memory=pair(values) if values else None,
+                                file_values=pair(current) if current else None,
+                                client_changed_during_write=self.client is not client, **extra)
         try:
             cookies = {}
-            for source in (getattr(self.client, "cookies", None),
-                           getattr(getattr(self.client, "client", None), "cookies", None)):
+            for source in (getattr(client, "cookies", None),
+                           getattr(getattr(client, "client", None), "cookies", None)):
                 if source is not None:
                     jar = getattr(source, "jar", None)
                     cookies.update({c.name: c.value for c in jar} if jar is not None else dict(source))
             values = {"SECURE_1PSID": cookies.get("__Secure-1PSID"),
                       "SECURE_1PSIDTS": cookies.get("__Secure-1PSIDTS")}
             if not all(isinstance(v, str) and v and "\n" not in v and "\r" not in v for v in values.values()):
+                audit_write("invalid_cookie_pair")
                 return False
             with path.open(encoding="utf-8", newline="") as source:
                 original = source.read()
             current = parse_env_file(path)
             if all(current.get(key) == value for key, value in values.items()):
+                audit_write("unchanged")
                 return False
             found = set()
             lines = []
@@ -381,6 +423,7 @@ class Slot:
                 lines.append(line)
             # A partial env file is not rewritten into an incomplete credential pair.
             if found != set(values):
+                audit_write("incomplete_env")
                 return False
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
                 temporary = output.name
@@ -389,12 +432,17 @@ class Slot:
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, path)
+            previous_values = {"__Secure-1PSID": current.get("SECURE_1PSID", ""),
+                               "__Secure-1PSIDTS": current.get("SECURE_1PSIDTS", "")}
+            current = values
             self._last_cookie_write = now
             self.psid, self.psidts = values["SECURE_1PSID"], values["SECURE_1PSIDTS"]
             logger.info("slot %d cookie 已写回", self.num)
+            audit_write("written", previous_file_values=previous_values)
             return True
-        except Exception:
+        except Exception as exc:
             logger.warning("slot %d cookie 写回失败", self.num)
+            audit_write("failed", error_type=type(exc).__name__)
             return False
         finally:
             if temporary and os.path.exists(temporary):

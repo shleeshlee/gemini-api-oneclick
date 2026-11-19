@@ -18,6 +18,7 @@ from curl_cffi.requests.errors import RequestsError
 
 from .components import GemMixin, ResearchMixin
 from .tracer import Tracer, sanitize_headers
+from .cookie_audit import AuditedSession
 from .constants import (
     AccountStatus,
     GRPC,
@@ -365,6 +366,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         "close_delay",
         "close_task",
         "cookies",
+        "cookie_audit",
         "kwargs",
         "proxy",
         "refresh_interval",
@@ -385,6 +387,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         **kwargs,
     ):
         super().__init__()
+        self.cookie_audit = kwargs.pop("cookie_audit", None)
         self.cookies = Cookies()
         self.proxy = proxy
         self.account_index = account_index
@@ -458,12 +461,15 @@ class GeminiClient(GemMixin, ResearchMixin):
                 self.session_kwargs = dict(self.kwargs)
 
                 # Create session first and reuse it for get_access_token
-                self.client = AsyncSession(
+                session_type = AuditedSession if self.cookie_audit is not None else AsyncSession
+                audit_kwargs = {"cookie_audit": self.cookie_audit} if self.cookie_audit is not None else {}
+                self.client = session_type(
                     timeout=timeout,
                     proxy=self.proxy,
                     allow_redirects=True,
                     http_version=CurlHttpVersion.V2_0,
                     impersonate=self.kwargs.pop("impersonate", "chrome"),
+                    **audit_kwargs,
                     **self.kwargs,
                 )
                 self.client.headers.update(Headers.GEMINI.value)

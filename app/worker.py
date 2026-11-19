@@ -53,6 +53,7 @@ from worker_events import (
     persist_worker_event,
 )
 from raw_capture_tracer import RawCaptureTracer
+from gemini_webapi.cookie_audit import cookie_operation
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import AccountStatus, Model, build_model_header
 from gemini_webapi.exceptions import ImageGenerationBlocked
@@ -184,12 +185,29 @@ class CookieWritebackMiddleware:
                 success = dict(message.get("headers", [])).get(b"x-oneclick-success") != b"false"
             await send(message)
 
-        await self.app(scope, receive, capture)
         match = re.match(r"/slot/(\d+)/v1/", scope.get("path", ""))
-        if match and scope.get("method") == "POST" and status < 400 and success:
-            slot = slots.get(int(match.group(1)))
-            if isinstance(slot, Slot):
-                await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
+        if not match or scope.get("method") != "POST":
+            await self.app(scope, receive, capture)
+            return
+        with cookie_operation("api_request"):
+            error_type = None
+            starting_slot = slots.get(int(match.group(1)))
+            request_audit = starting_slot.cookie_audit if isinstance(starting_slot, Slot) else None
+            try:
+                await self.app(scope, receive, capture)
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                if request_audit is not None:
+                    request_audit.emit("api_complete", status=status, transport_success=status < 400 and success and error_type is None,
+                                           error_type=error_type)
+                    if error_type is not None or status >= 400 or not success:
+                        request_audit.writeback("request_failed")
+            if status < 400 and success:
+                slot = slots.get(int(match.group(1)))
+                if isinstance(slot, Slot):
+                    await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
 
 
 app.add_middleware(CookieWritebackMiddleware)
@@ -317,15 +335,19 @@ async def _refresh_slot_models(slot: Slot):
         client = slot.client
         if client is None or slot.state.get("initializing"):
             return
-        try:
-            await client.refresh_models()
-        except Exception:
-            logger.warning("Slot %d: model refresh failed; keeping previous registry", slot.num)
-        finally:
-            status = getattr(client, "account_status", None)
-            slot.state["auth_status"] = status.name if status else "unknown"
-            _publish_models(slot)
-            await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
+        with cookie_operation("model_refresh"):
+            try:
+                await client.refresh_models()
+            except Exception as exc:
+                audit = getattr(client, "cookie_audit", None)
+                if audit is not None:
+                    audit.emit("model_refresh_error", error_type=type(exc).__name__)
+                logger.warning("Slot %d: model refresh failed; keeping previous registry", slot.num)
+            finally:
+                status = getattr(client, "account_status", None)
+                slot.state["auth_status"] = status.name if status else "unknown"
+                _publish_models(slot)
+                await asyncio.to_thread(slot.writeback_cookies, ENVS_DIR)
 
 
 async def _refresh_models_loop():
@@ -927,6 +949,9 @@ async def _chat_completion_impl(
 
                 except Exception as e:
                     trace_headers["X-OneClick-Success"] = "false"
+                    audit = getattr(client, "cookie_audit", None)
+                    if not debug_probe and audit is not None:
+                        audit.emit("chat_stream_error", error_type=type(e).__name__)
                     if not debug_probe:
                         logger.error("Slot %d stream error: %s", num, e, exc_info=True)
                     slot.report_error(e)
