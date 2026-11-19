@@ -168,6 +168,74 @@ class GatewayProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.json()['deployed'])
         self.assertEqual(partial.status_code, 400)
 
+    async def test_edit_name_keeps_identity_binding_without_worker_calls(self):
+        self.settings.commit(assignments={'20': 'a'})
+        with self.upstream(lambda _: self.fail('Rename must not contact worker')):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': 'Renamed', 'url': 'http://proxy.test:80'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.settings.assignments, {'20': 'a'})
+        self.assertEqual(self.settings.proxies['a']['name'], 'Renamed')
+
+    async def test_edit_address_updates_bound_transport_and_persists_profile(self):
+        self.settings.commit(assignments={'20': 'a'})
+        posted = []
+        def upstream(request):
+            if request.method == 'POST': posted.append(json.loads(request.content))
+            return httpx.Response(200, json={'proxy_id': 'a', 'proxy_url': 'http://proxy.test:80'})
+        with self.upstream(upstream):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': 'A', 'url': 'http://new.test:80'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(posted, [{'proxy_id': 'a', 'proxy_url': 'http://new.test:80'}])
+        self.assertEqual(self.settings.assignments, {'20': 'a'})
+        restored = ProxySettings(self.settings.path); restored.load()
+        self.assertEqual(restored.proxies['a']['url'], 'http://new.test:80')
+
+    async def test_edit_failure_restores_previously_updated_accounts(self):
+        gateway.containers[21] = SimpleNamespace(url='http://worker.test/slot/21')
+        self.settings.commit(assignments={'20': 'a', '21': 'a'})
+        posted = []
+        def upstream(request):
+            if request.method == 'POST':
+                body = json.loads(request.content)
+                posted.append((request.url.path, body['proxy_url']))
+                if request.url.path.endswith('/21') and body['proxy_url'] == 'http://new.test:80':
+                    return httpx.Response(409)
+            return httpx.Response(200, json={'proxy_id': 'a', 'proxy_url': 'http://proxy.test:80'})
+        with self.upstream(upstream):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': 'A', 'url': 'http://new.test:80'})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.settings.proxies['a']['url'], 'http://proxy.test:80')
+        self.assertEqual(posted, [('/worker/proxy/20', 'http://new.test:80'),
+                                  ('/worker/proxy/21', 'http://new.test:80'),
+                                  ('/worker/proxy/20', 'http://proxy.test:80')])
+
+    async def test_edit_busy_account_is_not_misreported_as_failed_rollback(self):
+        self.settings.commit(assignments={'20': 'a'})
+        posted = []
+        def upstream(request):
+            if request.method == 'POST':
+                posted.append(json.loads(request.content))
+                return httpx.Response(409)
+            return httpx.Response(200, json={'proxy_id': 'a', 'proxy_url': 'http://proxy.test:80'})
+        with self.upstream(upstream):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': 'A', 'url': 'http://new.test:80'})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('请稍后保存', response.json()['detail'])
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(self.settings.proxies['a']['url'], 'http://proxy.test:80')
+
+    async def test_edit_disk_failure_rolls_back_transport(self):
+        self.settings.commit(assignments={'20': 'a'})
+        posted = []
+        def upstream(request):
+            if request.method == 'POST': posted.append(json.loads(request.content)['proxy_url'])
+            return httpx.Response(200, json={'proxy_id': 'a', 'proxy_url': 'http://proxy.test:80'})
+        with self.upstream(upstream), patch.object(self.settings, 'commit', side_effect=OSError('disk full')):
+            response = await self.request('PUT', '/gateway/proxies/a', {'name': 'A', 'url': 'http://new.test:80'})
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(posted, ['http://new.test:80', 'http://proxy.test:80'])
+        self.assertEqual(self.settings.proxies['a']['url'], 'http://proxy.test:80')
+
     async def test_migration_rejects_candidate_with_different_proxy_before_chat(self):
         self.settings.commit(assignments={'20': 'a'})
         account = gateway.Container(20, 8020)

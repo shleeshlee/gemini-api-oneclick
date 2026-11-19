@@ -33,7 +33,7 @@ function setup(handler = async () => response()) {
     URL, currentNum:20, modalVersion:1, names:{}, gatewayStatus:{containers:[{num:20, name:'Old', group:''}]},
     proxyProfiles:[{id:'a', name:'A', url:'http://127.0.0.1:8001'}, {id:'b', name:'B', url:'socks5://127.0.0.1:8002'}],
     proxyAssignments:{'20':'a'}, proxySettingsLoaded:true, proxySettingsError:'', proxyLoadVersion:0, proxyMutationVersion:0,
-    pendingProxySaves:new Map(), currentMode:'worker',
+    pendingProxySaves:new Map(), currentMode:'worker', proxyEditingId:null, proxyFormSaving:false,
     localRestarting:{add:num => restarting.push(num), delete(){}, has(){return false;}},
     localStorage:{setItem(){}}, authHeaders:() => ({}), setTimeout(){}, renderGrid(){}, loadAll:async () => {}, populateGroupSelect(){},
     toast:(...args) => notices.push(args),
@@ -48,6 +48,37 @@ function setup(handler = async () => response()) {
 }
 
 (async () => {
+  // Editing retains the profile identity and assignments; cancelling sends nothing.
+  let editing = setup();
+  editing.context.editProxy('a');
+  assert.equal(editing.elements.proxyAddress.value, 'http://127.0.0.1:8001');
+  assert.equal(editing.elements.proxyAddBtn.textContent, '保存修改');
+  editing.context.cancelProxyEdit();
+  assert.equal(editing.context.proxyEditingId, null);
+  assert.equal(editing.calls.length, 0);
+  assert.equal(editing.elements.proxyCancelBtn.hidden, true);
+  const updated = {id:'a',name:'Renamed',url:'http://new.test:8001'};
+  editing = setup(async (url, options) => options.method === 'PUT' ? response({ok:true,proxy:updated})
+    : response({proxies:[updated],assignments:{'20':'a'}}));
+  editing.context.editProxy('a');
+  editing.elements.proxyAddress.value = updated.url;
+  editing.elements.proxyName.value = updated.name;
+  await editing.context.addProxy();
+  assert.equal(editing.calls[0].url, '/gateway/proxies/a');
+  assert.equal(editing.calls[0].options.method, 'PUT');
+  assert.equal(editing.context.proxyAssignments['20'], 'a');
+  assert.match(editing.context.proxyLabel(20), /Renamed/);
+  assert.equal(editing.context.proxyEditingId, null);
+  // An API failure keeps the draft for correction, without creating another proxy.
+  editing = setup(async () => response({detail:'account busy'}, false));
+  editing.context.editProxy('a');
+  editing.elements.proxyName.value = 'Draft';
+  await editing.context.addProxy();
+  assert.equal(editing.context.proxyEditingId, 'a');
+  assert.equal(editing.elements.proxyName.value, 'Draft');
+  assert.equal(editing.context.proxyProfiles[0].name, 'A');
+  assert.equal(editing.context.proxyFormSaving, false);
+
   // An empty Cookie form is a metadata-only save, never a deployment/recovery.
   let test = setup();
   await test.context.doDeploy();

@@ -19,7 +19,7 @@ import os
 import re
 import time
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -2169,6 +2169,72 @@ async def add_proxy(request: Request):
             proxy_settings.commit(proxies=profiles)
         except OSError:
             raise HTTPException(500, "代理地址保存失败")
+    return {"ok": True, "proxy": profile}
+
+
+@app.put("/gateway/proxies/{identity}", dependencies=[Depends(verify_panel_auth)])
+async def edit_proxy(identity: str, request: Request):
+    body = await request.json()
+    name, url = body.get("name", ""), body.get("url", "")
+    if any(not isinstance(value, str) or any(c in value for c in "\r\n\0") for value in (name, url)):
+        raise HTTPException(400, "名称或代理地址格式无效")
+    name, url = name.strip(), url.strip()
+    if not url:
+        raise HTTPException(400, "请填写代理地址")
+    async with _proxy_settings_lock, AsyncExitStack() as locks:
+        previous = proxy_settings.proxies.get(identity)
+        if previous is None:
+            raise HTTPException(404, "代理地址不存在")
+        profile = {"id": identity, "name": name or url.rsplit("@", 1)[-1], "url": url}
+        assigned = sorted(int(num) for num, chosen in proxy_settings.assignments.items()
+                          if chosen == identity) if url != previous["url"] else []
+        for num in assigned:
+            await locks.enter_async_context(_worker_route_locks.setdefault(num, asyncio.Lock()))
+        async with httpx.AsyncClient(timeout=30, headers=worker_management_headers()) as client:
+            attempted = []
+
+            async def rollback():
+                restored = True
+                for endpoint, binding in reversed(attempted):
+                    try:
+                        response = await client.post(endpoint, json=binding)
+                        restored = restored and response.status_code == 200
+                    except httpx.HTTPError:
+                        restored = False
+                return restored
+
+            try:
+                # Read all bindings before modifying any transport.
+                bindings = []
+                for num in assigned:
+                    endpoint = f"{worker_base(num)}/worker/proxy/{num}"
+                    response = await client.get(endpoint)
+                    if response.status_code != 200:
+                        raise HTTPException(409, f"无法读取账号 #{num} 的代理配置，未保存")
+                    binding = response.json()
+                    if binding.get("proxy_id") != identity or binding.get("proxy_url") != previous["url"]:
+                        raise HTTPException(409, f"账号 #{num} 的代理配置不一致，未保存")
+                    bindings.append((num, endpoint, {"proxy_id": identity, "proxy_url": previous["url"]}))
+                for num, endpoint, binding in bindings:
+                    attempted.append((endpoint, binding))
+                    response = await client.post(endpoint, json={"proxy_id": identity, "proxy_url": url})
+                    if response.status_code != 200:
+                        if response.status_code == 409:
+                            # Worker rejects busy/initializing accounts before any mutation.
+                            attempted.pop()
+                        raise HTTPException(409, f"账号 #{num} 暂时无法更新代理，请稍后保存")
+                proxy_settings.commit(proxies={**proxy_settings.proxies, identity: profile})
+            except BaseException as exc:
+                restored = await asyncio.shield(rollback())
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                if not restored:
+                    raise HTTPException(500, "代理编辑失败，部分账号回滚未确认，请重新保存其代理分配") from None
+                if isinstance(exc, HTTPException):
+                    raise
+                if isinstance(exc, (OSError, httpx.HTTPError, ValueError)):
+                    raise HTTPException(502, "代理编辑失败，原配置已保留") from None
+                raise
     return {"ok": True, "proxy": profile}
 
 

@@ -271,6 +271,10 @@ body::before {
 .proxy-row { display:flex; align-items:center; gap:0.65rem; padding:0.65rem 0.75rem; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); }
 .proxy-row-info { flex:1; min-width:0; overflow-wrap:anywhere; font-size:0.8rem; }
 .proxy-row-address { color:var(--text-muted); margin-top:0.15rem; font-family:var(--font-mono,monospace); font-size:0.72rem; }
+.proxy-row.editing { border-color:var(--accent); }
+.proxy-row-actions { display:flex; gap:0.4rem; flex-wrap:wrap; flex-shrink:0; }
+.proxy-edit-cancel { grid-column:1/-1; justify-self:end; }
+.proxy-edit-cancel[hidden] { display:none; }
 .proxy-add { display:grid; grid-template-columns:1fr auto; gap:0.55rem; }
 .proxy-add .proxy-address { grid-column:1/-1; }
 .proxy-add .btn { padding:0.6rem 1rem; }
@@ -1200,6 +1204,7 @@ body::before {
         <input class="form-input proxy-address" id="proxyAddress" aria-label="代理地址" placeholder="代理地址" spellcheck="false" autocomplete="off">
         <input class="form-input form-input-name" id="proxyName" aria-label="代理名称" placeholder="名称（可选）" autocomplete="off">
         <button class="btn btn-primary" id="proxyAddBtn" onclick="addProxy()">添加</button>
+        <button class="card-btn proxy-edit-cancel" id="proxyCancelBtn" onclick="cancelProxyEdit()" hidden>取消编辑</button>
       </div>
       <div class="modal-msg" id="proxySettingsMsg" aria-live="polite"></div>
     </div>
@@ -1368,6 +1373,8 @@ let proxySettingsLoaded = false;
 let proxySettingsError = '';
 let proxyLoadVersion = 0;
 let proxyMutationVersion = 0;
+let proxyEditingId = null;
+let proxyFormSaving = false;
 let modalVersion = 0;
 const pendingProxySaves = new Map();
 
@@ -3370,7 +3377,7 @@ function renderProxySettings() {
   }
   for (const profile of proxyProfiles) {
     const row = document.createElement('div');
-    row.className = 'proxy-row';
+    row.className = 'proxy-row' + (proxyEditingId === profile.id ? ' editing' : '');
     const info = document.createElement('div');
     info.className = 'proxy-row-info';
     const name = document.createElement('div');
@@ -3385,40 +3392,94 @@ function renderProxySettings() {
     const remove = document.createElement('button');
     remove.className = 'card-btn disable';
     remove.textContent = '删除';
+    remove.disabled = proxyFormSaving;
     remove.onclick = () => deleteProxy(profile.id, remove);
+    const edit = document.createElement('button');
+    edit.className = 'card-btn';
+    edit.textContent = '编辑';
+    edit.disabled = proxyFormSaving;
+    edit.onclick = () => editProxy(profile.id);
+    const actions = document.createElement('div');
+    actions.className = 'proxy-row-actions';
+    actions.appendChild(edit);
+    actions.appendChild(remove);
     row.appendChild(info);
-    row.appendChild(remove);
+    row.appendChild(actions);
     list.appendChild(row);
   }
 }
 
+function editProxy(id) {
+  if (proxyFormSaving) return;
+  const profile = proxyProfiles.find(item => item.id === id);
+  if (!profile) return;
+  proxyEditingId = id;
+  document.getElementById('proxyAddress').value = profile.url;
+  document.getElementById('proxyName').value = profile.name || '';
+  document.getElementById('proxyAddBtn').textContent = '保存修改';
+  document.getElementById('proxyCancelBtn').hidden = false;
+  const msg = document.getElementById('proxySettingsMsg');
+  msg.className = 'modal-msg';
+  msg.textContent = '正在编辑：' + (safeProxyAddress(profile.name) || safeProxyAddress(profile.url));
+  renderProxySettings();
+  document.getElementById('proxyAddress').focus();
+}
+
+function cancelProxyEdit() {
+  if (proxyFormSaving) return;
+  proxyEditingId = null;
+  document.getElementById('proxyAddress').value = '';
+  document.getElementById('proxyName').value = '';
+  document.getElementById('proxyAddBtn').textContent = '添加';
+  document.getElementById('proxyCancelBtn').hidden = true;
+  document.getElementById('proxySettingsMsg').textContent = '';
+  renderProxySettings();
+}
+
 async function addProxy() {
+  if (proxyFormSaving) return;
   const address = document.getElementById('proxyAddress');
   const name = document.getElementById('proxyName');
   const button = document.getElementById('proxyAddBtn');
   const msg = document.getElementById('proxySettingsMsg');
+  const editingId = proxyEditingId;
   const url = address.value.trim();
   if (!url) { msg.className = 'modal-msg err'; msg.textContent = '请输入代理地址'; return; }
-  button.disabled = true;
+  proxyFormSaving = true;
+  button.disabled = address.disabled = name.disabled = true;
+  document.getElementById('proxyCancelBtn').disabled = true;
+  renderProxySettings();
   msg.className = 'modal-msg';
   msg.textContent = '保存中…';
   ++proxyMutationVersion;
   try {
-    await panelRequest('/gateway/proxies', {method:'POST', body:JSON.stringify({name:name.value.trim(), url})});
+    const endpoint = '/gateway/proxies' + (editingId ? '/' + encodeURIComponent(editingId) : '');
+    const data = await panelRequest(endpoint, {method:editingId ? 'PUT' : 'POST', body:JSON.stringify({name:name.value.trim(), url})});
     ++proxyMutationVersion;
+    if (editingId) proxyProfiles = proxyProfiles.map(profile => profile.id === editingId ? data.proxy : profile);
+    proxyEditingId = null;
+    button.textContent = '添加';
+    document.getElementById('proxyCancelBtn').hidden = true;
     address.value = '';
     name.value = '';
     await loadProxySettings();
     renderGrid();
     msg.className = 'modal-msg ok';
-    msg.textContent = proxySettingsError ? '已添加，列表刷新失败' : '已添加';
+    const saved = editingId ? '已保存修改' : '已添加';
+    msg.textContent = saved + (proxySettingsError ? '，列表刷新失败' : '');
   } catch (error) {
     msg.className = 'modal-msg err';
     msg.textContent = error.message;
-  } finally { button.disabled = false; }
+  } finally {
+    proxyFormSaving = false;
+    button.disabled = address.disabled = name.disabled = false;
+    document.getElementById('proxyCancelBtn').disabled = false;
+    renderProxySettings();
+  }
 }
 
 async function deleteProxy(id, button) {
+  if (proxyFormSaving) return;
   const msg = document.getElementById('proxySettingsMsg');
   button.disabled = true;
   ++proxyMutationVersion;
@@ -3426,6 +3487,7 @@ async function deleteProxy(id, button) {
     await panelRequest('/gateway/proxies/' + encodeURIComponent(id), {method:'DELETE'});
     ++proxyMutationVersion;
     proxyProfiles = proxyProfiles.filter(profile => profile.id !== id);
+    if (proxyEditingId === id) cancelProxyEdit();
     renderProxySettings();
     populateProxySelect();
     renderGrid();
