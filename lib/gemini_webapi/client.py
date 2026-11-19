@@ -1,5 +1,6 @@
 import asyncio
 import codecs
+import contextlib
 import io
 import os
 import random
@@ -19,6 +20,8 @@ from curl_cffi.requests.errors import RequestsError
 from .components import GemMixin, ResearchMixin
 from .tracer import Tracer, sanitize_headers
 from .cookie_audit import AuditedSession
+
+_CLEANUP_TIMEOUT = 5
 from .constants import (
     AccountStatus,
     GRPC,
@@ -353,6 +356,7 @@ class GeminiClient(GemMixin, ResearchMixin):
     __slots__ = [
         "_gems",  # From GemMixin
         "_lock",
+        "_init_task",
         "_model_registry",
         "_reqid",
         "_running",
@@ -406,6 +410,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         self.verbose: bool = True
         self.watchdog_timeout: float = 60  # ≤ DELAY_FACTOR × retry × (retry + 1) / 2
         self._lock = asyncio.Lock()
+        self._init_task = None
         self._model_registry: dict[str, AvailableModel] = {}
         self._reqid: int = random.randint(10000, 99999)
         self.account_status: AccountStatus = AccountStatus.AVAILABLE
@@ -452,7 +457,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         async with self._lock:
             if self._running:
                 return
-
+            self._init_task = asyncio.current_task()
             try:
                 self.verbose = verbose
                 self.watchdog_timeout = watchdog_timeout
@@ -510,9 +515,13 @@ class GeminiClient(GemMixin, ResearchMixin):
 
                 if self.verbose:
                     logger.success("Gemini client initialized successfully.")
-            except Exception:
-                await self.close()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(_CLEANUP_TIMEOUT):
+                        await self.close()
                 raise
+            finally:
+                self._init_task = None
 
     async def close(self, delay: float = 0) -> None:
         """
@@ -538,7 +547,8 @@ class GeminiClient(GemMixin, ResearchMixin):
             self.refresh_task = None
 
         if self.client:
-            await self.client.close()
+            session, self.client = self.client, None
+            await session.close()
 
     async def reset_close_task(self) -> None:
         """
@@ -600,8 +610,9 @@ class GeminiClient(GemMixin, ResearchMixin):
         for label, func in steps:
             try:
                 await func()
-            except Exception as exc:
-                logger.warning(f"Failed to initialize {label}: {exc}")
+            except Exception:
+                logger.warning(f"Failed to initialize {label}")
+                raise
 
     async def refresh_models(self) -> None:
         """Refresh discovery without rotation, @running retries or reinitialisation."""
@@ -1642,7 +1653,13 @@ class GeminiClient(GemMixin, ResearchMixin):
 
         if response.status_code != 200:
             if close_on_error:
-                await self.close()
+                # Cleanup must neither hide the original HTTP failure nor hang.
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(_CLEANUP_TIMEOUT):
+                        await self.close()
+            if response.status_code in (401, 403):
+                label = "Unauthorized" if response.status_code == 401 else "Forbidden"
+                raise AuthError(f"HTTP {response.status_code} {label}: 需要重新认证", http_status=response.status_code)
             raise APIError(f"Batch execution failed with status code {response.status_code}")
 
         if self.client and update_cookies:

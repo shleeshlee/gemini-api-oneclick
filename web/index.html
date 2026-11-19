@@ -1507,7 +1507,13 @@ function renderGrid() {
       cardClass = 'disabled-card'; dotClass = 'yellow'; stateLabel = '已禁用';
       offCount++;
     } else if (restarting) {
-      cardClass = 'restarting'; dotClass = 'restarting'; stateLabel = '重启中';
+      cardClass = 'restarting'; dotClass = 'restarting'; stateLabel = currentMode === 'worker' ? '恢复中' : '重启中';
+    } else if (gw && gw.needs_cookie) {
+      cardClass = 'unhealthy'; dotClass = 'red'; stateLabel = '认证失败';
+      badCount++;
+    } else if (gw && gw.last_error_type === 'init_timeout') {
+      cardClass = 'unhealthy'; dotClass = 'yellow'; stateLabel = '初始化超时';
+      badCount++;
     } else if (gw && gw.healthy && gw.img_blocked) {
       cardClass = 'img-blocked'; dotClass = 'orange'; stateLabel = '仅生文';
       okCount++;
@@ -1537,7 +1543,7 @@ function renderGrid() {
     if (gw) {
       const testBtn = `<button class="card-btn test" id="testBtn${num}" onclick="event.stopPropagation();testContainer(${num})">测试</button>`;
       const restartLabel = currentMode === 'worker'
-        ? 'Reload Slot'
+        ? '恢复此账号'
         : (currentMode === 'accounts' ? '重启容器' : '重启实例');
       const restartBtn = `<button class="card-btn restart" onclick="event.stopPropagation();restartContainer(${num})">${restartLabel}</button>`;
       if (gw.enabled) {
@@ -1557,12 +1563,11 @@ function renderGrid() {
 
     const usageBlock = renderUsage(gw);
 
-    // Error line only when no warning bar already explains the situation
-    const hasWarning = restarting || (gw && (gw.needs_cookie || gw.img_blocked));
-    const showErrorLine = gw && gw.last_error && !gw.healthy && !hasWarning;
+    // Authentication and timeout details remain visible below the status label.
+    const showErrorLine = gw && gw.last_error && !gw.healthy && !restarting;
     let errorLine = '';
     if (showErrorLine) {
-      errorLine = `<div class="card-error" title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
+      errorLine = `<div class="card-error" ${gw.last_error_type === 'init_timeout' ? 'style="color:var(--warning, #c99820)"' : ''} title="${esc(gw.last_error)}">${esc(gw.last_error)}</div>`;
     }
 
     const groupBadge = group
@@ -1578,8 +1583,8 @@ function renderGrid() {
         <div class="card-preview ${preview ? '' : 'empty'}">
           ${preview ? esc(preview) : '无 Cookie'}
         </div>
-        ${restarting ? '<div class="card-restarting">正在重启，登录中…</div>' : ''}
-        ${gw && gw.needs_cookie && !restarting ? '<div class="card-warn">Cookie 无效，需更新</div>' : ''}
+        ${restarting ? '<div class="card-restarting">正在验证登录…</div>' : ''}
+        ${gw && gw.needs_cookie && !restarting ? '<div class="card-warn">认证失败，需要重新认证</div>' : ''}
         ${gw && gw.img_blocked && !gw.needs_cookie && !restarting ? '<div class="card-warn">仅生文，需更新Cookie</div>' : ''}
         ${gw && gw.busy ? '<div class="card-busy">处理中</div>' : ''}
         ${usageBlock}
@@ -1670,7 +1675,7 @@ async function deleteContainer(num) {
 
 async function restartContainer(num) {
   const targetLabel = currentMode === 'worker'
-    ? 'reload slot'
+    ? '单独恢复账号'
     : (currentMode === 'accounts' ? '重启容器' : '重启实例');
   if (!confirm(`确认${targetLabel} #${num}？`)) return;
   localRestarting.add(num);
@@ -1679,7 +1684,7 @@ async function restartContainer(num) {
     const resp = await fetch(`/gateway/restart/${num}`, { method: 'POST', headers: authHeaders() });
     if (resp.ok) {
       const actionLabel = currentMode === 'worker'
-        ? 'reload slot'
+        ? '恢复此账号'
         : (currentMode === 'accounts' ? '重启容器' : '重启实例');
       toast(`#${num} 正在${actionLabel}`, 'ok');
     } else {
@@ -3336,7 +3341,7 @@ function doDeploy() {
     localRestarting.delete(deployNum);
     if (ok) {
       msg.className = 'modal-msg ok';
-      msg.textContent = '部署成功！';
+      msg.textContent = currentMode === 'worker' ? 'Cookie 已保存，正在验证登录' : '部署成功！';
       toast('#' + currentNum + ' 已部署', 'ok');
       setTimeout(() => { loadAll(); closeModal(); }, 1200);
     } else {

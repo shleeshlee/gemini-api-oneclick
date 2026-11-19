@@ -3,7 +3,9 @@ class AuthError(Exception):
     Exception for authentication errors caused by invalid credentials/cookies.
     """
 
-    pass
+    def __init__(self, message="Authentication failed; reauthentication required", *, http_status=None):
+        super().__init__(message)
+        self.http_status = http_status
 
 
 class APIError(Exception):

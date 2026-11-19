@@ -3,6 +3,7 @@ import os
 import re
 from asyncio import Task
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from curl_cffi import CurlHttpVersion
 from curl_cffi.requests import AsyncSession, Cookies, Response
@@ -10,6 +11,17 @@ from curl_cffi.requests import AsyncSession, Cookies, Response
 from ..constants import Endpoint, Headers
 from ..exceptions import AuthError
 from .logger import logger
+
+
+def validate_login_response(response):
+    """Only a Gemini page may supply Gemini session tokens."""
+    if response.status_code in (401, 403):
+        label = "Unauthorized" if response.status_code == 401 else "Forbidden"
+        raise AuthError(f"HTTP {response.status_code} {label}: 需要重新认证", http_status=response.status_code)
+    response.raise_for_status()
+    host = urlsplit(str(response.url)).hostname
+    if host != "gemini.google.com":
+        raise AuthError("需要重新认证：Google 跳转到登录、同意或账号验证页面")
 
 
 async def send_request(
@@ -28,15 +40,7 @@ async def send_request(
 
         init_url = Endpoint.get_init_url(account_index)
         response = await session.get(init_url)
-        response.raise_for_status()
-
-        # Check if redirected to consent page - means cookies are expired/invalid
-        final_url = str(response.url)
-        if "consent.google.com" in final_url:
-            raise AuthError(
-                f"Redirected to Google consent page. This typically means your cookies are expired or invalid "
-                f"for account index {account_index}. Please update your __Secure-1PSID and __Secure-1PSIDTS cookies."
-            )
+        validate_login_response(response)
 
         return response, session.cookies
 
@@ -55,15 +59,7 @@ async def send_request(
 
         init_url = Endpoint.get_init_url(account_index)
         response = await client.get(init_url)
-        response.raise_for_status()
-
-        # Check if redirected to consent page - means cookies are expired/invalid
-        final_url = str(response.url)
-        if "consent.google.com" in final_url:
-            raise AuthError(
-                f"Redirected to Google consent page. This typically means your cookies are expired or invalid "
-                f"for account index {account_index}. Please update your __Secure-1PSID and __Secure-1PSIDTS cookies."
-            )
+        validate_login_response(response)
 
         return response, client.cookies
 
@@ -272,22 +268,32 @@ async def get_access_token(
     if not tasks:
         raise AuthError("No valid cookies available for initialization. Please pass __Secure-1PSID and __Secure-1PSIDTS manually.")
 
-    # Try each authentication method until one succeeds
-    for i, future in enumerate(asyncio.as_completed(tasks)):
-        try:
-            response, request_cookies = await future
-            snlm0e, cfb2h, fdrfje = _extract_tokens_from_response(response.text)
-
-            # Success if any token is found (SNlM0e was removed by Google around Feb 2025)
-            if snlm0e is not None or cfb2h or fdrfje:
+    errors = []
+    try:
+        for i, future in enumerate(asyncio.as_completed(tasks)):
+            try:
+                response, request_cookies = await future
+                validate_login_response(response)
+                snlm0e, cfb2h, fdrfje = _extract_tokens_from_response(response.text)
+                if snlm0e is not None or cfb2h or fdrfje:
+                    return snlm0e, cfb2h, fdrfje, request_cookies
+                errors.append(AuthError("需要重新认证：Gemini 页面缺少会话字段"))
+            except Exception as exc:
+                errors.append(exc)
                 if verbose:
-                    logger.debug(f"Init attempt ({i + 1}/{len(tasks)}) succeeded. Initializing client...")
-                return snlm0e, cfb2h, fdrfje, request_cookies
-
-            if verbose:
-                logger.debug(f"Init attempt ({i + 1}/{len(tasks)}) failed. Cookies invalid.")
-        except Exception as e:
-            if verbose:
-                logger.debug(f"Init attempt ({i + 1}/{len(tasks)}) failed with error: {e}")
-
-    raise AuthError(f"Failed to initialize client. SECURE_1PSIDTS could get expired frequently, please make sure cookie values are up to date. (Failed initialization attempts: {len(tasks)})")
+                    logger.debug(f"Init attempt {i + 1}/{len(tasks)} failed ({type(exc).__name__})")
+        # Preserve the real transport/authentication failure; never invent expiry.
+        raise next((e for e in errors if isinstance(e, AuthError)), errors[-1])
+    finally:
+        # No pending login task may outlive a successful or timed-out init.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        done, pending = await asyncio.wait(tasks, timeout=5)
+        def consume(task):
+            if not task.cancelled():
+                task.exception()
+        for task in done:
+            consume(task)
+        for task in pending:
+            task.add_done_callback(consume)

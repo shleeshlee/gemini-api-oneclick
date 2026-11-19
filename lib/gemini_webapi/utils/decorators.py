@@ -82,6 +82,10 @@ def _wrap_async_function(func: Callable, retry_max: int) -> Callable:
 
     @functools.wraps(func)
     async def wrapper(client: Any, *args: Any, current_retry: int | None = None, **kwargs: Any) -> Any:
+        if getattr(client, "_init_task", None) is asyncio.current_task():
+            # Initialization already owns the client lock. Never re-enter init
+            # or retry a warm-up failure through the normal running lifecycle.
+            return await func(client, *args, **kwargs)
         retries_remaining = retry_max if current_retry is None else current_retry
 
         try:

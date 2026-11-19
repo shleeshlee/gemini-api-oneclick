@@ -153,6 +153,8 @@ class Container:
         self.enabled = True
         self.error_count = 0
         self.last_error = ""
+        self.last_error_type = ""
+        self.last_http_status = None
         self.error_history: list = []  # ringbuffer of recent errors, kept across successes
         self.last_check = 0
         self.total_requests = 0
@@ -208,6 +210,8 @@ class Container:
             "available": self.available,
             "error_count": self.error_count,
             "last_error": self.last_error,
+            "last_error_type": self.last_error_type,
+            "last_http_status": self.last_http_status,
             "error_history": list(self.error_history),
             "last_check": self.last_check,
             "total_requests": self.total_requests,
@@ -511,6 +515,8 @@ async def check_health(c: Container, client: httpx.AsyncClient):
         status = data.get("status", "unknown")
         auth_status = data.get("auth_status", "unknown")
         c.initializing = status == "initializing"
+        c.last_error_type = data.get("last_error_type", "")
+        c.last_http_status = data.get("last_http_status")
         if "models" in data:
             update_container_models(c, data["models"])
         c.last_actual_model = data.get("last_actual_model", c.last_actual_model)
@@ -519,10 +525,23 @@ async def check_health(c: Container, client: httpx.AsyncClient):
             if event_id not in c.model_event_ids:
                 c.model_event_ids.add(event_id)
                 add_log("info", c.num, f"slot {c.num} {event.get('message', '')}")
-        if auth_status == "UNAUTHENTICATED":
+        if c.initializing:
+            c.healthy = False
+            c.needs_cookie = False
+            c.last_error = ""
+            c.health_fail_count = 0
+            return
+        if auth_status == "UNAUTHENTICATED" or c.last_error_type == "auth_failed":
             update_container_models(c, [])
             c.needs_cookie = True
             c.healthy = False
+            c.last_error = data.get("last_error") or "认证失败，需要重新认证"
+            return
+        if status in {"init_failed", "init_timeout"}:
+            update_container_models(c, [])
+            c.healthy = False
+            c.needs_cookie = False
+            c.last_error = data.get("last_error") or "初始化失败"
             return
         needs_restart = data.get("needs_restart", False)
         last_error_type = data.get("last_error_type", "")
@@ -636,18 +655,19 @@ async def _do_restart(c: Container):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(f"{WORKER_URL}/worker/reload-slot/{c.num}", timeout=30)
-                if resp.status_code == 200:
+                if resp.status_code in (200, 202):
                     c.health_fail_count = 0
                     c.healthy = False
-                    add_log("info", c.num, "Slot 已重载，等待恢复")
-                    await check_health(c, client)
+                    c.needs_cookie = False
+                    c.last_error = ""
+                    add_log("info", c.num, "已受理单账号恢复，等待结果")
+                    return True
                 else:
                     add_log("error", c.num, f"Slot 重载失败: HTTP {resp.status_code}")
         except Exception as e:
             add_log("error", c.num, f"Slot 重载失败: {str(e)[:80]}")
-        finally:
-            c.initializing = False
-        return
+        c.initializing = False
+        return False
 
     cname = f"gemini_api_account_{c.num}"
     add_log("warn", c.num, "自动重启容器")
@@ -1479,7 +1499,7 @@ async def proxy(request: Request, path: str):
     retries = min(MAX_RETRIES, pool_available)
     if retries == 0:
         # Check why — initializing, needs_cookie, or genuinely none
-        initializing_count = sum(1 for c in containers.values() if not c.healthy and not c.needs_cookie)
+        initializing_count = sum(1 for c in containers.values() if c.enabled and c.initializing)
         needs_cookie_count = sum(1 for c in containers.values() if c.needs_cookie)
         if initializing_count > 0 and not any(c.available for c in containers.values()):
             raise HTTPException(status_code=503, detail=f"容器正在准备中（{initializing_count}个初始化中，{needs_cookie_count}个需更新Cookie）")
@@ -1488,6 +1508,11 @@ async def proxy(request: Request, path: str):
             detail = f"没有可用的{kind}（分组 [{target_group}]）"
         else:
             detail = f"没有可用的{kind}（请求未指定分组前缀，无默认无分组池）"
+        failed = [c for c in containers.values() if c.enabled and not c.initializing
+                  and (container_groups.get(c.num) == target_group if target_group else c.num not in container_groups)
+                  and c.last_error_type in {"auth_failed", "init_timeout", "init_failed"}]
+        if failed:
+            detail += "；" + "；".join(f"#{c.num} {c.last_error}" for c in failed[:3])
         raise HTTPException(status_code=503, detail=detail)
 
     last_error = ""
@@ -1763,8 +1788,10 @@ async def restart_container(num: int):
     c = containers.get(num)
     if not c:
         raise HTTPException(status_code=404, detail=f"Container {num} not found")
-    await _do_restart(c)
-    return {"ok": True, "message": f"Container {num} restarting"}
+    accepted = await _do_restart(c)
+    if WORKER_MODE and not accepted:
+        raise HTTPException(status_code=502, detail=f"账号 #{num} 恢复请求失败")
+    return {"ok": True, "message": f"账号 #{num} 正在恢复"}
 
 
 @app.post("/gateway/refresh", dependencies=[Depends(verify_panel_auth)])
@@ -1913,13 +1940,13 @@ async def deploy_cookie(num: int, request: Request):
             if line.startswith("API_KEY="):
                 existing_key = line.split("=", 1)[1]
                 break
-    env_file.write_text(
-        f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
-        encoding="utf-8",
-    )
+    if not WORKER_MODE:
+        env_file.write_text(
+            f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
+            encoding="utf-8",
+        )
     deploy_auth = ""
     if WORKER_MODE:
-        add_log("info", num, "Cookie 已更新，正在重载 Slot ...")
         if num in containers:
             containers[num].initializing = True
         try:
@@ -1929,15 +1956,18 @@ async def deploy_cookie(num: int, request: Request):
                     json={"psid": psid, "psidts": psidts},
                     timeout=30,
                 )
-                if resp.status_code != 200:
+                if resp.status_code not in (200, 202):
                     detail = resp.text[:200]
                     add_log("error", num, f"Slot 部署失败: {detail}")
-                    raise HTTPException(status_code=500, detail=f"Slot 部署失败: {detail}")
+                    raise HTTPException(status_code=resp.status_code, detail=f"Slot 部署失败: {detail}")
+                add_log("info", num, "Cookie 已保存，正在单独验证登录")
                 try:
-                    deploy_auth = (resp.json().get("health") or {}).get("auth_status") or ""
+                    deploy_auth = ((resp.json().get("health") or {}).get("auth_status") or "") if resp.status_code == 200 else ""
                 except ValueError:
                     deploy_auth = ""
         except httpx.HTTPError as e:
+            if num in containers:
+                containers[num].initializing = False
             add_log("error", num, f"Slot 部署失败: {str(e)[:80]}")
             raise HTTPException(status_code=500, detail=str(e)[:200])
         except BaseException:
@@ -1992,8 +2022,9 @@ async def deploy_cookie(num: int, request: Request):
         c.needs_cookie = True
         add_log("error", num, "已部署，但 Google 不认这份 Cookie（未登录）")
         raise HTTPException(status_code=422, detail="Cookie 已写入，但 Google 不认（未登录），请重新获取")
-    add_log("info", num, "已部署")
-    return {"ok": True, "message": f"#{num} Cookie 已部署"}
+    message = f"#{num} Cookie 已保存，正在验证登录" if WORKER_MODE else f"#{num} Cookie 已部署"
+    add_log("info", num, message)
+    return {"ok": True, "message": message}
 
 
 # ── Container Logs & Test ──────────────────────────────────────────────

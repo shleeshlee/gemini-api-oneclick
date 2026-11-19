@@ -105,6 +105,39 @@ def slot_log(num: int, msg: str):
 
 
 # ── Startup ──────────────────────────────────────────────────────────
+_slot_tasks: dict[int, asyncio.Task] = {}
+
+
+def schedule_slot_init(slot: Slot, *, reload=False, delay=0):
+    """One bounded background recovery per slot; never restart the worker."""
+    previous = _slot_tasks.get(slot.num)
+    if previous is not None and not previous.done():
+        return False
+    slot.state.update(initializing=True, auth_status="unknown", last_error="",
+                      last_error_type="", last_http_status=None, needs_restart=False)
+
+    async def run():
+        try:
+            if delay:
+                await asyncio.sleep(delay)
+            async with slot.lock:
+                if reload:
+                    await slot.reload_from_env(ENVS_DIR)
+                else:
+                    await slot.init_client(proxy=PROXY)
+                await get_runtime_models(slot.client, slot.num)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Keep the classified slot result; retries require an explicit action.
+            if slot.state.get("initializing"):
+                slot.state.update(initializing=False, last_error_type="init_failed",
+                                  last_error=f"初始化失败：{type(exc).__name__}")
+            slot_log(slot.num, slot.state.get("last_error") or "初始化失败")
+            logger.warning("Slot %d initialization failed (%s)", slot.num, type(exc).__name__)
+
+    _slot_tasks[slot.num] = asyncio.create_task(run())
+    return True
 
 @asynccontextmanager
 async def lifespan(app):
@@ -116,48 +149,19 @@ async def lifespan(app):
             slots[num] = Slot.from_env_file(num, env_file)
     logger.info("Discovered %d slots from %s", len(slots), ENVS_DIR)
 
-    async def init_one(slot: Slot):
-        delay = random.randint(5, 60)
-        logger.info("Slot %d: waiting %ds before init", slot.num, delay)
-        await asyncio.sleep(delay)
-        for attempt in range(1, 4):
-            try:
-                await slot.init_client(proxy=PROXY)
-                await get_runtime_models(slot.client, slot.num)
-                break
-            except Exception as e:
-                logger.error("Slot %d: init attempt %d/3 failed: %s", slot.num, attempt, e)
-                if attempt < 3:
-                    await asyncio.sleep(15 * attempt)
-
     # Init slots in background so the server starts accepting requests immediately
-    asyncio.create_task(_init_all_slots())
+    for slot in slots.values():
+        schedule_slot_init(slot, delay=random.randint(5, 60))
     refresh_task = asyncio.create_task(_refresh_models_loop())
     logger.info("Slot init started in background")
     try:
         yield
     finally:
         refresh_task.cancel()
-        await asyncio.gather(refresh_task, return_exceptions=True)
-
-
-async def _init_all_slots():
-    async def init_one(slot: Slot):
-        delay = random.randint(5, 60)
-        logger.info("Slot %d: waiting %ds before init", slot.num, delay)
-        await asyncio.sleep(delay)
-        for attempt in range(1, 4):
-            try:
-                await slot.init_client(proxy=PROXY)
-                await get_runtime_models(slot.client, slot.num)
-                break
-            except Exception as e:
-                logger.error("Slot %d: init attempt %d/3 failed: %s", slot.num, attempt, e)
-                if attempt < 3:
-                    await asyncio.sleep(15 * attempt)
-
-    await asyncio.gather(*(init_one(s) for s in slots.values()))
-    logger.info("All slots initialised")
+        for task in _slot_tasks.values():
+            task.cancel()
+        await asyncio.gather(refresh_task, *_slot_tasks.values(), return_exceptions=True)
+        _slot_tasks.clear()
 
 
 app = FastAPI(title="Gemini API OneClick Worker", lifespan=lifespan)
@@ -234,10 +238,13 @@ def _get_slot(num: int) -> Slot:
 
 async def _get_client(slot: Slot) -> GeminiClient:
     """Ensure the slot has an initialised client, return it."""
-    if slot.client is None:
-        async with slot.lock:
-            if slot.client is None:
-                await slot.init_client(proxy=PROXY)
+    state = getattr(slot, "state", {})
+    if state.get("initializing"):
+        raise HTTPException(status_code=503, detail=f"Slot {slot.num}: 初始化中")
+    if state.get("last_error_type") == "auth_failed":
+        raise HTTPException(status_code=state.get("last_http_status") or 401, detail=state["last_error"])
+    if state.get("last_error_type") == "init_timeout":
+        raise HTTPException(status_code=504, detail=state["last_error"])
     if slot.client is None:
         raise HTTPException(status_code=503, detail=f"Slot {slot.num}: client not available")
     return slot.client
@@ -1674,16 +1681,9 @@ async def list_research_tasks(
 async def worker_reload_slot(num: int):
     """Re-read env file and reinitialise the slot's GeminiClient."""
     slot = _get_slot(num)
-    try:
-        await slot.reload_from_env(ENVS_DIR)
-        _publish_models(slot)
-        return {"ok": True, "message": f"Slot {num} reloaded", "health": slot.health_response()}
-    except Exception as e:
-        logger.error("Slot %d reload failed: %s", num, e)
-        return JSONResponse(
-            status_code=500,
-            content={"ok": False, "message": f"Slot {num} reload failed: {str(e)[:200]}"},
-        )
+    started = schedule_slot_init(slot, reload=True)
+    return JSONResponse(status_code=202, content={"ok": True, "started": started,
+                        "message": f"账号 #{num} 正在单独恢复", "health": slot.health_response()})
 
 
 @app.get("/worker/status")
@@ -1712,6 +1712,9 @@ async def worker_deploy_slot(num: int, request: Request):
     psidts = body.get("psidts", "").strip()
     if not psid or not psidts:
         raise HTTPException(status_code=400, detail="psid and psidts required")
+    active = _slot_tasks.get(num)
+    if active is not None and not active.done():
+        raise HTTPException(status_code=409, detail="该账号正在初始化，请等待结果后再更新 Cookie")
 
     # Write env file
     env_file = ENVS_DIR / f"account{num}.env"
@@ -1726,17 +1729,13 @@ async def worker_deploy_slot(num: int, request: Request):
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # Reload or create slot
-    if num in slots:
-        async with slots[num].lock:
-            slots[num].env_path = env_file
-            await slots[num].reload(psid=psid, psidts=psidts)
-    else:
+    if num not in slots:
         slots[num] = Slot(num=num, psid=psid, psidts=psidts, env_path=env_file)
-        await slots[num].init_client(proxy=PROXY)
-
-    _publish_models(slots[num])
-    slot_log(num, "Cookie deployed, slot reloaded")
-    return {"ok": True, "message": f"Slot {num} deployed", "health": slots[num].health_response()}
+    slots[num].env_path = env_file
+    schedule_slot_init(slots[num], reload=True)
+    slot_log(num, "Cookie 已保存，正在单独恢复账号")
+    return JSONResponse(status_code=202, content={"ok": True, "message": f"Slot {num} accepted",
+                        "health": slots[num].health_response()})
 
 
 @app.get("/worker/slot-logs/{num}")
@@ -1788,10 +1787,18 @@ async def worker_delete_slot(num: int):
     if num not in slots:
         raise HTTPException(status_code=404, detail=f"Slot {num} not found")
 
+    task = _slot_tasks.get(num)
+    if task is not None and not task.done():
+        task.cancel()
+        _, pending = await asyncio.wait([task], timeout=12)
+        if pending:
+            raise HTTPException(status_code=409, detail="该账号仍在清理初始化任务，请稍后删除")
+    _slot_tasks.pop(num, None)
     slot = slots.pop(num)
     if slot.client:
         try:
-            await slot.client.close()
+            async with asyncio.timeout(5):
+                await slot.client.close()
         except Exception:
             pass
     slot.edit_sessions.clear()

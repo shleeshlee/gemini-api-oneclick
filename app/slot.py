@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _SESSION_TTL = 600   # 10 minutes
 _MAX_SESSIONS = 50   # per slot
 _TLS_RESTART_THRESHOLD = 3
+INIT_TIMEOUT_SECONDS = 60
 
 
 def model_label(model) -> str:
@@ -146,6 +147,7 @@ class Slot:
         "auth_status": "unknown",
         "last_error": "",
         "last_error_type": "",
+        "last_http_status": None,
         "needs_restart": False,
         "initializing": True,
         "_tls_fail_count": 0,
@@ -176,9 +178,34 @@ class Slot:
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def init_client(self, proxy: str | None = None) -> None:
+        """Bound the complete login, warm-up and capability-probe lifecycle."""
+        self.state.update(initializing=True, auth_status="unknown", last_error="",
+                          last_error_type="", last_http_status=None, needs_restart=False,
+                          init_started_at=time.time(), init_deadline=time.time() + INIT_TIMEOUT_SECONDS)
+        try:
+            async with asyncio.timeout(INIT_TIMEOUT_SECONDS):
+                await self._init_client(proxy)
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            timed_out = isinstance(exc, TimeoutError)
+            self.state.update(initializing=False, needs_restart=False,
+                              last_error_type="init_timeout" if timed_out else "init_cancelled",
+                              last_error=f"初始化超时（总时限 {INIT_TIMEOUT_SECONDS:g} 秒）" if timed_out else "初始化已取消")
+            if self.cookie_audit is not None:
+                self.cookie_audit.emit("init_timeout" if timed_out else "init_cancelled")
+            client, self.client = self.client, None
+            if client is not None:
+                try:
+                    async with asyncio.timeout(5):
+                        await client.close()
+                except Exception:
+                    pass
+            raise
+
+    async def _init_client(self, proxy: str | None = None) -> None:
         """Create and initialise the GeminiClient for this slot."""
         from gemini_webapi import GeminiClient
         from gemini_webapi.constants import AccountStatus
+        from gemini_webapi.exceptions import AuthError
         from gemini_webapi.cookie_audit import CookieAudit, cookie_operation
         if self.cookie_audit is None:
             self.cookie_audit = CookieAudit.create(self.num)
@@ -218,6 +245,8 @@ class Slot:
             self.state["auth_status"] = status.name if status else "unknown"
             if status and status != AccountStatus.AVAILABLE:
                 logger.warning("Slot %d: auth status %s", self.num, status.name)
+            if status == AccountStatus.UNAUTHENTICATED:
+                raise AuthError("认证失败：Google 返回未登录状态，需要重新认证")
 
             await self.probe_free_pro()
 
@@ -232,10 +261,21 @@ class Slot:
             if self.cookie_audit is not None:
                 self.cookie_audit.emit("init_error", error_type=type(e).__name__)
             logger.error("Slot %d: init failed: %s", self.num, e)
-            self.client = None
+            client, self.client = self.client, None
+            if client is not None and callable(getattr(client, "close", None)):
+                try:
+                    async with asyncio.timeout(5):
+                        await client.close()
+                except Exception:
+                    pass
             self.state["initializing"] = False
             error_str = str(e).lower()
-            if "tls" in error_str or "ssl" in error_str or "curl: (35)" in error_str:
+            if isinstance(e, AuthError):
+                self.state["auth_status"] = "UNAUTHENTICATED"
+                self.state["last_error_type"] = "auth_failed"
+                self.state["last_http_status"] = e.http_status
+                self.state["needs_restart"] = False
+            elif "tls" in error_str or "ssl" in error_str or "curl: (35)" in error_str:
                 self.state["_tls_fail_count"] += 1
                 self.state["last_error_type"] = "tls_error"
                 if self.state["_tls_fail_count"] >= _TLS_RESTART_THRESHOLD:
@@ -251,7 +291,13 @@ class Slot:
             self.psid = psid
         if psidts is not None:
             self.psidts = psidts
-        self.client = None
+        old_client, self.client = self.client, None
+        if old_client is not None and callable(getattr(old_client, "close", None)):
+            try:
+                async with asyncio.timeout(5):
+                    await old_client.close()
+            except Exception:
+                pass
         self.edit_sessions.clear()
         self.state.update({
             "auth_status": "unknown",
@@ -298,6 +344,12 @@ class Slot:
 
         if self.state["initializing"]:
             status = "initializing"
+        elif self.state["last_error_type"] == "auth_failed":
+            status = "auth_failed"
+        elif self.state["last_error_type"] == "init_timeout":
+            status = "init_timeout"
+        elif not client_ready and self.state["last_error_type"]:
+            status = "init_failed"
         elif not client_ready:
             status = "no_client"
         else:
@@ -311,6 +363,8 @@ class Slot:
             "needs_restart": self.state["needs_restart"],
             "last_error": self.state["last_error"],
             "last_error_type": self.state["last_error_type"],
+            "last_http_status": self.state.get("last_http_status"),
+            "init_deadline": self.state.get("init_deadline"),
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "model_levels": list(self.level_models()),
             "last_actual_model": self.last_actual_model,

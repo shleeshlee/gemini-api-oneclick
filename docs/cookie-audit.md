@@ -41,4 +41,4 @@ python -m unittest discover -s tests -p test_cookie_audit.py -v
 python -m unittest discover -s tests -v
 ```
 
-旧媒体 AST 哈希快照使用 Python 3.14 的 AST 展示格式，全套快照测试应使用 3.14；新审计测试也在生产同系列 Python 3.12 上验证。此功能不修复既存的初始化重入死锁，但会在进入死锁前留下真实 HTTP 401 和登录跳转证据。
+旧媒体 AST 哈希快照使用 Python 3.14 的 AST 展示格式，全套快照测试应使用 3.14；新审计测试也在生产同系列 Python 3.12 上验证。审计记录用于区分文件凭据、运行中 Cookie 变化和登录结果；初始化死锁及错误状态另由[登录恢复修复](login-recovery.md)处理。
