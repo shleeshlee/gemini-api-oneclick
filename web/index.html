@@ -1166,12 +1166,33 @@ body::before {
       <div class="proxy-select-msg" id="mProxyMsg" aria-live="polite">选择即保存</div>
     </div>
     <div class="form-group">
+      <label class="form-label" for="mCookieJson">完整 Cookie · Cookie-Editor JSON</label>
+      <textarea class="form-input" id="mCookieJson" rows="4" placeholder="粘贴在 Gemini 页面导出的 JSON 数组" spellcheck="false" autocomplete="off" style="resize:vertical;font-size:0.8rem"></textarea>
+      <input type="file" id="mCookieFile" accept=".json,application/json" onchange="loadCookieJsonFile(this)" aria-label="选择 Cookie-Editor JSON 文件">
+      <div class="proxy-select-msg" id="mCookieJsonHint">导入完整 JSON 时，无需填写下面四项。</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="mAccountIndex">Google 账号序号</label>
+      <input type="number" class="form-input" id="mAccountIndex" min="0" max="99" value="0" step="1">
+      <div class="proxy-select-msg">网址 /u/1/app 填 1；没有 /u/数字/ 填 0。</div>
+    </div>
+    <div class="form-group">
       <label class="form-label">SECURE_1PSID</label>
       <input type="text" class="form-input" id="mPsid" placeholder="粘贴 cookie 值" spellcheck="false">
     </div>
     <div class="form-group">
       <label class="form-label">SECURE_1PSIDTS</label>
       <input type="text" class="form-input" id="mPsidts" placeholder="粘贴 cookie 值" spellcheck="false">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="mOsid">OSID</label>
+      <input type="password" class="form-input" id="mOsid" placeholder="gemini.google.com 下的 OSID 值" spellcheck="false" autocomplete="off">
+      <div class="proxy-select-msg">已有账号可只补填 OSID；更换登录会话时，请一起填写四项。</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="mSid">SID</label>
+      <input type="password" class="form-input" id="mSid" placeholder=".google.com 下的 SID 值" spellcheck="false" autocomplete="off">
+      <div class="proxy-select-msg">四项测试请使用同一登录会话的值，无需同时导入 JSON。</div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">取消</button>
@@ -1587,7 +1608,7 @@ function renderGrid() {
       badCount++;
     }
 
-    const tier = gw && gw.tier;
+    const tier = subscriptionTier(gw).kind;
     if (tier && tier !== 'free' && tier !== 'unknown') {
       cardClass += ` tier-${tier}`;
     }
@@ -3574,6 +3595,15 @@ function openModal(num) {
   document.getElementById('mGroup').value = group;
   document.getElementById('mPsid').value = '';
   document.getElementById('mPsidts').value = '';
+  document.getElementById('mOsid').value = '';
+  document.getElementById('mSid').value = '';
+  document.getElementById('mCookieJson').value = '';
+  document.getElementById('mCookieFile').value = '';
+  const savedAccount = accounts.find(a => a.num === num);
+  document.getElementById('mAccountIndex').value = String(savedAccount?.account_index ?? 0);
+  document.getElementById('mCookieJsonHint').textContent = savedAccount?.has_cookie_json
+    ? '已保存 Cookie 会话。内容不回显；粘贴新 JSON 可替换。'
+    : '导入完整 JSON 时，无需填写下面四项。';
   document.getElementById('mProxyMsg').className = 'proxy-select-msg';
   document.getElementById('mProxyMsg').textContent = '选择即保存';
   populateProxySelect();
@@ -3607,6 +3637,7 @@ async function closeModal(alreadySaved = false) {
   }
   if (currentNum !== num || modalVersion !== version) return;
   document.getElementById('modalOverlay').classList.remove('active');
+  for (const id of ['mCookieJson', 'mCookieFile', 'mPsid', 'mPsidts', 'mOsid', 'mSid']) document.getElementById(id).value = '';
   currentNum = null;
   ++modalVersion;
 }
@@ -3654,23 +3685,70 @@ document.addEventListener('keydown', e => {
   }
 });
 
+async function loadCookieJsonFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const num = currentNum, version = modalVersion;
+  const isCurrent = () => currentNum === num && modalVersion === version && input.files?.[0] === file;
+  const msg = document.getElementById('modalMsg');
+  if (file.size > 262144) { msg.className = 'modal-msg err'; msg.textContent = 'JSON 文件不能超过 256 KB'; return; }
+  try {
+    const text = await file.text();
+    if (!isCurrent()) return;
+    const data = JSON.parse(text);
+    if (!Array.isArray(data) || !data.length) throw new Error();
+    document.getElementById('mCookieJson').value = text;
+    msg.textContent = 'JSON 已读取，点击部署后保存并验证登录';
+  } catch (_) {
+    if (!isCurrent()) return;
+    msg.className = 'modal-msg err'; msg.textContent = '请选择 Cookie-Editor 导出的 JSON 数组文件';
+  }
+}
+
 async function doDeploy() {
   const num = currentNum;
   const version = modalVersion;
   const psid = document.getElementById('mPsid').value.trim();
   const psidts = document.getElementById('mPsidts').value.trim();
+  const osid = document.getElementById('mOsid').value.trim();
+  const sid = document.getElementById('mSid').value.trim();
   const name = document.getElementById('mName').value.trim();
   const group = document.getElementById('mGroup').value.trim();
   const msg = document.getElementById('modalMsg');
   const btn = document.getElementById('deployBtn');
   if (num === null || btn.disabled) return;
+  const cookieText = document.getElementById('mCookieJson').value.trim();
+  const indexText = document.getElementById('mAccountIndex').value;
+  const accountIndex = indexText === '' ? 0 : Number(indexText);
+  let payload = {psid, psidts, osid};
+  if (sid) payload.sid = sid;
+  if (!Number.isInteger(accountIndex) || accountIndex < 0 || accountIndex > 99) {
+    msg.className = 'modal-msg err'; msg.textContent = '账号序号必须是 0 到 99 的整数'; return;
+  }
+  if (cookieText) {
+    if (psid || psidts || osid || sid) {
+      msg.className = 'modal-msg err'; msg.textContent = '请使用完整 JSON 或逐项填写其中一种方式'; return;
+    }
+    try {
+      const parsed = JSON.parse(cookieText);
+      if (!Array.isArray(parsed) || !parsed.length || cookieText.length > 262144) throw new Error();
+      payload = {cookies_json: parsed, account_index: accountIndex};
+    } catch (_) {
+      msg.className = 'modal-msg err'; msg.textContent = 'Cookie JSON 格式无效，请粘贴完整 JSON 数组'; return;
+    }
+  } else if (indexText !== '') {
+    payload.account_index = accountIndex;
+  }
+  if (sid && !(psid && psidts && osid)) {
+    msg.className = 'modal-msg err'; msg.textContent = '填写 SID 时，请同时填写同一会话的另外三项'; return;
+  }
   if (!!psid !== !!psidts) {
     msg.className = 'modal-msg err';
     msg.textContent = '更新 Cookie 时请填写完整的两项 Cookie';
     return;
   }
 
-  const deploying = !!psid;
+  const deploying = !!(psid || osid || sid || cookieText);
   let ownsRestarting = false;
   const isCurrent = () => currentNum === num && modalVersion === version;
   btn.disabled = true;
@@ -3692,7 +3770,7 @@ async function doDeploy() {
     ownsRestarting = true;
     renderGrid();
     await panelRequest(`/gateway/deploy/${num}`, {
-      method:'POST', body:JSON.stringify({psid, psidts})
+      method:'POST', body:JSON.stringify(payload)
     });
     if (isCurrent()) {
       msg.className = 'modal-msg ok';
@@ -4418,11 +4496,21 @@ function renderThemeDots() {
       onclick="setTheme('${t.id}')"></button>`).join('');
 }
 
+function subscriptionTier(gw) {
+  // Subscription IDs come from the usage RPC, independently of model capacity.
+  const plans = {1: ['free', 'FREE'], 2: ['pro', 'PRO'], 3: ['ultra', 'ULTRA 20x'],
+    4: ['plus', 'PLUS'], 6: ['ultra', 'ULTRA 5x']};
+  const id = gw && gw.usage && gw.usage.tier_id;
+  const plan = Number.isInteger(id) ? plans[id] : null;
+  if (!plan) return {kind: 'unknown', label: '待识别', title: '尚未取得可识别的订阅信息'};
+  return {kind: plan[0], label: plan[1], title: gw.usage_error
+    ? '上次识别的订阅；最近一次用量查询失败' : 'Google 用量接口返回的订阅；登录状态见右侧圆点'};
+}
+
 function tierChip(gw) {
-  // gw.tier = what Google actually lets this account use; usage.tier can still say "pro" after the plan stops working
-  const t = (gw && (gw.tier || (gw.usage && gw.usage.tier))) || '';
-  if (!t || t === 'unknown') return '';
-  return `<span class="tier-chip ${esc(t)}">${esc(t.toUpperCase())}</span>`;
+  if (!gw) return '';
+  const plan = subscriptionTier(gw);
+  return `<span class="tier-chip ${esc(plan.kind)}" title="${esc(plan.title)}">${esc(plan.label)}</span>`;
 }
 
 renderThemeDots();

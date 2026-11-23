@@ -2310,11 +2310,26 @@ async def assign_proxy(num: int, request: Request):
 async def deploy_cookie(num: int, request: Request):
     """Deploy cookies to a container: write env file and recreate container."""
     body = await request.json()
+    from app.slot import cookie_deploy_payload, cookie_export_value, encode_cookie_export
+    try:
+        cookie_rows, account_index = cookie_deploy_payload(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     psid = body.get("psid", "").strip().replace("\n", "").replace("\r", "")
     psidts = body.get("psidts", "").strip().replace("\n", "").replace("\r", "")
-    if not psid and not psidts:
+    osid = body.get("osid", "")
+    if not isinstance(osid, str) or any(ord(c) <= 32 or ord(c) >= 127 or c == ";" for c in osid):
+        raise HTTPException(status_code=400, detail="OSID 格式无效，请只填写 Cookie 值")
+    if cookie_rows is not None:
+        psid = cookie_export_value(cookie_rows, "__Secure-1PSID")
+        psidts = cookie_export_value(cookie_rows, "__Secure-1PSIDTS")
+        osid = cookie_export_value(cookie_rows, "OSID")
+    forward = {"cookies_json": cookie_rows, "account_index": account_index} if cookie_rows is not None else {"psid": psid, "psidts": psidts, "osid": osid}
+    if cookie_rows is None and account_index is not None:
+        forward["account_index"] = account_index
+    if not psid and not psidts and not osid:
         return {"ok": True, "deployed": False, "message": "没有新 Cookie，未重新部署"}
-    if not psid or not psidts:
+    if bool(psid) != bool(psidts):
         raise HTTPException(status_code=400, detail="请完整填写两项新 Cookie")
 
     # Write env file, preserving existing API_KEY
@@ -2326,10 +2341,12 @@ async def deploy_cookie(num: int, request: Request):
                 existing_key = line.split("=", 1)[1]
                 break
     if not WORKER_MODE:
-        env_file.write_text(
-            f"API_KEY={existing_key}\nSECURE_1PSID={psid}\nSECURE_1PSIDTS={psidts}\n",
-            encoding="utf-8",
-        )
+        from app.slot import Slot
+        try:
+            await Slot(num=num).save_credentials(env_file, psid, psidts, osid,
+                cookies=cookie_rows, account_index=account_index)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     deploy_auth = ""
     if WORKER_MODE:
         if num in containers:
@@ -2338,7 +2355,7 @@ async def deploy_cookie(num: int, request: Request):
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     f"{worker_base(num)}/worker/deploy-slot/{num}",
-                    json={"psid": psid, "psidts": psidts},
+                    json=forward,
                     timeout=30,
                     headers=worker_management_headers(),
                 )
@@ -2814,7 +2831,11 @@ async def api_accounts():
         except Exception:
             has_cookie = False
             psid_preview = ""
-        accounts_list.append({"num": num, "has_cookie": has_cookie, "psid_preview": psid_preview})
+        from app.slot import parse_env_file
+        saved = parse_env_file(env_file)
+        accounts_list.append({"num": num, "has_cookie": has_cookie, "psid_preview": psid_preview,
+                              "has_cookie_json": bool(saved.get("COOKIE_EXPORT_B64")),
+                              "account_index": int(saved.get("ACCOUNT_INDEX", "0"))})
     return {"accounts": accounts_list}
 
 

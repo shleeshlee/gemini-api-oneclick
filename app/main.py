@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from httpx import AsyncClient
+from httpx import AsyncClient, Cookies as HTTPXCookies
 from pydantic import BaseModel, field_validator
 
 from parsers import (
@@ -97,6 +97,9 @@ _TLS_RESTART_THRESHOLD = 3
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
+OSID = os.environ.get("OSID", "")
+COOKIE_EXPORT_B64 = os.environ.get("COOKIE_EXPORT_B64", "")
+ACCOUNT_INDEX = int(os.environ.get("ACCOUNT_INDEX", "0"))
 API_KEY = os.environ.get("API_KEY", "")
 
 # Startup debug
@@ -162,7 +165,9 @@ async def get_or_create_client():
                 _container_state["initializing"] = True
                 proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or None
                 logger.info(f"Initializing Gemini client... proxy={proxy}")
-                gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy)
+                from slot import decode_cookie_export
+                gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS, proxy=proxy, osid=OSID,
+                    cookie_entries=decode_cookie_export(COOKIE_EXPORT_B64), account_index=ACCOUNT_INDEX)
                 await gemini_client.init(timeout=300, watchdog_timeout=180, auto_refresh=False)
                 _model_slot.client = gemini_client
                 _model_slot.pro_verified = False
@@ -657,24 +662,22 @@ def prepare_conversation(messages: List[Message]) -> tuple:
     return conversation, temp_files
 
 
-def _flatten_cookies(raw_cookies) -> dict | None:
-    """Flatten httpx.Cookies to a plain dict. Google issues same-name cookies
-    on regional domains (.google.com vs .google.com.hk), which makes
-    dict(cookies.items()) raise CookieConflict — dedup by name, preferring
-    the .google.com copy."""
-    if not raw_cookies or isinstance(raw_cookies, dict):
-        return raw_cookies
+def _flatten_cookies(raw_cookies):
+    """Prepare media cookies without losing browser domain/path restrictions."""
+    if not raw_cookies:
+        return None
+    result = HTTPXCookies()
     jar = getattr(raw_cookies, "jar", None)
-    if jar is None:
-        try:
-            return dict(raw_cookies.items())
-        except Exception:
-            return None
-    merged: dict = {}
-    for c in jar:
-        if c.name not in merged or (c.domain or "").lstrip(".") == "google.com":
-            merged[c.name] = c.value
-    return merged
+    if jar is not None:
+        from copy import copy
+        for cookie in jar:
+            if cookie.name != "OSID":
+                result.jar.set_cookie(copy(cookie))
+    else:
+        for name, value in dict(raw_cookies).items():
+            if name != "OSID":
+                result.set(name, value, domain=".google.com", path="/")
+    return result
 
 
 async def download_image_as_base64(image, cookies=None) -> str | None:
@@ -685,7 +688,7 @@ async def download_image_as_base64(image, cookies=None) -> str | None:
     """
     try:
         url = image.url
-        req_cookies = cookies
+        req_cookies = _flatten_cookies(cookies)
 
         if isinstance(image, GeneratedImage):
             # s0 = original resolution (no downscale). Set IMAGE_DOWNLOAD_SIZE env to limit.

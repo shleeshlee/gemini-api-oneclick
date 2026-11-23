@@ -1,10 +1,11 @@
+from copy import copy
 import re
 from datetime import datetime
 from pathlib import Path
 
 from curl_cffi import CurlHttpVersion
 from curl_cffi.requests import AsyncSession, Cookies
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import Field, BaseModel, ConfigDict, field_validator
 
 from ..utils import logger
 
@@ -107,12 +108,16 @@ class Image(BaseModel):
             if isinstance(cookies, dict):
                 # Dict cookies - set for google.com (covers lh3.google.com)
                 for name, value in cookies.items():
+                    if name == "OSID":
+                        continue
                     download_cookies.set(name, value, domain=".google.com")
             elif hasattr(cookies, "jar"):
                 # Cookies object with jar attribute
                 for cookie in cookies.jar:
+                    if cookie.name == "OSID":
+                        continue
                     if cookie.value is not None:
-                        download_cookies.set(cookie.name, cookie.value, domain=cookie.domain)
+                        download_cookies.jar.set_cookie(copy(cookie))
             else:
                 # Assume it's already a Cookies object, copy it
                 download_cookies = cookies
@@ -200,7 +205,7 @@ class GeneratedImage(Image):
         Google account index for multi-account cookie support, by default 0.
     """
 
-    cookies: dict[str, str] | Cookies
+    cookies: Cookies | dict[str, str] = Field(union_mode="left_to_right")
     account_index: int = 0
 
     @field_validator("cookies", mode="after")

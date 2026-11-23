@@ -1,9 +1,10 @@
+from copy import copy
 from datetime import datetime
 from pathlib import Path
 
 from curl_cffi import CurlHttpVersion
 from curl_cffi.requests import AsyncSession, Cookies
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import Field, BaseModel, ConfigDict, field_validator
 
 from ..utils import logger
 
@@ -42,7 +43,7 @@ class GeneratedVideo(BaseModel):
     url: str
     thumbnail_url: str = ""
     title: str = "[Generated Video]"
-    cookies: dict[str, str] | Cookies
+    cookies: Cookies | dict[str, str] = Field(union_mode="left_to_right")
     proxy: str | None = None
     account_index: int = 0
     session_kwargs: dict = {}
@@ -117,14 +118,16 @@ class GeneratedVideo(BaseModel):
             if isinstance(actual_cookies, dict):
                 # Dict cookies - set for both google.com and usercontent.google.com
                 for name, value in actual_cookies.items():
+                    if name == "OSID":
+                        continue
                     download_cookies.set(name, value, domain=".google.com")
                     download_cookies.set(name, value, domain=".usercontent.google.com")
             elif hasattr(actual_cookies, "jar"):
                 # Cookies object with jar attribute
                 for cookie in actual_cookies.jar:
-                    download_cookies.set(cookie.name, cookie.value, domain=cookie.domain)
-                    if cookie.domain and "google.com" in cookie.domain:
-                        download_cookies.set(cookie.name, cookie.value, domain=".usercontent.google.com")
+                    if cookie.name == "OSID":
+                        continue
+                    download_cookies.jar.set_cookie(copy(cookie))
             else:
                 # Assume it's already a Cookies object, copy it
                 download_cookies = actual_cookies
@@ -209,13 +212,15 @@ class GeneratedVideo(BaseModel):
         if actual_cookies:
             if isinstance(actual_cookies, dict):
                 for name, value in actual_cookies.items():
+                    if name == "OSID":
+                        continue
                     download_cookies.set(name, value, domain=".google.com")
                     download_cookies.set(name, value, domain=".usercontent.google.com")
             elif hasattr(actual_cookies, "jar"):
                 for cookie in actual_cookies.jar:
-                    download_cookies.set(cookie.name, cookie.value, domain=cookie.domain)
-                    if cookie.domain and "google.com" in cookie.domain:
-                        download_cookies.set(cookie.name, cookie.value, domain=".usercontent.google.com")
+                    if cookie.name == "OSID":
+                        continue
+                    download_cookies.jar.set_cookie(copy(cookie))
             else:
                 download_cookies = actual_cookies
 

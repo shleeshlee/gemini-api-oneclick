@@ -1,6 +1,7 @@
 import asyncio
 import codecs
 import contextlib
+import hashlib
 import io
 import os
 import random
@@ -9,6 +10,7 @@ import time
 from asyncio import Task
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from http.cookiejar import Cookie
 from pathlib import Path
 from typing import Any, Optional
 
@@ -357,6 +359,7 @@ class GeminiClient(GemMixin, ResearchMixin):
         "_gems",  # From GemMixin
         "_lock",
         "_init_task",
+        "_full_cookie_session",
         "allow_implicit_init",
         "_model_registry",
         "_reqid",
@@ -394,7 +397,12 @@ class GeminiClient(GemMixin, ResearchMixin):
         super().__init__()
         self.cookie_audit = kwargs.pop("cookie_audit", None)
         self.allow_implicit_init = kwargs.pop("allow_implicit_init", True)
+        osid = kwargs.pop("osid", "")
+        cookie_entries = kwargs.pop("cookie_entries", None)
+        self._full_cookie_session = bool(cookie_entries)
         self.cookies = Cookies()
+        if osid:
+            self.cookies.set("OSID", osid, domain="gemini.google.com", path="/")
         self.proxy = proxy
         self.account_index = account_index
         self._running: bool = False
@@ -422,6 +430,33 @@ class GeminiClient(GemMixin, ResearchMixin):
             self.cookies.set("__Secure-1PSID", secure_1psid, domain=".google.com")
             if secure_1psidts:
                 self.cookies.set("__Secure-1PSIDTS", secure_1psidts, domain=".google.com")
+        if cookie_entries:
+            # The imported browser jar is authoritative; do not merge another session.
+            self.cookies = Cookies()
+            for entry in cookie_entries:
+                domain = entry["domain"]
+                expires = entry.get("expirationDate")
+                self.cookies.jar.set_cookie(Cookie(0, entry["name"], entry["value"], None, False,
+                    domain, not entry.get("hostOnly", False), domain.startswith("."),
+                    entry.get("path", "/"), True, entry.get("secure", True), expires,
+                    expires is None, None, None, {}, False))
+
+    def _authentication_headers(self):
+        """Compute per-request auth from the current scoped browser session."""
+        if not self._full_cookie_session:
+            return {}
+        jar = self.client.cookies if self.client is not None else self.cookies
+        values = {}
+        for cookie in jar.jar:
+            if cookie.domain.lstrip('.') in ('google.com', 'gemini.google.com') and cookie.path == '/' and not cookie.is_expired():
+                values[cookie.name] = cookie.value
+        sapisid = values.get('SAPISID') or values.get('__Secure-1PAPISID')
+        headers = {'X-Goog-AuthUser': str(self.account_index)}
+        if sapisid:
+            timestamp = int(time.time())
+            digest = hashlib.sha1(f'{timestamp} {sapisid} https://gemini.google.com'.encode()).hexdigest()
+            headers['Authorization'] = f'SAPISIDHASH {timestamp}_{digest}'
+        return headers
 
     async def init(
         self,
@@ -487,6 +522,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                     verbose=self.verbose,
                     account_index=self.account_index,
                     session=self.client,
+                    use_cache=not self._full_cookie_session,
                 )
 
                 self.client.cookies = valid_cookies
@@ -1160,7 +1196,7 @@ class GeminiClient(GemMixin, ResearchMixin):
                     "POST",
                     Endpoint.get_generate_url(self.account_index),
                     params=params,
-                    headers=model.model_header,
+                    headers={**model.model_header, **self._authentication_headers()},
                     data=request_data,
                     stream=True,
                     **kwargs,
@@ -1636,6 +1672,9 @@ class GeminiClient(GemMixin, ResearchMixin):
             if self.session_id:
                 params["f.sid"] = self.session_id
 
+            auth_headers = self._authentication_headers()
+            if auth_headers:
+                kwargs["headers"] = {**kwargs.get("headers", {}), **auth_headers}
             response = await self.client.post(
                 Endpoint.get_batch_exec_url(self.account_index),
                 params=params,

@@ -10,7 +10,7 @@ const code = [
   section('function safeProxyAddress(', '// ── Usage limits'),
   section('// ── Proxy settings and account assignment', 'function showErrorHistory('),
   section('async function saveGroup(', "document.addEventListener('keydown'"),
-  section('async function doDeploy(', '// ── Toast'),
+  section('async function loadCookieJsonFile(', '// ── Toast'),
 ].join('\n');
 
 function element() {
@@ -42,7 +42,7 @@ function setup(handler = async () => response()) {
   };
   vm.createContext(context);
   vm.runInContext(code, context);
-  for (const id of ['mPsid','mPsidts','mName','mGroup','mProxy','mProxyMsg','modalMsg','deployBtn']) context.document.getElementById(id);
+  for (const id of ['mPsid','mPsidts','mOsid','mSid','mCookieJson','mCookieFile','mAccountIndex','mName','mGroup','mProxy','mProxyMsg','modalMsg','deployBtn']) context.document.getElementById(id);
   elements.mName.value = 'New name';
   return {context, elements, calls, notices, restarting};
 }
@@ -106,10 +106,67 @@ function setup(handler = async () => response()) {
   test = setup(); test.elements.mPsid.value='synthetic-psid'; test.elements.mPsidts.value='synthetic-ts';
   await test.context.doDeploy();
   const deployment = test.calls.find(x => x.url === '/gateway/deploy/20');
-  assert.deepEqual(JSON.parse(deployment.options.body), {psid:'synthetic-psid', psidts:'synthetic-ts'});
+  assert.deepEqual(JSON.parse(deployment.options.body), {psid:'synthetic-psid', psidts:'synthetic-ts', osid:''});
   assert.deepEqual(test.restarting, [20]);
 
+  // An existing account can receive only OSID; complete sessions pass all three fields.
+  for (const pair of [false, true]) {
+    test = setup(); test.elements.mOsid.value = 'synthetic-osid';
+    if (pair) { test.elements.mPsid.value = 'synthetic-psid'; test.elements.mPsidts.value = 'synthetic-ts'; }
+    await test.context.doDeploy();
+    const call = test.calls.find(x => x.url === '/gateway/deploy/20');
+    assert.deepEqual(JSON.parse(call.options.body), {psid:pair?'synthetic-psid':'', psidts:pair?'synthetic-ts':'', osid:'synthetic-osid'});
+    assert.deepEqual(test.restarting, [20]);
+  }
+
   // Selecting a proxy saves immediately; no deployment or Cookie fields are involved.
+  test = setup();
+  Object.assign(test.elements.mPsid, {value:'synthetic-id'});
+  test.elements.mPsidts.value = 'synthetic-ts';
+  test.elements.mOsid.value = 'synthetic-osid';
+  test.elements.mSid.value = 'synthetic-sid';
+  await test.context.doDeploy();
+  const fourFields = JSON.parse(test.calls.find(x => x.url === '/gateway/deploy/20').options.body);
+  assert.deepEqual(fourFields, {psid:'synthetic-id', psidts:'synthetic-ts', osid:'synthetic-osid', sid:'synthetic-sid'});
+  test = setup(); test.elements.mSid.value = 'synthetic-sid';
+  await test.context.doDeploy(); assert.equal(test.calls.length, 0);
+  assert.match(test.elements.modalMsg.textContent, /另外三项/);
+  test = setup(); test.elements.mSid.value = 'synthetic-sid'; test.elements.mCookieJson.value = '[{}]';
+  await test.context.doDeploy(); assert.equal(test.calls.length, 0);
+  assert.match(test.elements.modalMsg.textContent, /其中一种/);
+
+  test = setup();
+  test.elements.mCookieJson.value = JSON.stringify([{name:'OSID',value:'synthetic',domain:'gemini.google.com'}]);
+  test.elements.mAccountIndex.value = '1';
+  await test.context.doDeploy();
+  let imported = JSON.parse(test.calls.find(x => x.url === '/gateway/deploy/20').options.body);
+  assert.equal(imported.account_index, 1);
+  assert.equal(imported.cookies_json[0].name, 'OSID');
+  assert.equal(Object.hasOwn(imported, 'psid'), false);
+  for (const invalid of ['not-json', '{}', '[]']) {
+    test = setup(); test.elements.mCookieJson.value = invalid;
+    await test.context.doDeploy();
+    assert.equal(test.calls.length, 0);
+    assert.match(test.elements.modalMsg.textContent, /JSON/);
+  }
+  test = setup(); test.elements.mCookieJson.value = '[{}]'; test.elements.mOsid.value = 'synthetic';
+  await test.context.doDeploy(); assert.equal(test.calls.length, 0);
+  test = setup();
+  await test.context.loadCookieJsonFile({files:[{size:20,text:async () => '[{"name":"OSID"}]'}]});
+  assert.equal(test.elements.mCookieJson.value, '[{"name":"OSID"}]');
+  const slowFileRead = deferred();
+  const fileInput = {files:[{size:20,text:() => slowFileRead.promise}]};
+  const slowFileLoad = test.context.loadCookieJsonFile(fileInput);
+  fileInput.files = [{size:20,text:async () => '[{"name":"new-selection"}]'}];
+  await test.context.loadCookieJsonFile(fileInput);
+  slowFileRead.resolve('[{"name":"old-selection"}]'); await slowFileLoad;
+  assert.equal(test.elements.mCookieJson.value, '[{"name":"new-selection"}]');
+  const pendingFile = deferred();
+  const loadingFile = test.context.loadCookieJsonFile({files:[{size:20,text:() => pendingFile.promise}]});
+  test.context.modalVersion++;
+  pendingFile.resolve('[{"name":"stale-account"}]'); await loadingFile;
+  assert.equal(test.elements.mCookieJson.value, '[{"name":"new-selection"}]');
+
   test = setup(); test.elements.mProxy.value = 'b';
   await test.context.saveSlotProxy();
   assert.deepEqual(test.calls.map(x => x.url), ['/gateway/proxy/20']);
@@ -184,7 +241,7 @@ function setup(handler = async () => response()) {
   test.context.proxyProfiles=[{id:'a',name:'出口 A',url:'http://synthetic-user:synthetic-secret@proxy.test:8080'}];
   test.context.gatewayStatus.containers[0].enabled=true;
   test.elements.grid=element(); test.elements.grid.dataset.painted='1';
-  vm.runInContext(section('function renderGrid()', 'function fmtReset('), test.context);
+  vm.runInContext(section('function subscriptionTier(', '\nrenderThemeDots();') + section('function renderGrid()', 'function fmtReset('), test.context);
   test.context.renderGrid();
   assert.match(test.elements.grid.innerHTML, /出口 A/);
   assert.doesNotMatch(test.elements.grid.innerHTML, /proxy\.test|8080|synthetic-user|synthetic-secret/);

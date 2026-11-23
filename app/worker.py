@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from httpx import AsyncClient
+from httpx import AsyncClient, Cookies as HTTPXCookies
 from pydantic import BaseModel, field_validator
 
 from parsers import (
@@ -781,24 +781,22 @@ async def _retry_media_request(label: str, factory, retries: int = 2):
     raise RuntimeError(f"{label} failed")
 
 
-def _flatten_cookies(raw_cookies) -> dict | None:
-    """Flatten httpx.Cookies to a plain dict. Google issues same-name cookies
-    on regional domains (.google.com vs .google.com.hk), which makes
-    dict(cookies.items()) raise CookieConflict — dedup by name, preferring
-    the .google.com copy."""
-    if not raw_cookies or isinstance(raw_cookies, dict):
-        return raw_cookies
+def _flatten_cookies(raw_cookies):
+    """Prepare media cookies without losing browser domain/path restrictions."""
+    if not raw_cookies:
+        return None
+    result = HTTPXCookies()
     jar = getattr(raw_cookies, "jar", None)
-    if jar is None:
-        try:
-            return dict(raw_cookies.items())
-        except Exception:
-            return None
-    merged: dict = {}
-    for c in jar:
-        if c.name not in merged or (c.domain or "").lstrip(".") == "google.com":
-            merged[c.name] = c.value
-    return merged
+    if jar is not None:
+        from copy import copy
+        for cookie in jar:
+            if cookie.name != "OSID":
+                result.jar.set_cookie(copy(cookie))
+    else:
+        for name, value in dict(raw_cookies).items():
+            if name != "OSID":
+                result.set(name, value, domain=".google.com", path="/")
+    return result
 
 
 _MEDIA_PROXY_UNSET = object()
@@ -809,7 +807,7 @@ async def download_image_as_base64(image, cookies=None, *, proxy=_MEDIA_PROXY_UN
         if proxy is _MEDIA_PROXY_UNSET:
             proxy = getattr(image, "proxy", None)
         url = image.url
-        req_cookies = cookies
+        req_cookies = _flatten_cookies(cookies)
         if isinstance(image, GeneratedImage):
             url = url + f"=s{IMAGE_DOWNLOAD_SIZE}"
             req_cookies = _flatten_cookies(image.cookies)
@@ -1473,7 +1471,7 @@ async def slot_video_generation(
 
 async def download_audio_as_base64(url: str, cookies: dict | None = None, account_index: int = 0, *, proxy=None) -> str | None:
     try:
-        req_cookies = cookies or {}
+        req_cookies = _flatten_cookies(cookies) or {}
         if "usercontent.google.com" in url and "authuser" not in url:
             url += f"&authuser={account_index}" if "?" in url else f"?authuser={account_index}"
         for attempt in range(1, _DOWNLOAD_RETRIES + 1):
@@ -1839,9 +1837,21 @@ async def worker_status():
 async def worker_deploy_slot(num: int, request: Request):
     """Update cookie credentials and reinitialise the slot."""
     body = await request.json()
+    from slot import cookie_deploy_payload, cookie_export_value
+    try:
+        cookie_rows, account_index = cookie_deploy_payload(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     psid = body.get("psid", "").strip()
     psidts = body.get("psidts", "").strip()
-    if not psid or not psidts:
+    osid = body.get("osid", "")
+    if not isinstance(osid, str) or any(ord(c) <= 32 or ord(c) >= 127 or c == ";" for c in osid):
+        raise HTTPException(status_code=400, detail="Invalid OSID cookie value")
+    if cookie_rows is not None:
+        psid = cookie_export_value(cookie_rows, "__Secure-1PSID")
+        psidts = cookie_export_value(cookie_rows, "__Secure-1PSIDTS")
+        osid = cookie_export_value(cookie_rows, "OSID")
+    if bool(psid) != bool(psidts) or not (psid or osid):
         raise HTTPException(status_code=400, detail="psid and psidts required")
     if any("\n" in value or "\r" in value for value in (psid, psidts)):
         raise HTTPException(status_code=400, detail="Invalid cookie value")
@@ -1860,7 +1870,10 @@ async def worker_deploy_slot(num: int, request: Request):
         previous_epoch = slot.credential_epoch
         slot.state["initializing"] = True
         try:
-            await slot.save_credentials(env_file, psid, psidts)
+            await slot.save_credentials(env_file, psid, psidts, osid, cookies=cookie_rows, account_index=account_index)
+        except ValueError as exc:
+            slot.state["initializing"] = previous_initializing
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except BaseException:
             if slot.credential_epoch != previous_epoch:
                 # The atomic save completed before cancellation. Finish recovery

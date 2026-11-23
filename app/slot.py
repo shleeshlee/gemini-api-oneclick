@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -25,6 +26,111 @@ _TLS_RESTART_THRESHOLD = 3
 INIT_TIMEOUT_SECONDS = 60
 _credential_locks: dict[str, Any] = {}
 _credential_locks_guard = threading.Lock()
+
+
+def normalize_cookie_export(raw):
+    """Accept Cookie-Editor JSON, retaining only cookies applicable to Gemini."""
+    if isinstance(raw, str):
+        if len(raw) > 262144:
+            raise ValueError("Cookie JSON 过大")
+        try:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
+            raise ValueError("Cookie JSON 格式无效，请使用 Cookie-Editor 的 JSON 导出") from None
+    if not isinstance(raw, list) or not raw or len(raw) > 512:
+        raise ValueError("Cookie JSON 必须是非空数组，最多 512 项")
+    result = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("Cookie JSON 项目格式无效")
+        domain = item.get("domain", "")
+        if not isinstance(domain, str):
+            raise ValueError("Cookie 域名格式无效")
+        domain = domain.lower().lstrip(".")
+        if domain not in ("google.com", "gemini.google.com"):
+            continue
+        host_only = item.get("hostOnly", False)
+        secure = item.get("secure", True)
+        if not isinstance(host_only, bool) or not isinstance(secure, bool):
+            raise ValueError("Cookie 属性格式无效")
+        if host_only and domain == "google.com":
+            continue
+        name, value, path = item.get("name"), item.get("value"), item.get("path", "/")
+        if not isinstance(name, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name):
+            raise ValueError("Cookie 名称格式无效")
+        if not isinstance(value, str) or len(value) > 16384 or any(ord(c) <= 32 or ord(c) >= 127 or c in ';"\\' for c in value):
+            raise ValueError("Cookie 值格式无效")
+        if not isinstance(path, str) or not path.startswith("/") or any(ord(c) <= 32 or ord(c) >= 127 for c in path):
+            raise ValueError("Cookie 路径格式无效")
+        expires = item.get("expirationDate", item.get("expires"))
+        if expires is not None:
+            if isinstance(expires, bool) or not isinstance(expires, (int, float)) or not 0 <= expires <= 253402300799:
+                raise ValueError("Cookie 有效期格式无效")
+            expires = int(expires)
+            if expires <= time.time():
+                continue
+        if not value:
+            continue
+        # Never let the accounts-domain OSID or a broad OSID override Gemini's.
+        if name == "OSID" and domain != "gemini.google.com":
+            continue
+        scoped_domain = domain if host_only else "." + domain
+        result[(name, scoped_domain, path)] = dict(name=name, value=value, domain=scoped_domain,
+                                                  path=path, secure=secure, hostOnly=host_only,
+                                                  expirationDate=expires)
+    rows = list(result.values())
+    for key in ("__Secure-1PSID", "__Secure-1PSIDTS"):
+        if not cookie_export_value(rows, key):
+            raise ValueError("完整 Cookie 缺少有效的 " + key)
+    if len(json.dumps(rows)) > 262144:
+        raise ValueError("Cookie JSON 过大")
+    return rows
+
+
+def cookie_export_value(rows, name):
+    matches = [row for row in rows if row['name'] == name and row['path'] == '/']
+    return max(matches, key=lambda row: len(row['domain']), default={}).get('value', '')
+
+
+def encode_cookie_export(rows):
+    return base64.b64encode(json.dumps(rows, separators=(',', ':')).encode()).decode() if rows else ''
+
+
+def decode_cookie_export(value):
+    if not value:
+        return []
+    try:
+        return normalize_cookie_export(base64.b64decode(value, validate=True).decode())
+    except Exception:
+        raise ValueError("已保存的完整 Cookie 无效或过期，请重新导入") from None
+
+
+def cookie_deploy_payload(body):
+    raw = body.get('cookies_json')
+    index = body.get('account_index')
+    if index is not None and (isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= 99):
+        raise ValueError("账号序号必须是 0 到 99 的整数")
+    if raw is None or raw == '':
+        sid = body.get('sid', '')
+        if sid:
+            if not all(body.get(k) for k in ('psid', 'psidts', 'osid')):
+                raise ValueError("填写 SID 时，请同时填写同一会话的两项登录 Cookie 和 OSID")
+            # Reuse scoped session persistence so the four-cookie form follows the
+            # exact same authentication and cache policy as a complete JSON import.
+            entries = [dict(name=name, value=body[key], domain=domain, path='/',
+                            hostOnly=host_only, secure=True, expirationDate=None)
+                       for name, key, domain, host_only in [
+                           ('__Secure-1PSID', 'psid', '.google.com', False),
+                           ('__Secure-1PSIDTS', 'psidts', '.google.com', False),
+                           ('OSID', 'osid', 'gemini.google.com', True),
+                           ('SID', 'sid', '.google.com', False)]]
+            return normalize_cookie_export(entries), index if index is not None else 0
+        if not isinstance(sid, str):
+            raise ValueError("SID 格式无效，请只填写 Cookie 值")
+        return None, index
+    if any(body.get(k) for k in ('psid', 'psidts', 'osid', 'sid')):
+        raise ValueError("请使用完整 JSON 或逐项填写其中一种方式")
+    return normalize_cookie_export(raw), index if index is not None else 0
 
 
 def credential_file_lock(path):
@@ -186,6 +292,9 @@ class Slot:
     num: int
     psid: str = ""
     psidts: str = ""
+    osid: str = ""
+    cookie_bundle: str = ""
+    account_index: int = 0
     client: GeminiClient | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -255,11 +364,31 @@ class Slot:
                 self.client.proxy = actual
             self.proxy_changing = False
 
-    async def save_credentials(self, path, psid, psidts):
+    async def save_credentials(self, path, psid, psidts, osid="", *, cookies=None, account_index=None):
         def write():
+            existing = parse_env_file(path) if path.exists() else {}
+            new_psid, new_psidts = psid, psidts
+            new_osid = osid
+            rows = cookies
+            index = account_index if account_index is not None else (int(existing.get("ACCOUNT_INDEX", "0")) if not psid else 0)
+            if rows is None and not psid and osid and existing.get("COOKIE_EXPORT_B64"):
+                rows = decode_cookie_export(existing["COOKIE_EXPORT_B64"])
+                rows = [row for row in rows if row["name"] != "OSID"]
+                rows.append(dict(name="OSID", value=osid, domain="gemini.google.com", path="/", hostOnly=True, secure=True, expirationDate=None))
+            if rows is not None:
+                rows = normalize_cookie_export(rows)
+                new_psid = cookie_export_value(rows, "__Secure-1PSID")
+                new_psidts = cookie_export_value(rows, "__Secure-1PSIDTS")
+                new_osid = cookie_export_value(rows, "OSID")
+            bundle = encode_cookie_export(rows)
+            if not new_psid and not new_psidts and osid:
+                existing = parse_env_file(path) if path.exists() else {}
+                new_psid, new_psidts = existing.get("SECURE_1PSID", ""), existing.get("SECURE_1PSIDTS", "")
+            if not new_psid or not new_psidts:
+                raise ValueError("请先填写两项登录 Cookie，再补充 OSID")
             lines = path.read_text().splitlines() if path.exists() else []
-            lines = [line for line in lines if line.split("=", 1)[0].strip() not in ("SECURE_1PSID", "SECURE_1PSIDTS")]
-            lines += [f"SECURE_1PSID={psid}", f"SECURE_1PSIDTS={psidts}"]
+            lines = [line for line in lines if line.split("=", 1)[0].strip() not in ("SECURE_1PSID", "SECURE_1PSIDTS", "OSID", "COOKIE_EXPORT_B64", "ACCOUNT_INDEX")]
+            lines += [f"SECURE_1PSID={new_psid}", f"SECURE_1PSIDTS={new_psidts}", f"OSID={new_osid}", f"COOKIE_EXPORT_B64={bundle}", f"ACCOUNT_INDEX={index}"]
             temporary = None
             try:
                 with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
@@ -271,7 +400,8 @@ class Slot:
                 os.replace(temporary, path)
                 self.credential_epoch += 1
                 self.env_path = path
-                self.psid, self.psidts = psid, psidts
+                self.psid, self.psidts, self.osid = new_psid, new_psidts, new_osid
+                self.cookie_bundle, self.account_index = bundle, index
                 self._last_cookie_write = None
             finally:
                 if temporary and os.path.exists(temporary):
@@ -295,6 +425,9 @@ class Slot:
             num=num,
             psid=data.get("SECURE_1PSID", ""),
             psidts=data.get("SECURE_1PSIDTS", ""),
+            osid=data.get("OSID", ""),
+            cookie_bundle=data.get("COOKIE_EXPORT_B64", ""),
+            account_index=int(data.get("ACCOUNT_INDEX", "0")),
             env_path=env_path,
             proxy_id=data.get("SLOT_PROXY_ID", ""),
             proxy_url=data.get("SLOT_PROXY", ""),
@@ -360,7 +493,8 @@ class Slot:
         try:
             self.state["initializing"] = True
             self.client = GeminiClient(self.psid, self.psidts, proxy=proxy, cookie_audit=self.cookie_audit,
-                                       allow_implicit_init=False)
+                                       allow_implicit_init=False, osid=self.osid,
+                                       cookie_entries=decode_cookie_export(self.cookie_bundle), account_index=self.account_index)
             with cookie_operation("initialization"):
                 if self.cookie_audit is not None:
                     self.cookie_audit.emit("init_start")
@@ -414,15 +548,31 @@ class Slot:
             raise
 
     async def reload(self, psid: str | None = None, psidts: str | None = None,
-                     *, _env_path: Path | None = None) -> None:
+                     *, osid: str | None = None, _env_path: Path | None = None) -> None:
         """Destroy current client and reinitialise with (optionally new) credentials."""
         def detach():
             new_psid, new_psidts = psid, psidts
             if _env_path is not None:
                 data = parse_env_file(_env_path)
                 new_psid, new_psidts = data.get("SECURE_1PSID", ""), data.get("SECURE_1PSIDTS", "")
+                self.osid = data.get("OSID", "")
+                self.cookie_bundle = data.get("COOKIE_EXPORT_B64", "")
+                self.account_index = int(data.get("ACCOUNT_INDEX", "0"))
                 self.proxy_id, self.proxy_url = data.get("SLOT_PROXY_ID", ""), data.get("SLOT_PROXY", "")
                 self.env_path = _env_path
+            elif psid is not None or psidts is not None:
+                # Explicit replacement credentials must not inherit another session.
+                self.osid = osid or ""
+                self.cookie_bundle = ""
+                self.account_index = 0
+            elif osid is not None:
+                self.osid = osid
+                if self.cookie_bundle:
+                    rows = [row for row in decode_cookie_export(self.cookie_bundle) if row['name'] != 'OSID']
+                    if osid:
+                        rows.append(dict(name='OSID', value=osid, domain='gemini.google.com', path='/',
+                                         hostOnly=True, secure=True, expirationDate=None))
+                    self.cookie_bundle = encode_cookie_export(rows)
             if new_psid is not None:
                 self.psid = new_psid
             if new_psidts is not None:
@@ -594,11 +744,16 @@ class Slot:
                                 client_changed_during_write=self.client is not client, **extra)
         try:
             cookies = {}
+            refreshed_osid = None
             for source in (getattr(client, "cookies", None),
                            getattr(getattr(client, "client", None), "cookies", None)):
                 if source is not None:
                     jar = getattr(source, "jar", None)
                     cookies.update({c.name: c.value for c in jar} if jar is not None else dict(source))
+                    if jar is not None:
+                        for cookie in jar:
+                            if cookie.name == "OSID" and cookie.domain == "gemini.google.com" and cookie.path == "/":
+                                refreshed_osid = cookie.value
             values = {"SECURE_1PSID": cookies.get("__Secure-1PSID"),
                       "SECURE_1PSIDTS": cookies.get("__Secure-1PSIDTS")}
             if not all(isinstance(v, str) and v and "\n" not in v and "\r" not in v for v in values.values()):
@@ -607,11 +762,31 @@ class Slot:
             with path.open(encoding="utf-8", newline="") as source:
                 original = source.read()
             current = parse_env_file(path)
+            if self.osid and refreshed_osid and "OSID" in current:
+                if any(ord(c) <= 32 or ord(c) >= 127 or c == ";" for c in refreshed_osid):
+                    audit_write("invalid_osid")
+                    return False
+                values["OSID"] = refreshed_osid
             if self.psid and self.psidts and (
                 current.get("SECURE_1PSID") != self.psid or current.get("SECURE_1PSIDTS") != self.psidts
+                or current.get("OSID", "") != self.osid
+                or current.get("COOKIE_EXPORT_B64", "") != self.cookie_bundle
             ):
                 audit_write("file_changed")
                 return False
+            if self.cookie_bundle:
+                source = getattr(getattr(client, "client", None), "cookies", None) or getattr(client, "cookies", None)
+                jar = getattr(source, "jar", None)
+                if jar is None:
+                    audit_write("missing_scoped_cookie_jar")
+                    return False
+                rows = normalize_cookie_export([dict(name=c.name, value=c.value or "", domain=c.domain,
+                    path=c.path or "/", secure=c.secure, hostOnly=not c.domain_specified,
+                    expirationDate=c.expires) for c in jar])
+                values["COOKIE_EXPORT_B64"] = encode_cookie_export(rows)
+                values["SECURE_1PSID"] = cookie_export_value(rows, "__Secure-1PSID")
+                values["SECURE_1PSIDTS"] = cookie_export_value(rows, "__Secure-1PSIDTS")
+                values["OSID"] = cookie_export_value(rows, "OSID")
             if all(current.get(key) == value for key, value in values.items()):
                 audit_write("unchanged")
                 return False
@@ -640,6 +815,8 @@ class Slot:
             current = values
             self._last_cookie_write = now
             self.psid, self.psidts = values["SECURE_1PSID"], values["SECURE_1PSIDTS"]
+            self.osid = values.get("OSID", self.osid)
+            self.cookie_bundle = values.get("COOKIE_EXPORT_B64", self.cookie_bundle)
             logger.info("slot %d cookie 已写回", self.num)
             audit_write("written", previous_file_values=previous_values)
             return True

@@ -551,6 +551,7 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
                                build_label="", session_id="", account_index=0, access_token="mock", cookies={},
                                close=AsyncMock())
         fake._fetch_user_status = MethodType(GeminiClient._fetch_user_status, fake)
+        fake._authentication_headers = lambda: {}
         fake.refresh_models = MethodType(GeminiClient.refresh_models, fake)
         s = Slot(num=1, client=fake, env_path=self.tmp / "account1.env")
         s.state["initializing"] = False
@@ -640,6 +641,7 @@ class PoolCounterexamples(unittest.IsolatedAsyncioTestCase):
                                client=transport, cookies={}, timeout=300, watchdog_timeout=180,
                                _parse_candidates=parse_candidates)
         fake._process_stream_part = MethodType(GeminiClient._process_stream_part, fake)
+        fake._authentication_headers = lambda: {}
         with patch("gemini_webapi.client.asyncio.sleep", AsyncMock()):
             outputs = [output async for output in GeminiClient._generate.__wrapped__(fake, "Hi", model=model("3.1 Pro"))]
         self.assertEqual(transport.request.await_count, 2)

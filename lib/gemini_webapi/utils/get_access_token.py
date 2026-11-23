@@ -210,6 +210,7 @@ async def get_access_token(
     verbose: bool = False,
     account_index: int = 0,
     session: AsyncSession | None = None,
+    *, use_cache: bool = True,
 ) -> tuple[str, str | None, str | None, Cookies]:
     """
     Send a get request to gemini.google.com for each group of available cookies and return
@@ -263,7 +264,8 @@ async def get_access_token(
     # Collect authentication tasks from various sources
     tasks: list[Task] = []
     _add_base_cookie_task(tasks, base_cookies, extra_cookies, proxy, verbose, account_index, session=session)
-    _add_cached_cookie_tasks(tasks, base_cookies, extra_cookies, cache_dir, secure_1psid, proxy, verbose, account_index, session=session)
+    if use_cache:
+        _add_cached_cookie_tasks(tasks, base_cookies, extra_cookies, cache_dir, secure_1psid, proxy, verbose, account_index, session=session)
 
     if not tasks:
         raise AuthError("No valid cookies available for initialization. Please pass __Secure-1PSID and __Secure-1PSIDTS manually.")
